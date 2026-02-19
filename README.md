@@ -311,3 +311,75 @@ results/
 ├── trees_iqtree/                  # Final Newick trees
 └── embeddings/                    # PCA/UMAP data
 ```
+
+---
+
+## 📘 Detailed Configuration Guide
+
+This section explains every key option in `config.json`.
+
+### `inputs`
+Defines your raw data.
+-   `faa_dir`: (Required) Path to directory containing protein FASTA files (`.faa`), or a single merged `.faa` file.
+-   `hmm_input`: (Required) Path to directory containing HMM profiles (`.hmm`), or a single `.hmm` file.
+-   `cds_dir`: (Optional) Directory of nucleotide coding sequences (`.fna`). Only needed for `codon` / `hyphy` steps.
+-   `gtdb_dir`: (Optional) Directory containing GTDB-Tk summary files (e.g. `gtdbtk.bac120.summary.tsv`). Used to add taxonomy to summary tables.
+-   `taxonomy_file`: (Optional) Custom TSV (columns: `genome`, `lineage`) if not using GTDB.
+
+### `output`
+-   `outdir`: (Required) Where all results go.
+
+### `workflow`
+Controls execution flow.
+-   `start_at`: Start pipeline at a specific step (e.g., `"phylo"`).
+-   `stop_after`: Stop after a specific step (e.g., `"hmmer"`).
+-   `force`: (Default: `false`) Overwrite existing output files for the active steps.
+-   `hmm_manifest`: (Default: `null`) Path to a text file listing specific HMM names to process (one per line).
+
+### `filtering`
+-   `global_min_score`: (Default: `25.0`) Minimum bitscore for a hit.
+-   `min_coverage`: (Default: `0.5`) Minimum query coverage (0.0-1.0).
+-   `keep_tbl`: (Default: `false`) Keep raw `hmmscan`/`hmmsearch` output tables (can be large).
+
+### `phylo`
+Phylogenetic inference.
+-   `mafft_mode`: (Default: `"auto"`) alignment strategy. `auto`, `linsi` (accurate), `ginsi`, `fftnsi` (fast).
+-   `iqtree_bin`: (Default: `"iqtree"`) Name/path of IQ-TREE executable.
+-   `iq_boot`: (Default: `1000`) Bootstrap replicates.
+-   `no_asr`: (Default: `false`) Skip Ancestral Sequence Reconstruction (saves memory).
+-   `skip_clipkit`: (Default: `false`) Skip alignment trimming.
+-   `mafft`: (Default: `false`) Force MAFFT alignment even if HMM alignment is available.
+
+### `synteny`
+Gene neighborhood analysis.
+-   `enabled`: Set to `true` to run.
+-   `gbk_dir`: (Required if enabled) Directory of GenBank files (`.gbk`) with genomic context.
+-   `window_genes`: (Default: `10`) Genes to examine upstream/downstream.
+-   `similarity`: homology search settings.
+    -   `method`: `"diamond"` (default) or `"mmseqs"`.
+    -   `min_identity`: (Default: `30`) % identity cutoff.
+-   `include_tree`: (Default: `true`) Plot tree alongside synteny tracks.
+-   `output_format`: (Default: `"pdf"`) `pdf` or `png` or `html`.
+
+### `embeddings`
+Protein Language Model analysis.
+-   `enabled`: Set to `true` to run.
+-   `model`: (Default: `"esm2_t33_650M_UR50D"`) ESM2 model.
+-   `device`: `"cuda"` (GPU) or `"cpu"`.
+
+### `post`
+Post-processing metrics.
+-   `enabled`: Set to `true` to run.
+-   `compute_conservation`: (Default: `false`) Calculate conservation scores.
+-   `clades_tsv`: (Optional) TSV mapping tips to groups for dispersion analysis.
+
+### `codon`
+Codon alignments.
+-   `enabled`: Set to `true` to run.
+-   `pal2nal_cmd`: (Default: `"pal2nal.pl"`) Path to PAL2NAL script.
+
+### `hyphy`
+Selection tests.
+-   `enabled`: Set to `true` to run.
+-   `hyphy_tests`: (Default: `"RELAX,aBSREL,MEME"`) List of tests to run.
+
