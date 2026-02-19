@@ -12,9 +12,13 @@ def _pca_fit_transform(X, n_components=3):
     Z = pca.fit_transform(X)
     return Z, pca.explained_variance_ratio_.tolist()
 
-def _embed_esm(seqs: dict, model_name: str, device: str, batch_size: int, repr_layer):
+def _embed_esm(seqs: dict, model_name: str, device: str, batch_size: int, repr_layer, model_dir: str | None = None):
     import torch
     import esm
+
+    if model_dir is not None:
+        os.makedirs(model_dir, exist_ok=True)
+        torch.hub.set_dir(model_dir)
 
     model, alphabet = esm.pretrained.load_model_and_alphabet(model_name)
     model.eval()
@@ -55,12 +59,13 @@ def _embed_esm(seqs: dict, model_name: str, device: str, batch_size: int, repr_l
     X = np.vstack(vectors)
     return ids, X
 
-def _embed_transformers(seqs: dict, model_id_or_path: str, device: str, batch_size: int):
+def _embed_transformers(seqs: dict, model_id_or_path: str, device: str, batch_size: int, model_dir: str | None = None):
     import torch
     from transformers import AutoTokenizer, AutoModel
 
-    tok = AutoTokenizer.from_pretrained(model_id_or_path, do_lower_case=False)
-    model = AutoModel.from_pretrained(model_id_or_path)
+    cache_dir = model_dir  # HuggingFace uses cache_dir; local paths are passed as model_id_or_path
+    tok = AutoTokenizer.from_pretrained(model_id_or_path, do_lower_case=False, cache_dir=cache_dir)
+    model = AutoModel.from_pretrained(model_id_or_path, cache_dir=cache_dir)
     model.eval()
     model = model.to(device)
 
@@ -116,11 +121,13 @@ def compute_embeddings_for_hmm(hmm_name: str, seqs: dict, emb_cfg: dict, outdir_
     model_name = emb_cfg["model"]
     repr_layer = emb_cfg.get("repr_layer", None)
 
+    model_dir = emb_cfg.get("model_dir", None)
+
     try:
         if backend == "esm":
-            ids, X = _embed_esm(seqs, model_name=model_name, device=device, batch_size=batch_size, repr_layer=repr_layer)
+            ids, X = _embed_esm(seqs, model_name=model_name, device=device, batch_size=batch_size, repr_layer=repr_layer, model_dir=model_dir)
         elif backend == "transformers":
-            ids, X = _embed_transformers(seqs, model_id_or_path=model_name, device=device, batch_size=batch_size)
+            ids, X = _embed_transformers(seqs, model_id_or_path=model_name, device=device, batch_size=batch_size, model_dir=model_dir)
         else:
             print(f"[embed] Unknown backend: {backend}")
             return
@@ -228,6 +235,14 @@ def compute_embeddings_for_hmm(hmm_name: str, seqs: dict, emb_cfg: dict, outdir_
 def run_embed(cfg, hmm_to_seqs, clades, emb_dir, fasta_dir, hmm_keep, force=False):
     print("\n[embed] Computing per-HMM embeddings...")
     emb_cfg = cfg.get("embeddings", {})
+
+    # Resolve model_dir: explicit config value → {outdir}/models
+    if "model_dir" not in emb_cfg or emb_cfg["model_dir"] is None:
+        outdir = cfg.get("output", {}).get("outdir", None)
+        if outdir:
+            emb_cfg = dict(emb_cfg)  # shallow copy so we don't mutate the caller's dict
+            emb_cfg["model_dir"] = os.path.join(outdir, "models")
+            print(f"[embed] Model cache directory: {emb_cfg['model_dir']}")
 
     # ensure we have sequence bins
     if not hmm_to_seqs:
