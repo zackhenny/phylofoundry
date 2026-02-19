@@ -27,8 +27,35 @@ def main():
     validate_config(cfg)
     
     # Check dependencies
+    # Check dependencies based on config
     from .utils.helpers import check_dependencies
-    check_dependencies(["hmmscan", "hmmsearch", "mafft", "clipkit", "iqtree", "pal2nal.pl", "hyphy"])
+    
+    # Core tools (always needed usually, but some can be skipped if steps skipped)
+    # Ideally we check only what's needed for requested steps.
+    # For now, let's just check the binaries defined in config.
+    
+    deps = ["hmmscan", "hmmsearch"]
+    
+    if cfg["phylo"]:
+        deps.append(cfg["phylo"].get("iqtree_bin", "iqtree"))
+        # mafft is usually just "mafft" unless we add config for it (we haven't yet, just mode)
+        deps.append("mafft")
+        deps.append("clipkit")
+        
+    if cfg["codon"].get("enabled", False):
+        deps.append(cfg["codon"].get("pal2nal_cmd", "pal2nal.pl"))
+        
+    if cfg["hyphy"].get("enabled", False):
+        deps.append(cfg["hyphy"].get("hyphy_bin", "hyphy"))
+
+    if cfg["synteny"].get("enabled", False):
+        sim_method = cfg["synteny"].get("similarity", {}).get("method", "diamond")
+        if sim_method == "diamond":
+            deps.append(cfg["synteny"].get("similarity", {}).get("diamond_bin", "diamond"))
+        elif sim_method == "mmseqs":
+             deps.append(cfg["synteny"].get("similarity", {}).get("mmseqs_bin", "mmseqs"))
+
+    check_dependencies(deps)
 
     run_pipeline(cfg)
 

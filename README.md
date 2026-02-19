@@ -8,7 +8,8 @@
 
 -   **Competitive HMM Hits**: Uses both `hmmscan` and `hmmsearch` to identify the best functional assignments for proteins, resolving overlapping hits competitively by bitscore.
 -   **Automated Phylogeny**: Per-HMM alignment (MAFFT/HMMER), trimming (ClipKit), and tree inference (IQ-TREE).
--   **Protein Embeddings** (Optional): Generates per-sequence embeddings (ESM/ProtT5) and dimensionality reduction (PCA/UMAP) for functional landscape analysis.
+-   **Protein Embeddings** (Optional): Generates per-HMM embeddings (ESM) and dimensionality reduction (PCA/UMAP).
+-   **Synteny Analysis** (Optional): Extracts gene neighborhoods, computes similarity (DIAMOND/MMseqs2), and plots synteny tracks ordered by phylogeny.
 -   **Resumable**: Smart checkpointing skips already completed steps.
 -   **HPC Ready**: Auto-detects Slurm CPU allocations.
 
@@ -78,6 +79,16 @@ These are only required if you run the `codon` or `hyphy` steps.
 | **PAL2NAL** | Converts protein alignments to codon alignments. | `pal2nal` | [bork.embl.de/pal2nal](http://www.bork.embl.de/pal2nal/) (Project is Perl script, download `pal2nal.pl` and add to `$PATH`) |
 | **HyPhy** | Selection pressure analysis. | `hyphy` | [hyphy.org](http://www.hyphy.org/) |
 
+### Synteny Dependencies (Optional)
+
+Required if running `synteny` step.
+
+| Tool | Purpose | Conda Package |
+| :--- | :--- | :--- |
+| **DIAMOND** | Fast protein alignment. | `diamond` |
+| **MMseqs2** | Alternative protein alignment. | `mmseqs2` |
+| **pyGenomeViz** | Genome visualization (Python). | `pip install pygenomeviz` |
+
 ---
 
 ## 📂 Inputs & Outputs
@@ -89,6 +100,8 @@ These are only required if you run the `codon` or `hyphy` steps.
 | `inputs.faa_dir` | Directory containing proteome files (one per genome) OR a single `.faa` file. | **Yes** | FASTA (`.faa`) |
 | `inputs.hmm_input` | Directory of HMM profiles OR a single `.hmm` file to search against. | **Yes** | HMMER3 (`.hmm`) |
 | `inputs.cds_dir` | (Optional) Directory of nucleotide coding sequences (CDS). Required only if running `codon` or `hyphy` steps. | No | FASTA (`.fna` / `.ffn`) |
+| `synteny.gbk_dir` | (Optional) Directory of GenBank files for neighborhood extraction. | No | `.gbk` / `.gbff` |
+| `synteny.gff_dir` | (Optional) Directory of GFF3 files (requires matching fasta in `inputs.faa_dir` or similar). | No | `.gff` |
 | `post.clades_tsv` | (Optional) TSV mapping tip names to clades for dispersion metrics and KL divergence. | No | TSV: `clade_name` `tip` |
 
 ### Outputs
@@ -104,6 +117,8 @@ The pipeline creates a structured `results` directory:
 | `alignments_clipkit/<HMM>.clipkit.faa` | The final trimmed alignment used for tree building. | FASTA |
 | `embeddings/<HMM>.pca.tsv` | PCA coordinates of protein embeddings (if enabled). | TSV |
 | `embeddings/<HMM>.dispersion.tsv` | Quantified "functional tightness" of clades in embedding space. | TSV |
+| `synteny/<HMM>/synteny.<HMM>.pdf` | Synteny plot of gene neighborhoods. | PDF |
+| `synteny/<HMM>/neighborhood_proteins.faa` | Sequences of all genes in the extracted neighborhoods. | FASTA |
 | `codon_alignments/<HMM>.codon.fasta` | Codon-aware alignment (if enabled). | FASTA |
 | `summary/hyphy/<HMM>.<test>.json` | Selection test results (e.g., RELAX, MEME). | JSON |
 
