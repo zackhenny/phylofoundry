@@ -313,6 +313,22 @@ def run_synteny(cfg, synteny_dir, tree_dir, scan_df, search_df, hmm_keep, force=
             continue
 
         # Write neighborhood proteins
+        fastas_dir = os.path.join(hmm_out_dir, "fastas")
+        safe_mkdir(fastas_dir)
+        
+        # Write individual FASTAs
+        for genome, feats in neighborhoods:
+            g_seqs = {}
+            for f in feats:
+                if "uid" in f and f.get("translation"):
+                    g_seqs[f["uid"]] = f["translation"]
+            
+            if g_seqs:
+                # Sanitize filename
+                safe_g = normalize_genome_id(genome)
+                write_fasta(os.path.join(fastas_dir, f"{safe_g}.faa"), g_seqs)
+
+        # Write combined FASTA for DIAMOND
         prot_faa = os.path.join(hmm_out_dir, "neighborhood_proteins.faa")
         write_fasta(prot_faa, all_prots)
 
