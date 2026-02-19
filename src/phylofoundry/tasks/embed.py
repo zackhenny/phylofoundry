@@ -111,7 +111,7 @@ def compute_embeddings_for_hmm(hmm_name: str, seqs: dict, emb_cfg: dict, outdir_
     if os.path.exists(out_pca) and os.path.exists(out_npy) and os.path.exists(out_umap) and not force:
         return
 
-    seqs = {k: v.replace(" ", "").replace("\n", "") for k, v in seqs.items()}
+    seqs = {k: v.replace(" ", "").replace("\n", "").replace("*", "").replace(".", "") for k, v in seqs.items()}
     if len(seqs) < 3:
         return
 
