@@ -1,0 +1,56 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "phylofoundry"
+version = "0.1.0"
+description = "A bioinformatic pipeline for competitive HMM analysis, phylogeny, and protein language model embeddings"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+authors = [
+  {name = "Your Name", email = "your.email@example.com"}
+]
+# Core dependencies only - heavy ML libraries are optional
+dependencies = [
+  "pandas",
+  "numpy",
+]
+
+[project.optional-dependencies]
+# Full install (everything)
+all = [
+  "scikit-bio",
+  "scikit-learn",
+  "umap-learn",
+  "torch",
+  "transformers",
+  "fair-esm",
+  "biopython",
+]
+# Just the embedding stack
+embed = [
+  "scikit-learn",
+  "umap-learn",
+  "torch",
+  "transformers",
+  "fair-esm",
+]
+# Post-processing
+post = [
+  "scikit-bio",
+]
+# Testing
+test = [
+  "pytest",
+]
+
+[project.scripts]
+phylofoundry = "phylofoundry.main:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

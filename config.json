@@ -1,0 +1,67 @@
+{
+    "inputs": {
+        "faa_dir": "/project2/thrash_89/zjhenning/proteomes",
+        "hmm_input": "/project2/thrash_89/zjhenning/hmms",
+        "cds_dir": "/project2/thrash_89/zjhenning/cds"
+    },
+    "output": {
+        "outdir": "/project2/thrash_89/zjhenning/out/hmm_run01"
+    },
+    "resources": {
+        "cpu": 64
+    },
+    "workflow": {
+        "start_at": "prep",
+        "stop_after": null,
+        "force": false,
+        "hmm_manifest": null
+    },
+    "filtering": {
+        "scores_tsv": null,
+        "global_min_score": 30.0,
+        "min_coverage": 0.6,
+        "keep_tbl": false
+    },
+    "phylo": {
+        "mafft": true,
+        "also_mafft": false,
+        "mafft_for_tree": false,
+        "no_trim_hmmalign": false,
+        "skip_clipkit": false,
+        "no_asr": false,
+        "iq_boot": 1000,
+        "use_hmmsearch_alignment": false,
+        "keep_all_hits": false
+    },
+    "embeddings": {
+        "enabled": true,
+        "backend": "esm",
+        "model": "esm2_t33_650M_UR50D",
+        "device": "cuda",
+        "batch_size": 8,
+        "repr_layer": null,
+        "pooling": "mean",
+        "pca_components": 3,
+        "write_full_vectors": false
+    },
+    "post": {
+        "enabled": true,
+        "compute_conservation": true,
+        "conservation_metric": "inverse_shannon_uncertainty",
+        "compute_kl": true,
+        "clades_tsv": "/project2/thrash_89/zjhenning/clades.tsv",
+        "kl_pairs": "lowC:highC,lowC:background"
+    },
+    "codon": {
+        "enabled": false,
+        "build_codon_alignments": false,
+        "cds_id_mode": "after_last_pipe",
+        "pal2nal_cmd": "pal2nal.pl"
+    },
+    "hyphy": {
+        "enabled": false,
+        "run_hyphy": false,
+        "hyphy_bin": "hyphy",
+        "hyphy_tests": "RELAX,aBSREL,MEME"
+    }
+}
