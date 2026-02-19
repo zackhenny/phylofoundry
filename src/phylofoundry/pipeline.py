@@ -50,6 +50,7 @@ def run_pipeline(cfg):
     phy_cfg = cfg["phylo"]
     emb_cfg = cfg["embeddings"]
     post_cfg = cfg["post"]
+    synteny_cfg = cfg["synteny"]
     codon_cfg = cfg["codon"]
     hyphy_cfg = cfg["hyphy"]
 
