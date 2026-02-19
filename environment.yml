@@ -17,7 +17,6 @@ dependencies:
   - pal2nal # For codon alignments
   - hyphy   # For selection analysis
   - pytorch
-  - cpuonly  # Default validation on CPU. For GPU, remove this and use pytorch-cuda or similar.
   - transformers
   - pip
   - pip:
