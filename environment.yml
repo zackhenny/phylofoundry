@@ -18,6 +18,11 @@ dependencies:
   - hyphy   # For selection analysis
   - pytorch
   - transformers
+  - pygenomeviz
+  - biopython
+  - matplotlib
+  - diamond
+  - mmseqs2
   - pip
   - pip:
     - fair-esm

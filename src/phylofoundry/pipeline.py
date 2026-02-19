@@ -3,7 +3,7 @@ import glob
 from .constants import STEPS
 from .utils.helpers import safe_mkdir, write_json
 from .utils.bio import read_fasta
-from .tasks import prep, hmmer, extract, embed, phylo, post, codon, hyphy
+from .tasks import prep, hmmer, extract, embed, phylo, post, synteny, codon, hyphy
 
 
 def step_in_range(step, start_at, stop_after):
@@ -191,6 +191,16 @@ def run_pipeline(cfg):
     if step_in_range("post", start_at, stop_after) and post_cfg.get("enabled", False):
         post.run_post(cfg, tree_dir, clipkit_dir, aln_dir, post_dir, hmm_keep, force)
     if stop_after == "post":
+        return
+
+    # ── STEP: synteny ──────────────────────────────────────────────────────
+    synteny_dir = os.path.join(outdir, "synteny")
+    safe_mkdir(synteny_dir)
+    
+    if step_in_range("synteny", start_at, stop_after) and synteny_cfg.get("enabled", False):
+        _ensure_hit_dfs()  # Need filtered hits to know which proteins to map
+        synteny.run_synteny(cfg, synteny_dir, tree_dir, scan_df, search_df, hmm_keep, force)
+    if stop_after == "synteny":
         return
 
     # ── STEP: codon ────────────────────────────────────────────────────────

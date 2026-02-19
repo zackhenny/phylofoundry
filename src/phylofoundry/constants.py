@@ -9,7 +9,7 @@ AA_ALPHABET = set(list("ACDEFGHIKLMNPQRSTVWY"))
 GAP_CHARS = set(["-", ".", "X", "x", "?", "*"])
 
 # Workflow
-STEPS = ["prep", "hmmer", "extract", "embed", "phylo", "post", "codon", "hyphy"]
+STEPS = ["prep", "hmmer", "extract", "embed", "phylo", "post", "synteny", "codon", "hyphy"]
 
 # Defaults
 DEFAULT_CONFIG = {
@@ -47,7 +47,7 @@ DEFAULT_CONFIG = {
         "iq_boot": 1000,
         "use_hmmsearch_alignment": False,
         "keep_all_hits": False,
-        "iqtree_bin": "iqtree" # Default to iqtree, falling back to iqtree2 if needed
+        "iqtree_bin": "iqtree" # Default to iqtree, falling back to iqtree2 or iqtree3 if needed
     },
     "embeddings": {
         "enabled": False,
@@ -67,6 +67,36 @@ DEFAULT_CONFIG = {
         "compute_kl": False,
         "clades_tsv": None,  # TSV columns: clade_name, tip (tip label must match alignment tip labels)
         "kl_pairs": None     # "A:B,A:background"
+    },
+    "synteny": {
+        "enabled": False,
+        "gbk_dir": None,
+        "gff_dir": None,
+        "genome_fasta_dir": None,
+        "window_genes": 10,
+        "max_hits_per_hmm": 50,
+        "dedup_by_genome": True,
+        "prefer_best_hit": True,
+        "reference_mode": "per_hmm",
+        "protein_id_field": ["ID", "protein_id", "locus_tag"],
+        "gene_label_field": ["gene", "product", "Name", "locus_tag"],
+        "strand_colors": False,
+        "output_format": "pdf",
+        "plot_height_per_track": 0.35,
+        "plot_width": 14,
+        "include_tree": True,
+        "tree_source": "iqtree",
+        "tree_tip_label_mode": "genome",
+        "tree_order": "ladderize",
+        "similarity": {
+            "method": "diamond",
+            "diamond_bin": "diamond",
+            "mmseqs_bin": "mmseqs",
+            "min_identity": 30,
+            "min_bitscore": 50,
+            "max_evalue": 1e-5,
+            "max_targets": 2000
+        }
     },
     "codon": {
         "enabled": False,

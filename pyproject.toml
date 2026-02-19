@@ -41,6 +41,12 @@ embed = [
 post = [
   "scikit-bio",
 ]
+# Synteny
+synteny = [
+  "pygenomeviz",
+  "biopython",
+  "matplotlib",
+]
 # Testing
 test = [
   "pytest",

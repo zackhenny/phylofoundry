@@ -1,6 +1,7 @@
 import json
 import os
 import argparse
+import shutil
 from copy import deepcopy
 from pathlib import Path
 from .constants import DEFAULT_CONFIG, STEPS
@@ -53,6 +54,17 @@ def resolve_config(args: argparse.Namespace) -> dict:
         cfg["workflow"]["stop_after"] = args.stop_after
     if args.force:
         cfg["workflow"]["force"] = True
+
+    # Auto-detect IQ-TREE binary if default "iqtree" is not found but v2/v3 are
+    # Only if user hasn't overridden it in config file (we check if it's still default)
+    # Note: merge logic might have overwritten it. If it's still "iqtree", we check.
+    current_bin = cfg["phylo"].get("iqtree_bin", "iqtree")
+    if current_bin == "iqtree" and not shutil.which("iqtree"):
+        for cand in ["iqtree2", "iqtree3"]:
+            if shutil.which(cand):
+                cfg["phylo"]["iqtree_bin"] = cand
+                print(f"Auto-detected IQ-TREE binary: {cand}")
+                break
 
     return cfg
 
