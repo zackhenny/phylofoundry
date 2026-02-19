@@ -401,7 +401,6 @@ def run_synteny(cfg, synteny_dir, tree_dir, scan_df, search_df, hmm_keep, force=
         gv = GenomeViz(
             fig_width=syn_cfg.get("plot_width", 14),
             fig_track_height=syn_cfg.get("plot_height_per_track", 0.35),
-            align_type="center",
         )
         
         uid_to_feat = {}
