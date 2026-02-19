@@ -133,7 +133,7 @@ class TestConfig:
     def test_steps_are_in_order(self):
         from phylofoundry.constants import STEPS
 
-        assert STEPS == ["prep", "hmmer", "extract", "embed", "phylo", "post", "codon", "hyphy"]
+        assert STEPS == ["prep", "hmmer", "extract", "embed", "phylo", "post", "synteny", "codon", "hyphy"]
 
 
 # ──── pipeline.py ─────────────────────────────────────────────────────────────
