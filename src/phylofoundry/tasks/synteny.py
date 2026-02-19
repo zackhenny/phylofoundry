@@ -194,7 +194,8 @@ def run_synteny(cfg, synteny_dir, tree_dir, scan_df, search_df, hmm_keep, force=
     # Check dependencies
     try:
         import pygenomeviz
-        from pygenomeviz import GenomeViz
+        import pygenomeviz
+        from pygenomeviz import GenomeViz, Link
     except ImportError:
         print("WARNING: pygenomeviz not installed. Skipping synteny plots.")
         print("Install with: pip install pygenomeviz")
@@ -451,7 +452,8 @@ def run_synteny(cfg, synteny_dir, tree_dir, scan_df, search_df, hmm_keep, force=
                 # color by identity?
                 # simple grey for now
                 if q != s: # self links already filtered but check again
-                    gv.add_link(uid_to_feat[q], uid_to_feat[s], color="grey", alpha=0.3)
+                    link = Link(uid_to_feat[q], uid_to_feat[s], normal_color="grey")
+                    gv.add_link(link)
                     count_links += 1
 
         print(f"    Plotting {len(neighborhoods)} tracks with {count_links} links...")
