@@ -113,6 +113,8 @@ def compute_embeddings_for_hmm(hmm_name: str, seqs: dict, emb_cfg: dict, outdir_
 
     seqs = {k: v.replace(" ", "").replace("\n", "").replace("*", "").replace(".", "") for k, v in seqs.items()}
     if len(seqs) < 3:
+        import sys
+        print(f"[embed] Warning: HMM '{hmm_name}' has less than 3 sequences. Skipping embeddings.", file=sys.stderr)
         return
 
     backend = emb_cfg["backend"]
@@ -124,15 +126,16 @@ def compute_embeddings_for_hmm(hmm_name: str, seqs: dict, emb_cfg: dict, outdir_
     model_dir = emb_cfg.get("model_dir", None)
 
     try:
+        import sys
         if backend == "esm":
             ids, X = _embed_esm(seqs, model_name=model_name, device=device, batch_size=batch_size, repr_layer=repr_layer, model_dir=model_dir)
         elif backend == "transformers":
             ids, X = _embed_transformers(seqs, model_id_or_path=model_name, device=device, batch_size=batch_size, model_dir=model_dir)
         else:
-            print(f"[embed] Unknown backend: {backend}")
+            print(f"[embed] Error: Unknown backend '{backend}'", file=sys.stderr)
             return
     except Exception as e:
-        print(f"[embed] FAILED {hmm_name}: {e}")
+        print(f"[embed] FAILED {hmm_name}: {e}", file=sys.stderr)
         return
 
     X = X.astype(np.float32)
@@ -159,6 +162,7 @@ def compute_embeddings_for_hmm(hmm_name: str, seqs: dict, emb_cfg: dict, outdir_
     # UMAP
     try:
         import umap
+        import warnings
         reducer = umap.UMAP(n_components=2, random_state=42)
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
@@ -178,9 +182,11 @@ def compute_embeddings_for_hmm(hmm_name: str, seqs: dict, emb_cfg: dict, outdir_
             })
         pd.DataFrame(u_rows).to_csv(out_umap, sep="\t", index=False)
     except ImportError:
-        print(f"[embed] UMAP skip: umap-learn not installed.")
+        import sys
+        print(f"[embed] UMAP skip: umap-learn not installed.", file=sys.stderr)
     except Exception as e:
-        print(f"[embed] UMAP failed for {hmm_name}: {e}")
+        import sys
+        print(f"[embed] UMAP failed for {hmm_name}: {e}", file=sys.stderr)
 
     # metadata
     meta = {

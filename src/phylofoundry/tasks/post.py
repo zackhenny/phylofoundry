@@ -226,8 +226,9 @@ def run_post(cfg, tree_dir, clipkit_dir, aln_dir, post_dir, summary_dir, hmm_kee
                 cons = consurf_like_scores(aln_seqs, metric=post_cfg.get("conservation_metric", "inverse_shannon_uncertainty"))
                 for i, v in enumerate(cons, start=1):
                     cons_rows.append({"hmm": hmm, "scope": "global", "site_1based": i, "conservation": float(v)})
-            except Exception:
-                pass
+            except Exception as e:
+                import sys
+                print(f"[post] Conservation scoring failed for {hmm}: {e}", file=sys.stderr)
 
         if post_cfg.get("compute_kl", False) and clades:
             counts = {}
@@ -264,8 +265,9 @@ def run_post(cfg, tree_dir, clipkit_dir, aln_dir, post_dir, summary_dir, hmm_kee
                         continue
                     mrca = t.lca(tips2)
                     mrca_rows.append({"hmm": hmm, "clade": cname, "status": "ok", "mrca_id": mrca.id, "mrca_name": mrca.name or ""})
-            except Exception:
-                pass
+            except Exception as e:
+                import sys
+                print(f"[post] MRCA sanity checks failed for {hmm}: {e}", file=sys.stderr)
 
     if cons_rows:
         pd.DataFrame(cons_rows).to_csv(os.path.join(post_dir, "conservation.tsv"), sep="\t", index=False)

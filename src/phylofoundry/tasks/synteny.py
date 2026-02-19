@@ -194,11 +194,11 @@ def run_synteny(cfg, synteny_dir, tree_dir, scan_df, search_df, hmm_keep, force=
     # Check dependencies
     try:
         import pygenomeviz
-        import pygenomeviz
         from pygenomeviz import GenomeViz, Link
-    except ImportError:
-        print("WARNING: pygenomeviz not installed. Skipping synteny plots.")
-        print("Install with: pip install pygenomeviz")
+    except ImportError as e:
+        import sys
+        print(f"[synteny] FAILED: pygenomeviz is not installed or could not be imported: {e}", file=sys.stderr)
+        print("[synteny] Please ensure it is installed in your python environment (e.g. conda install -c conda-forge pygenomeviz)", file=sys.stderr)
         return
 
     gbk_dir = syn_cfg.get("gbk_dir")
@@ -338,15 +338,42 @@ def run_synteny(cfg, synteny_dir, tree_dir, scan_df, search_df, hmm_keep, force=
         sim_tsv = os.path.join(hmm_out_dir, "gene_similarity.tsv")
         
         if all_prots and (not os.path.exists(sim_tsv) or force):
-            diamond_bin = sim_cfg.get("diamond_bin", "diamond")
-            db_prefix = os.path.join(hmm_out_dir, "diamond_db")
-            make_diamond_db(prot_faa, db_prefix, diamond_bin)
-            run_diamond_blastp(prot_faa, db_prefix, sim_tsv, diamond_bin, threads=int(cfg["resources"]["cpu"]))
+            method = sim_cfg.get("method", "diamond")
             
-            # Cleanup DB
-            for f in glob.glob(f"{db_prefix}.*"):
-                try: os.remove(f)
-                except: pass
+            if method == "mmseqs":
+                mmseqs_bin = sim_cfg.get("mmseqs_bin", "mmseqs")
+                db_prefix = os.path.join(hmm_out_dir, "mmseqs_db")
+                tmp_dir = os.path.join(hmm_out_dir, "tmp")
+                safe_mkdir(tmp_dir)
+                try:
+                    # Createdb
+                    run_cmd([mmseqs_bin, "createdb", prot_faa, db_prefix], quiet=True)
+                    # Search
+                    res_db = os.path.join(hmm_out_dir, "mmseqs_res")
+                    run_cmd([mmseqs_bin, "search", db_prefix, db_prefix, res_db, tmp_dir, "-a", "-e", str(sim_cfg.get("max_evalue", 1e-5))], quiet=True)
+                    # Convert to TSV Format 6: query,target,pident,bitscore,evalue
+                    run_cmd([mmseqs_bin, "convertalis", db_prefix, db_prefix, res_db, sim_tsv, "--format-output", "query,target,pident,bitscore,evalue"], quiet=True)
+                except Exception as e:
+                    import sys
+                    print(f"[synteny] mmseqs similarity failed: {e}", file=sys.stderr)
+                finally:
+                    # Cleanup DB
+                    for f in glob.glob(f"{db_prefix}*") + glob.glob(f"{res_db}*"):
+                        try: os.remove(f)
+                        except: pass
+                    try: shutil.rmtree(tmp_dir)
+                    except: pass
+            else:
+                # Default diamond
+                diamond_bin = sim_cfg.get("diamond_bin", "diamond")
+                db_prefix = os.path.join(hmm_out_dir, "diamond_db")
+                make_diamond_db(prot_faa, db_prefix, diamond_bin)
+                run_diamond_blastp(prot_faa, db_prefix, sim_tsv, diamond_bin, threads=int(cfg["resources"]["cpu"]))
+                
+                # Cleanup DB
+                for f in glob.glob(f"{db_prefix}.*"):
+                    try: os.remove(f)
+                    except: pass
 
         # Load links
         links = []

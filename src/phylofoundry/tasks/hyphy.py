@@ -7,7 +7,9 @@ def run_hyphy_wrapper(hyphy_bin, test_name, codon_aln_fp, tree_fp, out_json):
     try:
         run_cmd(cmd, quiet=True, shell=False)
         return True
-    except Exception:
+    except Exception as e:
+        import sys
+        print(f"[hyphy] test {test_name} failed: {e}", file=sys.stderr)
         return False
 
 def run_hyphy(cfg, codon_dir, tree_dir, hyphy_dir, hmm_keep, force=False):

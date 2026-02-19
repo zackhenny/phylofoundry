@@ -2,7 +2,9 @@
     "inputs": {
         "faa_dir": "/project2/thrash_89/zjhenning/proteomes",
         "hmm_input": "/project2/thrash_89/zjhenning/hmms",
-        "cds_dir": "/project2/thrash_89/zjhenning/cds"
+        "cds_dir": "/project2/thrash_89/zjhenning/cds",
+        "gtdb_dir": null,
+        "taxonomy_file": null
     },
     "output": {
         "outdir": "/project2/thrash_89/zjhenning/out/hmm_run01"
@@ -15,6 +17,10 @@
         "stop_after": null,
         "force": false,
         "hmm_manifest": null
+    },
+    "hmmer": {
+        "run_scan": true,
+        "run_search": true
     },
     "filtering": {
         "scores_tsv": null,
@@ -31,7 +37,18 @@
         "no_asr": false,
         "iq_boot": 1000,
         "use_hmmsearch_alignment": false,
-        "keep_all_hits": false
+        "keep_all_hits": false,
+        "combined_tree": false
+    },
+    "synteny": {
+        "enabled": false,
+        "gbk_dir": null,
+        "gff_dir": null,
+        "similarity": {
+            "method": "diamond",
+            "min_identity": 30,
+            "min_bitscore": 50
+        }
     },
     "embeddings": {
         "enabled": true,

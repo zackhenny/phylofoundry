@@ -28,6 +28,8 @@ all = [
   "transformers",
   "fair-esm",
   "biopython",
+  "pygenomeviz",
+  "matplotlib",
 ]
 # Just the embedding stack
 embed = [

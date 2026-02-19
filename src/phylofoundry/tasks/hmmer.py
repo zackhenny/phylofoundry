@@ -109,6 +109,9 @@ def run_hmmer(cfg, genomes, faa_dir, hmm_files, hmm_dir, combined_hmm, combined_
     
     cpu = int(cfg["resources"]["cpu"])
     filt_cfg = cfg["filtering"]
+    hmmer_cfg = cfg.get("hmmer", {})
+    run_scan = hmmer_cfg.get("run_scan", True)
+    run_search = hmmer_cfg.get("run_search", True)
     
     hits_scan_tsv = os.path.join(summary_dir, "hmmscan_hits.filtered.tsv")
     hits_search_tsv = os.path.join(summary_dir, "hmmsearch_hits.filtered.tsv")
@@ -133,12 +136,13 @@ def run_hmmer(cfg, genomes, faa_dir, hmm_files, hmm_dir, combined_hmm, combined_
 
     # hmmscan per genome
     scan_tasks = []
-    for g in genomes:
-        tbl = os.path.join(hmmscan_dir, g + ".tbl")
-        if os.path.exists(tbl) and not force:
-            continue
-        cmd = ["hmmscan", "--cpu", "1", "--domtblout", tbl, combined_hmm, os.path.join(faa_dir, g)]
-        scan_tasks.append((cmd, tbl, g, bool(filt_cfg.get("keep_tbl", False))))
+    if run_scan:
+        for g in genomes:
+            tbl = os.path.join(hmmscan_dir, g + ".tbl")
+            if os.path.exists(tbl) and not force:
+                continue
+            cmd = ["hmmscan", "--cpu", "1", "--domtblout", tbl, combined_hmm, os.path.join(faa_dir, g)]
+            scan_tasks.append((cmd, tbl, g, bool(filt_cfg.get("keep_tbl", False))))
 
     if scan_tasks:
         all_hits_scan = []
@@ -172,19 +176,21 @@ def run_hmmer(cfg, genomes, faa_dir, hmm_files, hmm_dir, combined_hmm, combined_
             float(filt_cfg["global_min_score"]),
             float(filt_cfg["min_coverage"])
         )
-        scan_df.to_csv(hits_scan_tsv, sep="\t", index=False)
+        if not scan_df.empty:
+            scan_df.to_csv(hits_scan_tsv, sep="\t", index=False)
 
     # hmmsearch per HMM file
     search_tasks = []
-    for hf in hmm_files:
-        hmm_name = os.path.splitext(hf)[0]
-        if hmm_keep is not None and hmm_name not in hmm_keep:
-            continue
-        tbl = os.path.join(hmmsearch_dir, f"{hmm_name}_combined.tbl")
-        if os.path.exists(tbl) and not force:
-            continue
-        cmd = ["hmmsearch", "--cpu", "1", "--domtblout", tbl, os.path.join(hmm_dir, hf), combined_faa]
-        search_tasks.append((cmd, tbl, hmm_name, bool(filt_cfg.get("keep_tbl", False))))
+    if run_search:
+        for hf in hmm_files:
+            hmm_name = os.path.splitext(hf)[0]
+            if hmm_keep is not None and hmm_name not in hmm_keep:
+                continue
+            tbl = os.path.join(hmmsearch_dir, f"{hmm_name}_combined.tbl")
+            if os.path.exists(tbl) and not force:
+                continue
+            cmd = ["hmmsearch", "--cpu", "1", "--domtblout", tbl, os.path.join(hmm_dir, hf), combined_faa]
+            search_tasks.append((cmd, tbl, hmm_name, bool(filt_cfg.get("keep_tbl", False))))
 
     if search_tasks:
         all_hits_search = []
@@ -221,7 +227,8 @@ def run_hmmer(cfg, genomes, faa_dir, hmm_files, hmm_dir, combined_hmm, combined_
             float(filt_cfg["global_min_score"]),
             float(filt_cfg["min_coverage"])
         )
-        search_df.to_csv(hits_search_tsv, sep="\t", index=False)
+        if not search_df.empty:
+            search_df.to_csv(hits_search_tsv, sep="\t", index=False)
 
     # Competitive best per (genome,protein): prefer hmmscan if available else hmmsearch
     if os.path.exists(best_hits_tsv) and not force:
@@ -235,6 +242,30 @@ def run_hmmer(cfg, genomes, faa_dir, hmm_files, hmm_dir, combined_hmm, combined_
             best_df["source"] = "hmmsearch"
         else:
             best_df = pd.DataFrame()
+    
+    # Optional Taxonomy Integration
+    gtdb_dir = cfg["inputs"].get("gtdb_dir")
+    tax_file = cfg["inputs"].get("taxonomy_file")
+    if (gtdb_dir or tax_file) and not best_df.empty:
+        from .post import _load_taxonomy
+        tax_map = _load_taxonomy(gtdb_dir, tax_file)
+        if tax_map:
+            from ..utils.helpers import normalize_genome_id
+            
+            def lookup_tax(g_filename):
+                return tax_map.get(normalize_genome_id(str(g_filename)), "Unknown")
+            
+            # Map to all generated output tables
+            if not best_df.empty and "genome" in best_df.columns:
+                best_df["taxonomy"] = best_df["genome"].apply(lookup_tax)
+            if not scan_df.empty and "genome" in scan_df.columns:
+                scan_df["taxonomy"] = scan_df["genome"].apply(lookup_tax)
+                scan_df.to_csv(hits_scan_tsv, sep="\t", index=False)
+            if not search_df.empty and "genome" in search_df.columns:
+                search_df["taxonomy"] = search_df["genome"].apply(lookup_tax)
+                search_df.to_csv(hits_search_tsv, sep="\t", index=False)
+    
+    if not best_df.empty:
         best_df.to_csv(best_hits_tsv, sep="\t", index=False)
     
     return scan_df, search_df, best_df

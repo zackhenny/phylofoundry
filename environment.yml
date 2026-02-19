@@ -14,17 +14,19 @@ dependencies:
   - mafft
   - clipkit
   - iqtree  # Installs iqtree v2.x.
-  - pal2nal # For codon alignments
-  - hyphy   # For selection analysis
-  - pytorch
-  - transformers
   - pygenomeviz
   - biopython
   - matplotlib
   - diamond
   - mmseqs2
+  - umap-learn
+  - iqtree
+  - hyphy
   - pip
   - pip:
     - fair-esm
+    - pygenomeviz
     - biopython
+    - transformers
+    - torch
     - .  # Install the current package in editable mode

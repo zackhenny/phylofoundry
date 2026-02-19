@@ -32,6 +32,10 @@ DEFAULT_CONFIG = {
         "force": False,
         "hmm_manifest": None
     },
+    "hmmer": {
+        "run_scan": True,
+        "run_search": True
+    },
     "filtering": {
         "scores_tsv": None,
         "global_min_score": 25.0,
@@ -49,6 +53,7 @@ DEFAULT_CONFIG = {
         "iq_boot": 1000,
         "use_hmmsearch_alignment": False,
         "keep_all_hits": False,
+        "combined_tree": False, # If true, combine all hits into a single tree
         "iqtree_bin": "iqtree" # Default to iqtree, falling back to iqtree2 or iqtree3 if needed
     },
     "embeddings": {

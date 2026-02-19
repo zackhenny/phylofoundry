@@ -92,8 +92,8 @@ def worker_phylo(args_pack):
 
     try:
         subprocess.run(iq_cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    except subprocess.CalledProcessError:
-        pass
+    except subprocess.CalledProcessError as e:
+        print(f"[phylo] warning: IQ-TREE failed for {hmm_name}: {e}", file=os.sys.stderr)
 
     return hmm_name
 
@@ -121,8 +121,7 @@ def run_phylo(cfg, hmm_to_seqs, fasta_dir, aln_dir, clipkit_dir, tree_dir, name_
         hmm_path = None
         if not phy_cfg.get("mafft", False):
             if hmm not in name_to_hmm_path:
-                # If HMM NAME != hmm label used in hits table, hmmalign won't know which HMM to use.
-                # In that case, either run with --phylo.mafft=true, or make your hit HMM labels match NAME fields.
+                print(f"[phylo] warning: HMM {hmm} not found in names map, skipping hmmalign.", file=os.sys.stderr)
                 continue
             hmm_path = name_to_hmm_path[hmm]
 
@@ -133,3 +132,64 @@ def run_phylo(cfg, hmm_to_seqs, fasta_dir, aln_dir, clipkit_dir, tree_dir, name_
 
     with ProcessPoolExecutor(max_workers=workers) as exe:
         list(exe.map(worker_phylo, tasks))
+
+    # Combined tree mapping
+    if phy_cfg.get("combined_tree", False):
+        print("[phylo] Building combined tree for all hits...")
+        import sys
+        
+        combined_seqs = {}
+        for hmm, seqs in hmm_to_seqs.items():
+            if hmm_keep is not None and hmm not in hmm_keep:
+                continue
+            for tip, s in seqs.items():
+                if tip not in combined_seqs:
+                    combined_seqs[tip] = s
+        
+        if len(combined_seqs) >= 3:
+            cmb_fasta = os.path.join(fasta_dir, "combined_all_hits.faa")
+            cmb_aln = os.path.join(aln_dir, "combined_all_hits.mafft.fasta")
+            cmb_clip = os.path.join(clipkit_dir, "combined_all_hits.clipkit.faa")
+            tree_prefix = os.path.join(tree_dir, "combined_all_hits")
+            treefile = tree_prefix + ".treefile"
+            
+            if not os.path.exists(treefile) or force:
+                write_fasta(cmb_fasta, combined_seqs)
+                
+                # Mafft alignment
+                if not os.path.exists(cmb_aln) or force:
+                    print("  Running MAFFT on combined hits...")
+                    flags = {"auto": "--auto", "ginsi": "--globalpair --maxiterate 1000"}.get(phy_cfg.get("mafft_mode", "auto"), "--auto")
+                    cmd = f"mafft {flags} --thread {cpu} --quiet {cmb_fasta} > {cmb_aln}"
+                    try:
+                        run_cmd(cmd, quiet=True, shell=True)
+                    except Exception as e:
+                        print(f"[phylo] combined mafft failed: {e}", file=sys.stderr)
+                
+                # ClipKit
+                if not os.path.exists(cmb_clip) or force:
+                    print("  Running ClipKit on combined hits...")
+                    try:
+                        subprocess.run(["clipkit", cmb_aln, "-o", cmb_clip], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    except Exception as e:
+                        print(f"[phylo] combined clipkit failed: {e}", file=sys.stderr)
+                
+                # IQ-TREE
+                if not os.path.exists(treefile) or force:
+                    print("  Running IQ-TREE on combined hits...")
+                    iqtree_bin = phy_cfg.get("iqtree_bin", "iqtree")
+                    iq_cmd = [
+                        iqtree_bin, "-s", cmb_clip, "-m", "MFP",
+                        "-B", str(phy_cfg.get("iq_boot", 1000)),
+                        "-T", str(cpu),
+                        "-pre", tree_prefix, "-quiet"
+                    ]
+                    if not phy_cfg.get("no_asr", False):
+                        iq_cmd.insert(len(iq_cmd) - 1, "-asr")
+                    
+                    try:
+                        subprocess.run(iq_cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    except subprocess.CalledProcessError as e:
+                        print(f"[phylo] combined IQ-TREE failed: {e}", file=sys.stderr)
+        else:
+            print("[phylo] Less than 3 combined sequences, skipping combined tree.", file=os.sys.stderr)
