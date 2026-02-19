@@ -189,7 +189,7 @@ def run_pipeline(cfg):
 
     # ── STEP: post ─────────────────────────────────────────────────────────
     if step_in_range("post", start_at, stop_after) and post_cfg.get("enabled", False):
-        post.run_post(cfg, tree_dir, clipkit_dir, aln_dir, post_dir, hmm_keep, force)
+        post.run_post(cfg, tree_dir, clipkit_dir, aln_dir, post_dir, summary_dir, hmm_keep, force)
     if stop_after == "post":
         return
 

@@ -16,7 +16,9 @@ DEFAULT_CONFIG = {
     "inputs": {
         "faa_dir": None,     # directory of *.faa OR a single .faa
         "hmm_input": None,   # directory of *.hmm OR a single .hmm
-        "cds_dir": None      # optional directory of CDS nucleotide FASTAs (per genome)
+        "cds_dir": None,      # optional directory of CDS nucleotide FASTAs (per genome)
+        "gtdb_dir": None,     # optional directory of GTA-Tk output
+        "taxonomy_file": None # optional TSV with genome->lineage mapping
     },
     "output": {
         "outdir": None

@@ -100,9 +100,75 @@ def validate_tips_in_tree(tree, tips):
     return missing
 
 
-def run_post(cfg, tree_dir, clipkit_dir, aln_dir, post_dir, hmm_keep, force=False):
+def _load_taxonomy(gtdb_dir, tax_file):
+    """Load taxonomy map from GTDB-Tk output or custom TSV."""
+    from ..utils.helpers import normalize_genome_id
+    tax_map = {}
+
+    # 1. Load from GTDB-Tk output if provided
+    if gtdb_dir and os.path.isdir(gtdb_dir):
+        # GTDB-Tk outputs: gtdbtk.bac120.summary.tsv, gtdbtk.ar122.summary.tsv
+        summary_files = glob.glob(os.path.join(gtdb_dir, "gtdbtk.*.summary.tsv"))
+        for fp in summary_files:
+            try:
+                df = pd.read_csv(fp, sep="\t")
+                # Expected cols: user_genome, classification
+                if "user_genome" in df.columns and "classification" in df.columns:
+                    for _, r in df.iterrows():
+                        key = normalize_genome_id(str(r["user_genome"]))
+                        tax_map[key] = str(r["classification"])
+            except Exception as e:
+                print(f"[post] Warning: Failed to parse GTDB summary {fp}: {e}")
+
+    # 2. Load from custom taxonomy file if provided (overrides GTDB)
+    if tax_file and os.path.exists(tax_file):
+        try:
+            df = pd.read_csv(tax_file, sep="\t", dtype=str)
+            if "genome" in df.columns and "lineage" in df.columns:
+                 for _, r in df.iterrows():
+                    key = normalize_genome_id(str(r["genome"]))
+                    tax_map[key] = str(r["lineage"])
+        except Exception as e:
+             print(f"[post] Warning: Failed to parse taxonomy file {tax_file}: {e}")
+             
+    return tax_map
+
+
+
+def run_post(cfg, tree_dir, clipkit_dir, aln_dir, post_dir, summary_dir, hmm_keep, force=False):
     print("\n[post] scikit-bio post-processing...")
 
+    # ── Taxonomy Integration ──────────────────────────────────────────────
+    gtdb_dir = cfg["inputs"].get("gtdb_dir")
+    tax_file = cfg["inputs"].get("taxonomy_file")
+    
+    if gtdb_dir or tax_file:
+        tax_map = _load_taxonomy(gtdb_dir, tax_file)
+        if tax_map:
+            print(f"[post] Loaded taxonomy for {len(tax_map)} genomes.")
+            # 1. Save genome->taxonomy map
+            tax_rows = [{"genome": k, "taxonomy": v} for k, v in tax_map.items()]
+            pd.DataFrame(tax_rows).to_csv(os.path.join(summary_dir, "genome_taxonomy.tsv"), sep="\t", index=False)
+            
+            # 2. Merge into best_hits
+            best_hits_fp = os.path.join(summary_dir, "best_hits.competitive.tsv")
+            if os.path.exists(best_hits_fp):
+                from ..utils.helpers import normalize_genome_id
+                df = pd.read_csv(best_hits_fp, sep="\t")
+                # Normalize genome column to match taxonomy keys
+                # We assume df["genome"] is filename like "genomeA.faa"
+                # We apply normalize to look up
+                
+                def lookup_tax(g_filename):
+                    norm = normalize_genome_id(str(g_filename))
+                    return tax_map.get(norm, "Unknown")
+
+                if "genome" in df.columns:
+                    df["taxonomy"] = df["genome"].apply(lookup_tax)
+                    out_fp = os.path.join(summary_dir, "best_hits.with_taxonomy.tsv")
+                    df.to_csv(out_fp, sep="\t", index=False)
+                    print(f"[post] Wrote {out_fp}")
+    
     post_cfg = cfg.get("post", {})
     clades = None
     if post_cfg.get("clades_tsv", None):

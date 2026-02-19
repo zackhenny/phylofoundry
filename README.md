@@ -100,6 +100,8 @@ Required if running `synteny` step.
 | `inputs.faa_dir` | Directory containing proteome files (one per genome) OR a single `.faa` file. | **Yes** | FASTA (`.faa`) |
 | `inputs.hmm_input` | Directory of HMM profiles OR a single `.hmm` file to search against. | **Yes** | HMMER3 (`.hmm`) |
 | `inputs.cds_dir` | (Optional) Directory of nucleotide coding sequences (CDS). Required only if running `codon` or `hyphy` steps. | No | FASTA (`.fna` / `.ffn`) |
+| `inputs.gtdb_dir` | (Optional) Directory of GTDB-Tk output (e.g., `gtdbtk.bac120.summary.tsv`). | No | Directory |
+| `inputs.taxonomy_file` | (Optional) Custom TSV mapping `genome` -> `lineage`. | No | TSV |
 | `synteny.gbk_dir` | (Optional) Directory of GenBank files for neighborhood extraction. | No | `.gbk` / `.gbff` |
 | `synteny.gff_dir` | (Optional) Directory of GFF3 files (requires matching fasta in `inputs.faa_dir` or similar). | No | `.gff` |
 | `post.clades_tsv` | (Optional) TSV mapping tip names to clades for dispersion metrics and KL divergence. | No | TSV: `clade_name` `tip` |
@@ -111,6 +113,8 @@ The pipeline creates a structured `results` directory:
 | Path | Description | Format |
 | :--- | :--- | :--- |
 | `summary/best_hits.competitive.tsv` | **Key Result**. Table of the best HMM hit for each protein (resolved by bitscore). | TSV |
+| `summary/best_hits.with_taxonomy.tsv` | **Key Result + Tax**. Same as above, but with a `taxonomy` column merged from GTDB. | TSV |
+| `summary/genome_taxonomy.tsv` | Helper table mapping `genome` -> `classification`. | TSV |
 | `summary/resolved_config.json` | The exact configuration used for the run (provenance). | JSON |
 | `trees_iqtree/<HMM>.treefile` | The final Maximum Likelihood phylogenetic tree. | Newick |
 | `fasta_per_hmm/<HMM>.faa` | Unaligned protein sequences extracted for that HMM. | FASTA |
