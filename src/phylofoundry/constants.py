@@ -65,7 +65,9 @@ DEFAULT_CONFIG = {
         "repr_layer": None,          # if None, choose last layer (esm) or last_hidden_state (transformers)
         "pooling": "mean",           # "mean" (implemented)
         "pca_components": 3,
-        "write_full_vectors": False  # if True, write TSV with all dims (can be huge); always writes .npy
+        "write_full_vectors": False,  # if True, write TSV with all dims (can be huge); always writes .npy
+        "cluster_embeddings": True,   # run HDBSCAN on raw embeddings
+        "hdbscan_min_cluster_size": 5  # HDBSCAN min_cluster_size param
     },
     "post": {
         "enabled": False,

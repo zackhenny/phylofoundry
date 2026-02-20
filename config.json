@@ -44,6 +44,7 @@
         "enabled": false,
         "gbk_dir": null,
         "gff_dir": null,
+        "window_genes": 10,
         "similarity": {
             "method": "diamond",
             "min_identity": 30,
@@ -59,7 +60,9 @@
         "repr_layer": null,
         "pooling": "mean",
         "pca_components": 3,
-        "write_full_vectors": false
+        "write_full_vectors": false,
+        "cluster_embeddings": true,
+        "hdbscan_min_cluster_size": 5
     },
     "post": {
         "enabled": true,

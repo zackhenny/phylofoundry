@@ -98,24 +98,103 @@ def _embed_transformers(seqs: dict, model_id_or_path: str, device: str, batch_si
     X = np.vstack(vectors)
     return ids, X
 
-def compute_embeddings_for_hmm(hmm_name: str, seqs: dict, emb_cfg: dict, outdir_embeddings: str, force: bool, clades: dict | None):
+def _save_umap_plot(U, ids, hmm_name, out_png, clades=None, cluster_labels=None, title_suffix=""):
+    """Generate and save a UMAP scatter plot as PNG."""
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+
+        fig, ax = plt.subplots(figsize=(8, 6))
+
+        if cluster_labels is not None:
+            unique_labels = sorted(set(cluster_labels))
+            cmap = plt.cm.get_cmap("tab20", max(len(unique_labels), 1))
+            for label in unique_labels:
+                mask = [cl == label for cl in cluster_labels]
+                pts = U[[i for i, m in enumerate(mask) if m]]
+                color = "lightgrey" if label == -1 else cmap(unique_labels.index(label) % 20)
+                lbl = "Noise" if label == -1 else f"Cluster {label}"
+                ax.scatter(pts[:, 0], pts[:, 1], c=[color], s=20, alpha=0.7, label=lbl, edgecolors="none")
+            ax.legend(fontsize=7, loc="best", framealpha=0.7, markerscale=1.5)
+        elif clades:
+            # Color by user-provided clades
+            tip_to_clade = {}
+            for cname, tips in clades.items():
+                for t in tips:
+                    tip_to_clade[t] = cname
+            clade_names = sorted(set(tip_to_clade.values()))
+            cmap = plt.cm.get_cmap("tab10", max(len(clade_names), 1))
+            assigned = [tip_to_clade.get(t, None) for t in ids]
+            for ci, cn in enumerate(clade_names):
+                mask = [a == cn for a in assigned]
+                pts = U[[i for i, m in enumerate(mask) if m]]
+                if len(pts) > 0:
+                    ax.scatter(pts[:, 0], pts[:, 1], c=[cmap(ci)], s=20, alpha=0.7, label=cn, edgecolors="none")
+            # Unassigned
+            mask = [a is None for a in assigned]
+            pts = U[[i for i, m in enumerate(mask) if m]]
+            if len(pts) > 0:
+                ax.scatter(pts[:, 0], pts[:, 1], c="lightgrey", s=15, alpha=0.5, label="unassigned", edgecolors="none")
+            ax.legend(fontsize=7, loc="best", framealpha=0.7, markerscale=1.5)
+        else:
+            ax.scatter(U[:, 0], U[:, 1], c="steelblue", s=20, alpha=0.7, edgecolors="none")
+
+        ax.set_xlabel("UMAP 1")
+        ax.set_ylabel("UMAP 2")
+        ax.set_title(f"{hmm_name} — UMAP{title_suffix}")
+        fig.tight_layout()
+        fig.savefig(out_png, dpi=200)
+        plt.close(fig)
+        print(f"[embed] Saved UMAP plot: {out_png}")
+    except ImportError:
+        import sys
+        print("[embed] matplotlib not installed — skipping UMAP plot.", file=sys.stderr)
+    except Exception as e:
+        import sys
+        print(f"[embed] UMAP plot failed for {hmm_name}: {e}", file=sys.stderr)
+
+
+def _run_hdbscan(X, min_cluster_size=5):
+    """Cluster embeddings with HDBSCAN. Returns list of integer labels (-1 = noise)."""
+    try:
+        from sklearn.cluster import HDBSCAN
+        clusterer = HDBSCAN(min_cluster_size=min_cluster_size)
+        labels = clusterer.fit_predict(X)
+        return labels.tolist()
+    except ImportError:
+        import sys
+        print("[embed] HDBSCAN requires scikit-learn >= 1.3. Skipping clustering.", file=sys.stderr)
+        return None
+    except Exception as e:
+        import sys
+        print(f"[embed] HDBSCAN clustering failed: {e}", file=sys.stderr)
+        return None
+
+
+def compute_embeddings_for_hmm(hmm_name: str, seqs: dict, emb_cfg: dict, outdir_embeddings: str,
+                               force: bool, clades: dict | None, tax_map: dict | None = None):
+    """Compute embeddings, PCA, UMAP, HDBSCAN clustering, and save plots + TSVs.
+    Returns a list of cluster assignment dicts (for clade_assignment.tsv), or empty list."""
     safe_mkdir(outdir_embeddings)
 
     out_npy = os.path.join(outdir_embeddings, f"{hmm_name}.embeddings.npy")
     out_pca = os.path.join(outdir_embeddings, f"{hmm_name}.pca.tsv")
     out_umap = os.path.join(outdir_embeddings, f"{hmm_name}.umap.tsv")
+    out_umap_png = os.path.join(outdir_embeddings, f"{hmm_name}.umap.png")
+    out_umap_clust_png = os.path.join(outdir_embeddings, f"{hmm_name}.umap.clustered.png")
     out_meta = os.path.join(outdir_embeddings, f"{hmm_name}.pca.meta.json")
     out_disp = os.path.join(outdir_embeddings, f"{hmm_name}.dispersion.tsv")
     out_vec_tsv = os.path.join(outdir_embeddings, f"{hmm_name}.vectors.tsv")
 
     if os.path.exists(out_pca) and os.path.exists(out_npy) and os.path.exists(out_umap) and not force:
-        return
+        return []
 
     seqs = {k: v.replace(" ", "").replace("\n", "").replace("*", "").replace(".", "") for k, v in seqs.items()}
     if len(seqs) < 3:
         import sys
         print(f"[embed] Warning: HMM '{hmm_name}' has less than 3 sequences. Skipping embeddings.", file=sys.stderr)
-        return
+        return []
 
     backend = emb_cfg["backend"]
     device = emb_cfg["device"]
@@ -133,10 +212,10 @@ def compute_embeddings_for_hmm(hmm_name: str, seqs: dict, emb_cfg: dict, outdir_
             ids, X = _embed_transformers(seqs, model_id_or_path=model_name, device=device, batch_size=batch_size, model_dir=model_dir)
         else:
             print(f"[embed] Error: Unknown backend '{backend}'", file=sys.stderr)
-            return
+            return []
     except Exception as e:
         print(f"[embed] FAILED {hmm_name}: {e}", file=sys.stderr)
-        return
+        return []
 
     X = X.astype(np.float32)
     np.save(out_npy, X)
@@ -159,13 +238,14 @@ def compute_embeddings_for_hmm(hmm_name: str, seqs: dict, emb_cfg: dict, outdir_
         rows.append(r)
     pd.DataFrame(rows).to_csv(out_pca, sep="\t", index=False)
 
-    # UMAP
+    # ── UMAP ──────────────────────────────────────────────────────────────
+    U = None
     try:
         import umap
-        import warnings
+        import warnings as _w
         reducer = umap.UMAP(n_components=2, random_state=42)
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
+        with _w.catch_warnings():
+            _w.simplefilter("ignore")
             U = reducer.fit_transform(X)
         
         u_rows = []
@@ -181,12 +261,46 @@ def compute_embeddings_for_hmm(hmm_name: str, seqs: dict, emb_cfg: dict, outdir_
                 "UMAP2": float(coords[1])
             })
         pd.DataFrame(u_rows).to_csv(out_umap, sep="\t", index=False)
+
+        # Save UMAP plot (colored by clades if available)
+        _save_umap_plot(U, ids, hmm_name, out_umap_png, clades=clades)
     except ImportError:
         import sys
-        print(f"[embed] UMAP skip: umap-learn not installed.", file=sys.stderr)
+        print("[embed] UMAP skip: umap-learn not installed.", file=sys.stderr)
     except Exception as e:
         import sys
         print(f"[embed] UMAP failed for {hmm_name}: {e}", file=sys.stderr)
+
+    # ── HDBSCAN clustering ────────────────────────────────────────────────
+    cluster_assignments = []
+    if emb_cfg.get("cluster_embeddings", True):
+        min_cs = int(emb_cfg.get("hdbscan_min_cluster_size", 5))
+        labels = _run_hdbscan(X, min_cluster_size=min_cs)
+        if labels is not None:
+            # Genome ID normalizer for taxonomy lookup
+            from ..utils.helpers import normalize_genome_id
+            n_clusters = len(set(labels) - {-1})
+            print(f"[embed] HDBSCAN found {n_clusters} clusters for {hmm_name} ({sum(1 for l in labels if l == -1)} noise points)")
+
+            for tip, label in zip(ids, labels):
+                genome = tip.split("|", 1)[0] if "|" in tip else "Unknown"
+                protein = tip.split("|", 1)[1] if "|" in tip else tip
+                taxonomy = "Unknown"
+                if tax_map:
+                    norm_g = normalize_genome_id(genome)
+                    taxonomy = tax_map.get(norm_g, "Unknown")
+                cluster_assignments.append({
+                    "hmm": hmm_name,
+                    "protein": protein,
+                    "genome": genome,
+                    "cluster_id": int(label),
+                    "taxonomy": taxonomy,
+                })
+
+            # Save cluster-colored UMAP plot
+            if U is not None:
+                _save_umap_plot(U, ids, hmm_name, out_umap_clust_png,
+                                cluster_labels=labels, title_suffix=" (HDBSCAN clusters)")
 
     # metadata
     meta = {
@@ -238,7 +352,10 @@ def compute_embeddings_for_hmm(hmm_name: str, seqs: dict, emb_cfg: dict, outdir_
         if disp_rows:
             pd.DataFrame(disp_rows).to_csv(out_disp, sep="\t", index=False)
 
-def run_embed(cfg, hmm_to_seqs, clades, emb_dir, fasta_dir, hmm_keep, force=False):
+    return cluster_assignments
+
+def run_embed(cfg, hmm_to_seqs, clades, emb_dir, fasta_dir, hmm_keep,
+              force=False, summary_dir=None, tax_map=None):
     print("\n[embed] Computing per-HMM embeddings...")
     emb_cfg = cfg.get("embeddings", {})
 
@@ -258,7 +375,22 @@ def run_embed(cfg, hmm_to_seqs, clades, emb_dir, fasta_dir, hmm_keep, force=Fals
                 continue
             hmm_to_seqs[hmm] = read_fasta(fp)
 
+    all_cluster_assignments = []
+
     for hmm, seqs in hmm_to_seqs.items():
         if hmm_keep is not None and hmm not in hmm_keep:
             continue
-        compute_embeddings_for_hmm(hmm, seqs, emb_cfg, emb_dir, force=force, clades=clades)
+        assignments = compute_embeddings_for_hmm(
+            hmm, seqs, emb_cfg, emb_dir, force=force,
+            clades=clades, tax_map=tax_map
+        )
+        if assignments:
+            all_cluster_assignments.extend(assignments)
+
+    # Write combined clade_assignment.tsv
+    if all_cluster_assignments and summary_dir:
+        from ..utils.helpers import safe_mkdir
+        safe_mkdir(summary_dir)
+        out_fp = os.path.join(summary_dir, "clade_assignment.tsv")
+        pd.DataFrame(all_cluster_assignments).to_csv(out_fp, sep="\t", index=False)
+        print(f"[embed] Wrote cluster assignments: {out_fp}  ({len(all_cluster_assignments)} proteins)")

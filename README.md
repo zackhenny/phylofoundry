@@ -8,8 +8,10 @@
 
 -   **Competitive HMM Hits**: Uses both `hmmscan` and `hmmsearch` to identify the best functional assignments for proteins, resolving overlapping hits competitively by bitscore.
 -   **Automated Phylogeny**: Per-HMM alignment (MAFFT/HMMER), trimming (ClipKit), and tree inference (IQ-TREE).
--   **Protein Embeddings** (Optional): Generates per-HMM embeddings (ESM) and dimensionality reduction (PCA/UMAP).
--   **Synteny Analysis** (Optional): Extracts gene neighborhoods, computes similarity (DIAMOND/MMseqs2), and plots synteny tracks ordered by phylogeny.
+-   **Protein Embeddings** (Optional): Generates per-HMM embeddings (ESM) and dimensionality reduction (PCA/UMAP), with HDBSCAN clustering and UMAP scatter plots.
+-   **Synteny Analysis** (Optional): Extracts gene neighborhoods (configurable window), computes similarity (DIAMOND/MMseqs2), and plots synteny tracks ordered by phylogeny.
+-   **HDBSCAN Clustering** (Optional): Clusters protein embeddings and outputs `clade_assignment.tsv` with taxonomy.
+-   **GTDB Taxonomy Integration**: Merges GTDB-Tk taxonomy into summary tables and cluster assignments.
 -   **Resumable**: Smart checkpointing skips already completed steps.
 -   **HPC Ready**: Auto-detects Slurm CPU allocations.
 
@@ -120,7 +122,11 @@ The pipeline creates a structured `results` directory:
 | `fasta_per_hmm/<HMM>.faa` | Unaligned protein sequences extracted for that HMM. | FASTA |
 | `alignments_clipkit/<HMM>.clipkit.faa` | The final trimmed alignment used for tree building. | FASTA |
 | `embeddings/<HMM>.pca.tsv` | PCA coordinates of protein embeddings (if enabled). | TSV |
+| `embeddings/<HMM>.umap.tsv` | UMAP coordinates of protein embeddings. | TSV |
+| `embeddings/<HMM>.umap.png` | UMAP scatter plot (colored by clades if provided). | PNG |
+| `embeddings/<HMM>.umap.clustered.png` | UMAP scatter plot colored by HDBSCAN cluster. | PNG |
 | `embeddings/<HMM>.dispersion.tsv` | Quantified "functional tightness" of clades in embedding space. | TSV |
+| `summary/clade_assignment.tsv` | HDBSCAN cluster assignments with protein, genome, cluster ID, and taxonomy. | TSV |
 | `synteny/<HMM>/synteny.<HMM>.pdf` | Synteny plot of gene neighborhoods. | PDF |
 | `synteny/<HMM>/neighborhood_proteins.faa` | Sequences of all genes in the extracted neighborhoods. | FASTA |
 | `codon_alignments/<HMM>.codon.fasta` | Codon-aware alignment (if enabled). | FASTA |
@@ -213,7 +219,8 @@ The pipeline runs as a series of sequential **Steps**. You can control execution
 ### Step 4: `embed` (Optional)
 -   **Action**: Uses Protein Language Models (ESM-2, etc.) to embed sequences.
 -   **Analysis**: Performs PCA and UMAP on the embeddings to visualize sequence space.
--   **Output**: `embeddings/<hmm_name>.pca.tsv`, `.npy` files.
+-   **Clustering**: Runs HDBSCAN on raw embeddings to auto-discover functional clusters.
+-   **Output**: `embeddings/<hmm_name>.pca.tsv`, `.umap.tsv`, `.umap.png`, `.umap.clustered.png`, `summary/clade_assignment.tsv`.
 
 ### Step 5: `phylo`
 -   **Action**:
@@ -303,13 +310,19 @@ phylofoundry --dump_default_config > config.json
 results/
 ├── summary/
 │   ├── best_hits.competitive.tsv  # Main results table
+│   ├── best_hits.with_taxonomy.tsv # With GTDB taxonomy
+│   ├── clade_assignment.tsv       # HDBSCAN cluster assignments
 │   ├── resolved_config.json       # Provenance
 │   └── post_scikitbio/            # Conservation metrics
 ├── fasta_per_hmm/                 # Extracted sequences
 ├── alignments_hmm/                # Raw alignments
 ├── alignments_clipkit/            # Trimmed alignments
 ├── trees_iqtree/                  # Final Newick trees
-└── embeddings/                    # PCA/UMAP data
+├── embeddings/                    # PCA/UMAP data + plots
+│   ├── <HMM>.umap.png             # UMAP scatter
+│   └── <HMM>.umap.clustered.png   # UMAP colored by HDBSCAN
+├── synteny/                       # Gene neighborhood plots
+└── codon_alignments/              # PAL2NAL codon alignments
 ```
 
 ---
@@ -354,7 +367,8 @@ Phylogenetic inference.
 Gene neighborhood analysis.
 -   `enabled`: Set to `true` to run.
 -   `gbk_dir`: (Required if enabled) Directory of GenBank files (`.gbk`) with genomic context.
--   `window_genes`: (Default: `10`) Genes to examine upstream/downstream.
+-   `gff_dir`: (Optional) Directory of GFF3 files. If both GBK and GFF are provided, GBK is tried first, then GFF as fallback.
+-   `window_genes`: (Default: `10`) Number of genes to extract upstream and downstream of the hit. May be fewer at contig boundaries.
 -   `similarity`: homology search settings.
     -   `method`: `"diamond"` (default) or `"mmseqs"`.
     -   `min_identity`: (Default: `30`) % identity cutoff.
@@ -366,6 +380,8 @@ Protein Language Model analysis.
 -   `enabled`: Set to `true` to run.
 -   `model`: (Default: `"esm2_t33_650M_UR50D"`) ESM2 model.
 -   `device`: `"cuda"` (GPU) or `"cpu"`.
+-   `cluster_embeddings`: (Default: `true`) Run HDBSCAN clustering on embeddings.
+-   `hdbscan_min_cluster_size`: (Default: `5`) Minimum cluster size for HDBSCAN.
 
 ### `post`
 Post-processing metrics.

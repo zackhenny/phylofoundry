@@ -83,8 +83,9 @@ def load_genbank_neighborhood(gbk_path, protein_id, window_genes, protein_id_fie
                 
                 return neighborhood
                 
-    except Exception:
-        pass
+    except Exception as e:
+        import sys
+        print(f"[synteny] Warning: Failed to parse GenBank {gbk_path}: {e}", file=sys.stderr)
     return []
 
 def parse_gff_line(line):
@@ -194,12 +195,16 @@ def run_synteny(cfg, synteny_dir, tree_dir, scan_df, search_df, hmm_keep, force=
     # Check dependencies
     try:
         import pygenomeviz
-        from pygenomeviz import GenomeViz, Link
+        from pygenomeviz import GenomeViz
     except ImportError as e:
         import sys
         print(f"[synteny] FAILED: pygenomeviz is not installed or could not be imported: {e}", file=sys.stderr)
-        print("[synteny] Please ensure it is installed in your python environment (e.g. conda install -c conda-forge pygenomeviz)", file=sys.stderr)
+        print("[synteny] Install with: pip install pygenomeviz  (or: conda install -c conda-forge pygenomeviz)", file=sys.stderr)
         return
+
+    # Detect pygenomeviz version for API compatibility
+    _pgv_version = tuple(int(x) for x in pygenomeviz.__version__.split(".")[:2]) if hasattr(pygenomeviz, "__version__") else (0, 4)
+    _pgv_v1 = _pgv_version >= (1, 0)
 
     gbk_dir = syn_cfg.get("gbk_dir")
     gff_dir = syn_cfg.get("gff_dir")
@@ -379,7 +384,8 @@ def run_synteny(cfg, synteny_dir, tree_dir, scan_df, search_df, hmm_keep, force=
         links = []
         if os.path.exists(sim_tsv):
             try:
-                sdf = pd.read_csv(sim_tsv, sep="\t", names=["q", "s", "pident", "bitscore", "evalue"])
+                sdf = pd.read_csv(sim_tsv, sep="\t", names=["q", "s", "pident", "bitscore", "evalue"],
+                                  comment="#", on_bad_lines="skip")
                 # Filter
                 sdf = sdf[sdf["q"] != sdf["s"]]
                 sdf = sdf[sdf["pident"] >= float(sim_cfg.get("min_identity", 30))]
@@ -388,8 +394,9 @@ def run_synteny(cfg, synteny_dir, tree_dir, scan_df, search_df, hmm_keep, force=
                 # Make simple list of (q, s, pident)
                 for _, row in sdf.iterrows():
                     links.append((row["q"], row["s"], row["pident"]))
-            except Exception:
-                pass
+            except Exception as e:
+                import sys
+                print(f"[synteny] Warning: Failed to parse similarity TSV {sim_tsv}: {e}", file=sys.stderr)
 
         # Tree ordering
         ordered_genomes = [n[0] for n in neighborhoods]
@@ -440,12 +447,21 @@ def run_synteny(cfg, synteny_dir, tree_dir, scan_df, search_df, hmm_keep, force=
 
 
         
-        # Refactor slightly to map UIDs to feature objects
-        # Re-build the GenomeViz loop to store feature objects
-        gv = GenomeViz(
-            fig_width=syn_cfg.get("plot_width", 14),
-            fig_track_height=syn_cfg.get("plot_height_per_track", 0.35),
-        )
+        # Build GenomeViz plot (compatible with both v0.x and v1.0+ APIs)
+        try:
+            if _pgv_v1:
+                gv = GenomeViz(
+                    fig_width=syn_cfg.get("plot_width", 14),
+                    track_height=syn_cfg.get("plot_height_per_track", 0.35),
+                )
+            else:
+                gv = GenomeViz(
+                    fig_width=syn_cfg.get("plot_width", 14),
+                    fig_track_height=syn_cfg.get("plot_height_per_track", 0.35),
+                )
+        except TypeError:
+            # Fallback if neither kwarg is accepted
+            gv = GenomeViz()
         
         uid_to_feat = {}
         
@@ -460,33 +476,63 @@ def run_synteny(cfg, synteny_dir, tree_dir, scan_df, search_df, hmm_keep, force=
                 color = "tomato" if f["is_focal"] else "skyblue"
                 s_val = 1 if str(f["strand"]) in ["1", "+"] else -1
                 
-                # Use label as display, but store UID for linking
-                feature_obj = track.add_feature(
-                    start=f["start"] - min_start,
-                    end=f["end"] - min_start,
-                    strand=s_val,
-                    label=f["label"],
-                    facecolor=color,
-                    plotstyle="arrow"
-                )
+                # v1.0+ uses 'fc' instead of 'facecolor', and 'arrow' is default plotstyle
+                try:
+                    if _pgv_v1:
+                        feature_obj = track.add_feature(
+                            start=f["start"] - min_start,
+                            end=f["end"] - min_start,
+                            strand=s_val,
+                            label=f["label"],
+                            fc=color,
+                        )
+                    else:
+                        feature_obj = track.add_feature(
+                            start=f["start"] - min_start,
+                            end=f["end"] - min_start,
+                            strand=s_val,
+                            label=f["label"],
+                            facecolor=color,
+                            plotstyle="arrow",
+                        )
+                except TypeError:
+                    # Final fallback with minimal args
+                    feature_obj = track.add_feature(
+                        start=f["start"] - min_start,
+                        end=f["end"] - min_start,
+                        strand=s_val,
+                        label=f["label"],
+                    )
                 if "uid" in f:
                     uid_to_feat[f["uid"]] = feature_obj
         
-        # Now add links
+        # Add links (v1.0+ uses gv.add_link(feat1, feat2, ...) directly)
         count_links = 0
         for q, s, ident in links:
             if q in uid_to_feat and s in uid_to_feat:
-                # color by identity?
-                # simple grey for now
-                if q != s: # self links already filtered but check again
-                    link = Link(uid_to_feat[q], uid_to_feat[s], normal_color="grey")
-                    gv.add_link(link)
+                if q != s:  # self links already filtered but check again
+                    try:
+                        if _pgv_v1:
+                            gv.add_link(uid_to_feat[q], uid_to_feat[s], color="grey")
+                        else:
+                            # Legacy v0.x API uses Link object
+                            try:
+                                from pygenomeviz import Link
+                                link = Link(uid_to_feat[q], uid_to_feat[s], normal_color="grey")
+                                gv.add_link(link)
+                            except ImportError:
+                                gv.add_link(uid_to_feat[q], uid_to_feat[s], color="grey")
+                    except Exception:
+                        pass  # Skip individual links that fail
                     count_links += 1
 
         print(f"    Plotting {len(neighborhoods)} tracks with {count_links} links...")
         try:
+            fig = gv.plotfig() if _pgv_v1 else None
             gv.savefig(pdf_out)
+            print(f"    Saved: {pdf_out}")
         except Exception as e:
-            print(f"    Plotting failed: {e}")
+            import sys
+            print(f"    Plotting failed for {hmm}: {e}", file=sys.stderr)
 
     return

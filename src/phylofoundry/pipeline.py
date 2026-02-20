@@ -169,6 +169,16 @@ def run_pipeline(cfg):
     if stop_after == "extract":
         return
 
+    # ── Taxonomy map (used by embed + post) ──────────────────────────────
+    tax_map = {}
+    if cfg["inputs"].get("gtdb_dir") or cfg["inputs"].get("taxonomy_file"):
+        tax_map = post._load_taxonomy(
+            cfg["inputs"].get("gtdb_dir"),
+            cfg["inputs"].get("taxonomy_file"),
+        )
+        if tax_map:
+            print(f"[pipeline] Loaded taxonomy for {len(tax_map)} genomes.")
+
     # ── STEP: embed ────────────────────────────────────────────────────────
     if step_in_range("embed", start_at, stop_after) and emb_cfg.get("enabled", False):
         clades = None
@@ -177,7 +187,8 @@ def run_pipeline(cfg):
                 clades = post.load_clades_tsv(post_cfg["clades_tsv"])
             except Exception:
                 clades = None
-        embed.run_embed(cfg, hmm_to_seqs, clades, emb_dir, fasta_dir, hmm_keep, force)
+        embed.run_embed(cfg, hmm_to_seqs, clades, emb_dir, fasta_dir, hmm_keep,
+                        force, summary_dir=summary_dir, tax_map=tax_map)
     if stop_after == "embed":
         return
 
