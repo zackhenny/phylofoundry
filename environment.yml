@@ -13,7 +13,8 @@ dependencies:
   - hmmer
   - mafft
   - clipkit
-  - iqtree  # Installs iqtree v2.x.
+  - iqtree 
+  - pal2nal
   - pygenomeviz
   - biopython
   - matplotlib
