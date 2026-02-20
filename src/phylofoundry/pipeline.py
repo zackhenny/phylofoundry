@@ -3,7 +3,7 @@ import glob
 from .constants import STEPS
 from .utils.helpers import safe_mkdir, write_json
 from .utils.bio import read_fasta
-from .tasks import prep, hmmer, extract, embed, phylo, post, synteny, codon, hyphy
+from .tasks import prep, hmmer, extract, embed, phylo, post, synteny, codon, hyphy, asr
 
 
 def step_in_range(step, start_at, stop_after):
@@ -28,9 +28,7 @@ def load_manifest(hmm_manifest_fp):
 
 
 def _load_proteomes_lazy(genomes, faa_dir):
-    """Generator-style loader: loads one genome at a time into a shared dict.
-    This avoids loading ALL proteomes at once for very large datasets.
-    However, for extract/embed we do need all in memory. So we return a dict."""
+    """Load all proteomes into a dict keyed by genome filename."""
     proteome_seqs = {}
     for g in genomes:
         proteome_seqs[g] = read_fasta(os.path.join(faa_dir, g))
@@ -53,6 +51,8 @@ def run_pipeline(cfg):
     synteny_cfg = cfg["synteny"]
     codon_cfg = cfg["codon"]
     hyphy_cfg = cfg["hyphy"]
+    motif_cfg = cfg.get("motifs", {})
+    discover_cfg = cfg.get("discover", {})
 
     safe_mkdir(outdir)
 
@@ -157,7 +157,6 @@ def run_pipeline(cfg):
         search_df = pd.read_csv(hits_search_tsv, sep="\t") if os.path.exists(hits_search_tsv) else pd.DataFrame()
 
     # ── STEP: extract ──────────────────────────────────────────────────────
-    # Only load proteomes into memory when actually needed
     hmm_to_seqs = {}
     if step_in_range("extract", start_at, stop_after):
         _ensure_hit_dfs()
@@ -196,6 +195,33 @@ def run_pipeline(cfg):
     if step_in_range("phylo", start_at, stop_after):
         phylo.run_phylo(cfg, hmm_to_seqs, fasta_dir, aln_dir, clipkit_dir,
                         tree_dir, name_to_hmm_path, hmm_keep, force)
+
+        # ── ASR parsing (after phylo, if ASR was enabled) ─────────────────
+        if not phy_cfg.get("no_asr", False):
+            all_ancestral = asr.run_asr_parse(cfg, tree_dir, fasta_dir,
+                                               hmm_keep, force)
+
+            # Combined embedding with ancestors if available
+            if all_ancestral and emb_cfg.get("enabled", False):
+                # Merge all ancestral seqs across HMMs
+                merged_ancestral = {}
+                for hmm_name, anc_seqs in all_ancestral.items():
+                    for node_id, seq in anc_seqs.items():
+                        merged_ancestral[f"{hmm_name}_{node_id}"] = seq
+
+                if merged_ancestral:
+                    clades = None
+                    if post_cfg.get("clades_tsv", None):
+                        try:
+                            clades = post.load_clades_tsv(post_cfg["clades_tsv"])
+                        except Exception:
+                            clades = None
+                    embed.embed_combined_with_ancestors(
+                        cfg, hmm_to_seqs, merged_ancestral, clades,
+                        emb_dir, fasta_dir, hmm_keep,
+                        force=force, summary_dir=summary_dir, tax_map=tax_map
+                    )
+
     if stop_after == "phylo":
         return
 
@@ -208,9 +234,9 @@ def run_pipeline(cfg):
     # ── STEP: synteny ──────────────────────────────────────────────────────
     synteny_dir = os.path.join(outdir, "synteny")
     safe_mkdir(synteny_dir)
-    
+
     if step_in_range("synteny", start_at, stop_after) and synteny_cfg.get("enabled", False):
-        _ensure_hit_dfs()  # Need filtered hits to know which proteins to map
+        _ensure_hit_dfs()
         synteny.run_synteny(cfg, synteny_dir, tree_dir, scan_df, search_df, hmm_keep, force)
     if stop_after == "synteny":
         return
@@ -224,5 +250,19 @@ def run_pipeline(cfg):
     # ── STEP: hyphy ────────────────────────────────────────────────────────
     if step_in_range("hyphy", start_at, stop_after) and hyphy_cfg.get("enabled", False):
         hyphy.run_hyphy(cfg, codon_dir, tree_dir, hyphy_dir, hmm_keep, force)
+    if stop_after == "hyphy":
+        return
+
+    # ── STEP: score_motifs ─────────────────────────────────────────────────
+    if step_in_range("score_motifs", start_at, stop_after) and motif_cfg.get("enabled", False):
+        from .tasks import motifs
+        motifs.score_motifs(cfg, fasta_dir, summary_dir, hmm_keep, force)
+    if stop_after == "score_motifs":
+        return
+
+    # ── STEP: discover_motifs ──────────────────────────────────────────────
+    if step_in_range("discover_motifs", start_at, stop_after) and discover_cfg.get("enabled", False):
+        from .tasks import discover
+        discover.discover_motifs(cfg, fasta_dir, summary_dir, hmm_keep, force)
 
     print("\nPipeline complete.")

@@ -9,7 +9,8 @@ AA_ALPHABET = set(list("ACDEFGHIKLMNPQRSTVWY"))
 GAP_CHARS = set(["-", ".", "X", "x", "?", "*"])
 
 # Workflow
-STEPS = ["prep", "hmmer", "extract", "embed", "phylo", "post", "synteny", "codon", "hyphy"]
+STEPS = ["prep", "hmmer", "extract", "embed", "phylo", "post",
+         "synteny", "codon", "hyphy", "score_motifs", "discover_motifs"]
 
 # Defaults
 DEFAULT_CONFIG = {
@@ -118,5 +119,18 @@ DEFAULT_CONFIG = {
         "run_hyphy": False,
         "hyphy_bin": "hyphy",
         "hyphy_tests": "RELAX,aBSREL,MEME"
-    }
+    },
+    "motifs": {
+        "enabled": False,
+        "motif_list": [],           # e.g. ["HPEVY", "HPEVF"]
+        "attention_layers": 4,      # last N ESM-2 layers to average
+    },
+    "discover": {
+        "enabled": False,
+        "standard_clade": None,     # HDBSCAN cluster ID for reference clade
+        "novel_clade": None,        # HDBSCAN cluster ID for novel clade
+        "kmer_size": 5,
+        "top_n_peaks": 20,
+        "attention_layers": 4,
+    },
 }

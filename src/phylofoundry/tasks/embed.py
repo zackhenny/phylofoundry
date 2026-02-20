@@ -394,3 +394,201 @@ def run_embed(cfg, hmm_to_seqs, clades, emb_dir, fasta_dir, hmm_keep,
         out_fp = os.path.join(summary_dir, "clade_assignment.tsv")
         pd.DataFrame(all_cluster_assignments).to_csv(out_fp, sep="\t", index=False)
         print(f"[embed] Wrote cluster assignments: {out_fp}  ({len(all_cluster_assignments)} proteins)")
+
+
+def embed_combined_with_ancestors(cfg, hmm_to_seqs, ancestral_seqs, clades,
+                                   emb_dir, fasta_dir, hmm_keep,
+                                   force=False, summary_dir=None, tax_map=None):
+    """Embed modern + ancestral sequences in a single UMAP/HDBSCAN space.
+
+    Parameters
+    ----------
+    ancestral_seqs : dict
+        {node_id: amino_acid_sequence} from ASR parsing
+    """
+    print("\n[embed] Computing COMBINED embeddings (modern + ancestral)...")
+
+    emb_cfg = cfg.get("embeddings", {})
+
+    if "model_dir" not in emb_cfg or emb_cfg["model_dir"] is None:
+        outdir = cfg.get("output", {}).get("outdir", None)
+        if outdir:
+            emb_cfg = dict(emb_cfg)
+            emb_cfg["model_dir"] = os.path.join(outdir, "models")
+
+    # Combine modern sequences from all HMMs
+    combined_seqs = {}
+    for hmm, seqs in hmm_to_seqs.items():
+        if hmm_keep is not None and hmm not in hmm_keep:
+            continue
+        for tip, s in seqs.items():
+            if tip not in combined_seqs:
+                combined_seqs[tip] = s
+
+    # Also load from disk if hmm_to_seqs is empty
+    if not combined_seqs:
+        for fp in glob.glob(os.path.join(fasta_dir, "*.faa")):
+            hmm = os.path.basename(fp).rsplit(".", 1)[0]
+            if hmm == "combined_all_hits":
+                continue
+            if hmm_keep is not None and hmm not in hmm_keep:
+                continue
+            seqs = read_fasta(fp)
+            combined_seqs.update(seqs)
+
+    # Add ancestral sequences with ANC| prefix
+    for node_id, seq in ancestral_seqs.items():
+        combined_seqs[f"ANC|{node_id}"] = seq
+
+    if len(combined_seqs) < 3:
+        import sys
+        print("[embed] Combined + ancestral has <3 sequences. Skipping.", file=sys.stderr)
+        return
+
+    # Clean sequences
+    combined_seqs = {
+        k: v.replace(" ", "").replace("\n", "").replace("*", "").replace(".", "")
+        for k, v in combined_seqs.items()
+    }
+
+    # Run embedding
+    backend = emb_cfg.get("backend", "esm")
+    device = emb_cfg.get("device", "cuda")
+    model_name = emb_cfg.get("model", "esm2_t33_650M_UR50D")
+    batch_size = emb_cfg.get("batch_size", 8)
+    repr_layer = emb_cfg.get("repr_layer", None)
+    model_dir = emb_cfg.get("model_dir", None)
+
+    safe_mkdir(emb_dir)
+    prefix = "combined_with_ancestors"
+    out_npy = os.path.join(emb_dir, f"{prefix}.embeddings.npy")
+    out_umap_png = os.path.join(emb_dir, f"{prefix}.umap.png")
+    out_umap_clust_png = os.path.join(emb_dir, f"{prefix}.umap.clustered.png")
+
+    if os.path.exists(out_npy) and not force:
+        print(f"[embed] Combined embeddings already exist: {out_npy}")
+        return
+
+    print(f"[embed] Embedding {len(combined_seqs)} sequences "
+          f"({sum(1 for k in combined_seqs if k.startswith('ANC|'))} ancestral, "
+          f"{sum(1 for k in combined_seqs if not k.startswith('ANC|'))} modern)...")
+
+    if backend == "esm":
+        ids, X = _embed_esm(combined_seqs, model_name, device, batch_size,
+                            repr_layer, model_dir=model_dir)
+    else:
+        ids, X = _embed_transformers(combined_seqs, model_name, device,
+                                      batch_size, model_dir=model_dir)
+
+    np.save(out_npy, X)
+
+    # UMAP
+    U = None
+    try:
+        import umap
+        reducer = umap.UMAP(n_components=2, random_state=42, n_neighbors=15)
+        U = reducer.fit_transform(X)
+
+        # Save UMAP with ancestor/modern distinction
+        _save_combined_umap(U, ids, out_umap_png, title="Combined Modern + Ancestral")
+
+    except ImportError:
+        import sys
+        print("[embed] umap-learn not installed — skipping UMAP.", file=sys.stderr)
+    except Exception as e:
+        import sys
+        print(f"[embed] UMAP failed for combined: {e}", file=sys.stderr)
+
+    # HDBSCAN
+    cluster_assignments = []
+    if emb_cfg.get("cluster_embeddings", True):
+        min_cs = int(emb_cfg.get("hdbscan_min_cluster_size", 5))
+        labels = _run_hdbscan(X, min_cluster_size=min_cs)
+        if labels is not None:
+            for i, (tip, label) in enumerate(zip(ids, labels)):
+                genome = tip.split("|", 1)[0] if "|" in tip else ""
+                is_ancestral = tip.startswith("ANC|")
+                tax = ""
+                if tax_map and genome in tax_map:
+                    tax = tax_map[genome]
+                cluster_assignments.append({
+                    "hmm": "combined",
+                    "protein": tip,
+                    "genome": genome,
+                    "cluster_id": label,
+                    "type": "ancestral" if is_ancestral else "modern",
+                    "taxonomy": tax,
+                })
+
+            if U is not None:
+                _save_combined_umap(U, ids, out_umap_clust_png,
+                                    cluster_labels=labels,
+                                    title="Combined UMAP (HDBSCAN clusters)")
+
+    # Write combined assignments
+    if cluster_assignments and summary_dir:
+        safe_mkdir(summary_dir)
+        out_fp = os.path.join(summary_dir, "clade_assignment.tsv")
+        df = pd.DataFrame(cluster_assignments)
+        # Append to existing if present
+        if os.path.exists(out_fp):
+            existing = pd.read_csv(out_fp, sep="\t")
+            df = pd.concat([existing, df], ignore_index=True)
+        df.to_csv(out_fp, sep="\t", index=False)
+        print(f"[embed] Updated clade_assignment.tsv with combined embeddings "
+              f"({len(cluster_assignments)} entries)")
+
+
+def _save_combined_umap(U, ids, out_png, cluster_labels=None, title=""):
+    """Save UMAP scatter with distinct markers for modern (circles) vs ancestral (triangles)."""
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+
+        fig, ax = plt.subplots(figsize=(10, 8))
+
+        is_anc = [i.startswith("ANC|") for i in ids]
+        mod_idx = [j for j, a in enumerate(is_anc) if not a]
+        anc_idx = [j for j, a in enumerate(is_anc) if a]
+
+        if cluster_labels is not None:
+            unique_labels = sorted(set(cluster_labels))
+            cmap = plt.cm.get_cmap("tab20", max(len(unique_labels), 1))
+            for label in unique_labels:
+                color = "lightgrey" if label == -1 else cmap(unique_labels.index(label) % 20)
+                lbl = "Noise" if label == -1 else f"Cluster {label}"
+                # Modern: circles
+                mask_mod = [j for j in mod_idx if cluster_labels[j] == label]
+                if mask_mod:
+                    ax.scatter(U[mask_mod, 0], U[mask_mod, 1], c=[color],
+                              s=20, alpha=0.7, marker="o", edgecolors="none", label=lbl)
+                # Ancestral: triangles
+                mask_anc = [j for j in anc_idx if cluster_labels[j] == label]
+                if mask_anc:
+                    ax.scatter(U[mask_anc, 0], U[mask_anc, 1], c=[color],
+                              s=40, alpha=0.9, marker="^", edgecolors="black",
+                              linewidths=0.5,
+                              label=f"{lbl} (ancestral)" if not mask_mod else "")
+        else:
+            if mod_idx:
+                ax.scatter(U[mod_idx, 0], U[mod_idx, 1], c="steelblue",
+                          s=20, alpha=0.7, marker="o", edgecolors="none", label="Modern")
+            if anc_idx:
+                ax.scatter(U[anc_idx, 0], U[anc_idx, 1], c="firebrick",
+                          s=40, alpha=0.9, marker="^", edgecolors="black",
+                          linewidths=0.5, label="Ancestral")
+
+        ax.set_xlabel("UMAP 1")
+        ax.set_ylabel("UMAP 2")
+        ax.set_title(title)
+        ax.legend(fontsize=7, loc="best", framealpha=0.7, markerscale=1.5)
+        fig.tight_layout()
+        fig.savefig(out_png, dpi=200)
+        plt.close(fig)
+        print(f"[embed] Saved combined UMAP plot: {out_png}")
+    except ImportError:
+        pass
+    except Exception as e:
+        import sys
+        print(f"[embed] Combined UMAP plot failed: {e}", file=sys.stderr)

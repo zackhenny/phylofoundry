@@ -83,5 +83,18 @@
         "run_hyphy": false,
         "hyphy_bin": "hyphy",
         "hyphy_tests": "RELAX,aBSREL,MEME"
+    },
+    "motifs": {
+        "enabled": false,
+        "motif_list": [],
+        "attention_layers": 4
+    },
+    "discover": {
+        "enabled": false,
+        "standard_clade": null,
+        "novel_clade": null,
+        "kmer_size": 5,
+        "top_n_peaks": 20,
+        "attention_layers": 4
     }
 }

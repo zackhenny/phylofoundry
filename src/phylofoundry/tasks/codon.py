@@ -1,9 +1,49 @@
 import os
 import sys
 import glob
+import re
 from collections import defaultdict
 from ..utils.bio import read_fasta, write_fasta
 from ..utils.helpers import run_cmd, find_cds_fasta_for_genome, normalize_genome_id
+
+# ---------------------------------------------------------------------------
+# Stop-codon handling utilities
+# ---------------------------------------------------------------------------
+
+STOP_CODONS = {"TAA", "TAG", "TGA", "taa", "tag", "tga"}
+
+
+def _strip_stop_from_protein(seq: str) -> str:
+    """Remove trailing '*' (stop) from a protein sequence, including gap-padded."""
+    seq = seq.rstrip("-").rstrip("*").rstrip("-")
+    # Also remove any internal '*' that might exist (e.g. mid-sequence stops)
+    return seq.replace("*", "")
+
+
+def _trim_stop_codon_from_cds(seq: str) -> str:
+    """Remove terminal stop codon (3 nt) from a CDS nucleotide sequence."""
+    seq = seq.rstrip()
+    if len(seq) >= 3 and seq[-3:].upper() in {"TAA", "TAG", "TGA"}:
+        return seq[:-3]
+    return seq
+
+
+def _clean_cds_for_pal2nal(cds_seq: str) -> str:
+    """Clean CDS sequence: remove terminal stop codon, strip whitespace."""
+    return _trim_stop_codon_from_cds(cds_seq.replace("\n", "").replace(" ", ""))
+
+
+def _clean_aa_alignment(aln_seqs: dict) -> dict:
+    """Strip stop codons from all sequences in an AA alignment dict."""
+    cleaned = {}
+    for k, v in aln_seqs.items():
+        cleaned[k] = _strip_stop_from_protein(v)
+    return cleaned
+
+
+# ---------------------------------------------------------------------------
+# ID mapping
+# ---------------------------------------------------------------------------
 
 def map_aa_id_to_cds_id(aa_id, mode="after_last_pipe"):
     if mode == "same":
@@ -12,19 +52,36 @@ def map_aa_id_to_cds_id(aa_id, mode="after_last_pipe"):
         return aa_id.split("|", 1)[-1]
     return aa_id.split("|")[-1]
 
-def build_codon_alignment_pal2nal(aa_aln_fp, cds_subset_fp, out_codon_fp, pal2nal_cmd="pal2nal.pl", codon_format="fasta"):
-    cmd = f"{pal2nal_cmd} {aa_aln_fp} {cds_subset_fp} -output {codon_format} > {out_codon_fp}"
+
+# ---------------------------------------------------------------------------
+# pal2nal wrapper
+# ---------------------------------------------------------------------------
+
+def build_codon_alignment_pal2nal(aa_aln_fp, cds_subset_fp, out_codon_fp,
+                                   pal2nal_cmd="pal2nal.pl",
+                                   codon_format="fasta"):
+    """Run pal2nal with -nogap -nomismatch to tolerate minor differences."""
+    cmd = (f"{pal2nal_cmd} {aa_aln_fp} {cds_subset_fp} "
+           f"-output {codon_format} -nogap -nomismatch > {out_codon_fp}")
     run_cmd(cmd, quiet=True, shell=True)
+
+
+# ---------------------------------------------------------------------------
+# Main entry point
+# ---------------------------------------------------------------------------
 
 def run_codon(cfg, tree_dir, clipkit_dir, aln_dir, codon_dir, hmm_keep, force=False):
     print("\n[codon] Building per-HMM codon alignments (PAL2NAL)...")
-    
+
     codon_cfg = cfg.get("codon", {})
     cds_dir = cfg["inputs"].get("cds_dir", None)
     if not cds_dir:
         raise SystemExit("codon.build_codon_alignments requires inputs.cds_dir")
 
-    hmm_names = sorted([os.path.basename(x).split(".")[0] for x in glob.glob(os.path.join(tree_dir, "*.treefile"))])
+    hmm_names = sorted([
+        os.path.basename(x).split(".")[0]
+        for x in glob.glob(os.path.join(tree_dir, "*.treefile"))
+    ])
     if hmm_keep is not None:
         hmm_names = [h for h in hmm_names if h in hmm_keep]
 
@@ -44,7 +101,15 @@ def run_codon(cfg, tree_dir, clipkit_dir, aln_dir, codon_dir, hmm_keep, force=Fa
         if os.path.exists(codon_aln_fp) and not force:
             continue
 
-        aln_seqs = read_fasta(aa_aln_fp)
+        # ── Read and clean AA alignment (strip stop codons) ──────────────
+        aln_seqs_raw = read_fasta(aa_aln_fp)
+        aln_seqs = _clean_aa_alignment(aln_seqs_raw)
+
+        # Write cleaned AA alignment to temp file for pal2nal
+        cleaned_aa_fp = os.path.join(codon_dir, f"{hmm}.cleaned_aa.faa")
+        write_fasta(cleaned_aa_fp, aln_seqs)
+
+        # ── Find matching CDS for each tip ───────────────────────────────
         cds_subset = {}
         tips_by_genome = defaultdict(list)
         for tip in aln_seqs.keys():
@@ -62,16 +127,17 @@ def run_codon(cfg, tree_dir, clipkit_dir, aln_dir, codon_dir, hmm_keep, force=Fa
             cds_all = read_fasta(cds_fp)
 
             for tip in tips:
-                cds_id = map_aa_id_to_cds_id(tip, mode=codon_cfg.get("cds_id_mode", "after_last_pipe"))
+                cds_id = map_aa_id_to_cds_id(
+                    tip, mode=codon_cfg.get("cds_id_mode", "after_last_pipe")
+                )
                 # Build candidate list for fuzzy matching
                 candidates = [
-                    cds_id,                                # exact protein ID
-                    cds_id.split("|")[-1],                 # last pipe segment
-                    cds_id.replace("|", "_"),               # pipes to underscores
-                    tip,                                    # full tip label
-                    tip.split("|", 1)[-1] if "|" in tip else tip, # everything after first pipe
+                    cds_id,
+                    cds_id.split("|")[-1],
+                    cds_id.replace("|", "_"),
+                    tip,
+                    tip.split("|", 1)[-1] if "|" in tip else tip,
                 ]
-                # Also try with/without common suffixes
                 for sfx in ["_cds", "_CDS", ".cds", ".p01", "_1"]:
                     candidates.append(cds_id + sfx)
                     if cds_id.endswith(sfx):
@@ -83,7 +149,7 @@ def run_codon(cfg, tree_dir, clipkit_dir, aln_dir, codon_dir, hmm_keep, force=Fa
                         found = c
                         break
 
-                # Last-resort: substring match (protein ID anywhere in CDS header)
+                # Last-resort: substring match
                 if found is None:
                     for cds_header in cds_all:
                         if cds_id in cds_header or cds_header in cds_id:
@@ -91,9 +157,11 @@ def run_codon(cfg, tree_dir, clipkit_dir, aln_dir, codon_dir, hmm_keep, force=Fa
                             break
 
                 if found:
-                    # Key in CDS subset must match the AA alignment header exactly
-                    # so pal2nal can pair them by name
-                    cds_subset[tip] = cds_all[found]
+                    # Clean CDS: strip terminal stop codon so pal2nal
+                    # can verify CDS translates to the (stop-stripped) protein
+                    cleaned_cds = _clean_cds_for_pal2nal(cds_all[found])
+                    # Key must match the AA alignment header exactly
+                    cds_subset[tip] = cleaned_cds
                 else:
                     missing_cds_ids.append((genome, tip, cds_id))
 
@@ -107,28 +175,37 @@ def run_codon(cfg, tree_dir, clipkit_dir, aln_dir, codon_dir, hmm_keep, force=Fa
                   file=sys.stderr)
 
         if len(cds_subset) < 3:
-            print(f"[codon] Skipping {hmm}: only {len(cds_subset)} CDS sequences matched (need ≥3).", file=sys.stderr)
+            print(f"[codon] Skipping {hmm}: only {len(cds_subset)} CDS sequences matched (need ≥3).",
+                  file=sys.stderr)
             continue
 
         cds_subset_fp = os.path.join(codon_dir, f"{hmm}.cds.fna")
         write_fasta(cds_subset_fp, cds_subset)
 
+        # ── Run pal2nal ──────────────────────────────────────────────────
         try:
             build_codon_alignment_pal2nal(
-                aa_aln_fp, cds_subset_fp, codon_aln_fp,
+                cleaned_aa_fp, cds_subset_fp, codon_aln_fp,
                 pal2nal_cmd=codon_cfg.get("pal2nal_cmd", "pal2nal.pl")
             )
             # Validate output is non-empty
             if os.path.exists(codon_aln_fp):
                 if os.path.getsize(codon_aln_fp) == 0:
                     print(f"[codon] Warning: pal2nal produced empty output for {hmm}. "
-                          f"Check AA alignment and CDS name correspondence.", file=sys.stderr)
+                          f"Check AA alignment and CDS name correspondence.",
+                          file=sys.stderr)
                     os.remove(codon_aln_fp)
                 else:
                     print(f"[codon] Built codon alignment for {hmm} ({len(cds_subset)} seqs)")
         except Exception as e:
             print(f"[codon] pal2nal FAILED for {hmm}: {e}", file=sys.stderr)
-            # Clean up partial output
             if os.path.exists(codon_aln_fp):
                 os.remove(codon_aln_fp)
             continue
+        finally:
+            # Clean up temp cleaned AA file
+            if os.path.exists(cleaned_aa_fp):
+                try:
+                    os.remove(cleaned_aa_fp)
+                except OSError:
+                    pass

@@ -30,12 +30,14 @@ all = [
   "biopython",
   "pygenomeviz",
   "matplotlib",
+  "scipy",
 ]
 # Just the embedding stack
 embed = [
   "scikit-learn>=1.3",
   "umap-learn",
   "matplotlib",
+  "scipy",
   "torch",
   "transformers",
   "fair-esm",

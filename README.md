@@ -9,6 +9,10 @@
 -   **Competitive HMM Hits**: Uses both `hmmscan` and `hmmsearch` to identify the best functional assignments for proteins, resolving overlapping hits competitively by bitscore.
 -   **Automated Phylogeny**: Per-HMM alignment (MAFFT/HMMER), trimming (ClipKit), and tree inference (IQ-TREE).
 -   **Protein Embeddings** (Optional): Generates per-HMM embeddings (ESM) and dimensionality reduction (PCA/UMAP), with HDBSCAN clustering and UMAP scatter plots.
+-   **Ancestral Sequence Reconstruction**: Parses IQ-TREE `.state` files to reconstruct ancestral protein sequences, embeds them alongside modern sequences, and visualizes evolutionary trajectories in UMAP space.
+-   **Combined Tree Mode**: `--combined` flag to build a single tree from all HMM hits, with combined embeddings and clustering.
+-   **Motif Scoring** (Optional): Uses ESM-2 attention weights to score structurally important motifs (e.g., `--motifs HPEVY,HPEVF`).
+-   **Motif Discovery** (Optional): Compares attention profiles between HDBSCAN clades to discover novel structural hubs (`--standard-clade 0 --novel-clade 1`).
 -   **Synteny Analysis** (Optional): Extracts gene neighborhoods (configurable window), computes similarity (DIAMOND/MMseqs2), and plots synteny tracks ordered by phylogeny.
 -   **HDBSCAN Clustering** (Optional): Clusters protein embeddings and outputs `clade_assignment.tsv` with taxonomy.
 -   **GTDB Taxonomy Integration**: Merges GTDB-Tk taxonomy into summary tables and cluster assignments.
@@ -236,12 +240,23 @@ The pipeline runs as a series of sequential **Steps**. You can control execution
 ### Step 7: `codon` (Optional)
 -   **Action**: 
     -   Matches protein sequences to their CDS (nucleotide) sequences.
-    -   Uses `pal2nal.pl` to generate codon alignments from the protein alignments.
+    -   **Strips terminal stop codons** (`*` from AA, TAA/TAG/TGA from CDS) before running `pal2nal.pl`.
+    -   Uses `pal2nal.pl` with `-nogap -nomismatch` flags for robust codon alignment.
 -   **Output**: `codon_alignments/<hmm_name>.codon.fasta`.
 
 ### Step 8: `hyphy` (Optional)
 -   **Action**: Runs selection tests (e.g., RELAX, aBSREL, MEME) on the codon alignments and trees.
 -   **Output**: `summary/hyphy/<hmm_name>.<test>.json`.
+
+### Step 9: `score_motifs` (Optional)
+-   **Action**: Passes sequences through ESM-2 with `output_attentions=True`, extracts attention weights at user-specified motif positions.
+-   **CLI**: `--motifs HPEVY,HPEVF`
+-   **Output**: `summary/motif_attention_scores.tsv` — columns: `seq_id`, `motif`, `start_pos`, `end_pos`, `attention_score`, `clade_id`, `type`.
+
+### Step 10: `discover_motifs` (Optional)
+-   **Action**: Compares 1D attention profiles between two HDBSCAN clades, finds peaks in the attention delta, extracts k-mers as candidate novel structural hubs.
+-   **CLI**: `--standard-clade 0 --novel-clade 1`
+-   **Output**: `summary/discovered_motifs.tsv` — columns: `kmer`, `n_sequences`, `mean_attention_delta`, `source_clade`.
 
 ---
 
