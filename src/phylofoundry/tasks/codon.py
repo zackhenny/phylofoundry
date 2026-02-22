@@ -62,7 +62,7 @@ def build_codon_alignment_pal2nal(aa_aln_fp, cds_subset_fp, out_codon_fp,
                                    codon_format="fasta"):
     """Run pal2nal with -nogap -nomismatch to tolerate minor differences."""
     cmd = (f"{pal2nal_cmd} {aa_aln_fp} {cds_subset_fp} "
-           f"-output {codon_format} -nogap -nomismatch > {out_codon_fp}")
+           f"-output {codon_format} > {out_codon_fp}")
     run_cmd(cmd, quiet=True, shell=True)
 
 
@@ -179,8 +179,14 @@ def run_codon(cfg, tree_dir, clipkit_dir, aln_dir, codon_dir, hmm_keep, force=Fa
                   file=sys.stderr)
             continue
 
+        # Reorder cds_subset to EXACTLY match aln_seqs order, required by pal2nal
+        ordered_cds_subset = {}
+        for tip in aln_seqs.keys():
+            if tip in cds_subset:
+                ordered_cds_subset[tip] = cds_subset[tip]
+
         cds_subset_fp = os.path.join(codon_dir, f"{hmm}.cds.fna")
-        write_fasta(cds_subset_fp, cds_subset)
+        write_fasta(cds_subset_fp, ordered_cds_subset)
 
         # ── Run pal2nal ──────────────────────────────────────────────────
         try:

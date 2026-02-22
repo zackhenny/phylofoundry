@@ -34,7 +34,7 @@ def msa_from_fasta_dict(aln_seqs: dict):
 
 def consurf_like_scores(aln_seqs: dict, metric="inverse_shannon_uncertainty"):
     msa = msa_from_fasta_dict(aln_seqs)
-    scores = msa.conservation(metric=metric, gap_mode="exclude")
+    scores = msa.conservation(metric=metric, gap_mode="ignore")
     return list(scores)
 
 
