@@ -168,22 +168,8 @@ def load_gff_neighborhood(gff_path, protein_id, window_genes, protein_id_fields,
         })
     return neighborhood
 
-def make_diamond_db(input_faa, db_prefix, diamond_bin="diamond"):
-    cmd = [diamond_bin, "makedb", "--in", input_faa, "--db", db_prefix, "--quiet"]
-    run_cmd(cmd, quiet=True)
+# Removed custom diamond functions - using pygenomeviz builtin
 
-def run_diamond_blastp(query_faa, db_prefix, out_tsv, diamond_bin="diamond", threads=1):
-    # outfmt 6: qseqid sseqid pident length mismatch gapopen qstart qend sstart send evalue bitscore
-    cmd = [
-        diamond_bin, "blastp",
-        "--query", query_faa,
-        "--db", db_prefix,
-        "--out", out_tsv,
-        "--outfmt", "6", "qseqid", "sseqid", "pident", "bitscore", "evalue",
-        "--threads", str(threads),
-        "--quiet"
-    ]
-    run_cmd(cmd, quiet=True)
 
 def run_synteny(cfg, synteny_dir, tree_dir, scan_df, search_df, hmm_keep, force=False):
     print("\n[synteny] Extracting neighborhoods and plotting synteny...")
@@ -317,88 +303,7 @@ def run_synteny(cfg, synteny_dir, tree_dir, scan_df, search_df, hmm_keep, force=
         if not neighborhoods:
             print(f"    No neighborhoods extracted for {hmm}.")
             continue
-
-        # Write neighborhood proteins
-        fastas_dir = os.path.join(hmm_out_dir, "fastas")
-        safe_mkdir(fastas_dir)
-        
-        # Write individual FASTAs
-        for genome, feats in neighborhoods:
-            g_seqs = {}
-            for f in feats:
-                if "uid" in f and f.get("translation"):
-                    g_seqs[f["uid"]] = f["translation"]
-            
-            if g_seqs:
-                # Sanitize filename
-                safe_g = normalize_genome_id(genome)
-                write_fasta(os.path.join(fastas_dir, f"{safe_g}.faa"), g_seqs)
-
-        # Write combined FASTA for DIAMOND
-        prot_faa = os.path.join(hmm_out_dir, "neighborhood_proteins.faa")
-        write_fasta(prot_faa, all_prots)
-
-        # compute similarity
-        sim_cfg = syn_cfg.get("similarity", {})
-        sim_tsv = os.path.join(hmm_out_dir, "gene_similarity.tsv")
-        
-        if all_prots and (not os.path.exists(sim_tsv) or force):
-            method = sim_cfg.get("method", "diamond")
-            
-            if method == "mmseqs":
-                mmseqs_bin = sim_cfg.get("mmseqs_bin", "mmseqs")
-                db_prefix = os.path.join(hmm_out_dir, "mmseqs_db")
-                tmp_dir = os.path.join(hmm_out_dir, "tmp")
-                safe_mkdir(tmp_dir)
-                try:
-                    # Createdb
-                    run_cmd([mmseqs_bin, "createdb", prot_faa, db_prefix], quiet=True)
-                    # Search
-                    res_db = os.path.join(hmm_out_dir, "mmseqs_res")
-                    run_cmd([mmseqs_bin, "search", db_prefix, db_prefix, res_db, tmp_dir, "-a", "-e", str(sim_cfg.get("max_evalue", 1e-5))], quiet=True)
-                    # Convert to TSV Format 6: query,target,pident,bitscore,evalue
-                    run_cmd([mmseqs_bin, "convertalis", db_prefix, db_prefix, res_db, sim_tsv, "--format-output", "query,target,pident,bitscore,evalue"], quiet=True)
-                except Exception as e:
-                    import sys
-                    print(f"[synteny] mmseqs similarity failed: {e}", file=sys.stderr)
-                finally:
-                    # Cleanup DB
-                    for f in glob.glob(f"{db_prefix}*") + glob.glob(f"{res_db}*"):
-                        try: os.remove(f)
-                        except: pass
-                    try: shutil.rmtree(tmp_dir)
-                    except: pass
-            else:
-                # Default diamond
-                diamond_bin = sim_cfg.get("diamond_bin", "diamond")
-                db_prefix = os.path.join(hmm_out_dir, "diamond_db")
-                make_diamond_db(prot_faa, db_prefix, diamond_bin)
-                run_diamond_blastp(prot_faa, db_prefix, sim_tsv, diamond_bin, threads=int(cfg["resources"]["cpu"]))
-                
-                # Cleanup DB
-                for f in glob.glob(f"{db_prefix}.*"):
-                    try: os.remove(f)
-                    except: pass
-
-        # Load links
-        links = []
-        if os.path.exists(sim_tsv):
-            try:
-                sdf = pd.read_csv(sim_tsv, sep="\t", names=["q", "s", "pident", "bitscore", "evalue"],
-                                  comment="#", on_bad_lines="skip")
-                # Filter
-                sdf = sdf[sdf["q"] != sdf["s"]]
-                sdf = sdf[sdf["pident"] >= float(sim_cfg.get("min_identity", 30))]
-                sdf = sdf[sdf["bitscore"] >= float(sim_cfg.get("min_bitscore", 50))]
-                
-                # Make simple list of (q, s, pident)
-                for _, row in sdf.iterrows():
-                    links.append((row["q"], row["s"], row["pident"]))
-            except Exception as e:
-                import sys
-                print(f"[synteny] Warning: Failed to parse similarity TSV {sim_tsv}: {e}", file=sys.stderr)
-
-        # Tree ordering
+        # Tree ordering logic remains the same
         ordered_genomes = [n[0] for n in neighborhoods]
         if syn_cfg.get("include_tree", True):
              tree_fp = os.path.join(tree_dir, f"{hmm}.treefile")
@@ -411,11 +316,8 @@ def run_synteny(cfg, synteny_dir, tree_dir, scan_df, search_df, hmm_keep, force=
                      # Get leaf order
                      leaves = [term.name for term in t.get_terminals()]
                      # Map leaves to genomes
-                     # Leaf names might be "Genome|Protein" or just "Genome"
-                     # We need to match to our genome keys
                      leaf_to_genome = {}
                      for leak in leaves:
-                         # simple heuristic: splits
                          g_cand = leak.split("|")[0]
                          leaf_to_genome[leak] = g_cand
                      
@@ -424,11 +326,7 @@ def run_synteny(cfg, synteny_dir, tree_dir, scan_df, search_df, hmm_keep, force=
                      seen = set()
                      for leaf in leaves:
                          g = leaf_to_genome.get(leaf)
-                         # Search if this g is in our neighborhoods
-                         # This is O(N*M), but N is small (50)
                          for i, (ng, nfeats) in enumerate(neighborhoods):
-                             # Fuzzy match or exact?
-                             # normalize_genome_id is useful here usually
                              if ng == g and i not in seen:
                                  ordered_temp.append(neighborhoods[i])
                                  seen.add(i)
@@ -447,8 +345,43 @@ def run_synteny(cfg, synteny_dir, tree_dir, scan_df, search_df, hmm_keep, force=
 
 
         
-        # Build GenomeViz plot (compatible with both v0.x and v1.0+ APIs)
+        # Rebuild pygenomeviz object using native alignment
         try:
+            from pygenomeviz.align import MMseqs, Blast
+            from Bio.SeqRecord import SeqRecord
+            from Bio.Seq import Seq
+            from Bio.SeqFeature import SeqFeature, FeatureLocation
+            
+            pgv_records = []
+            
+            for genome, feats in neighborhoods:
+                if not feats: continue
+                # Calculate extent
+                min_start = min(f["start"] for f in feats)
+                max_end = max(f["end"] for f in feats)
+                size = max_end - min_start + 1
+                
+                # Make parent record
+                rec = SeqRecord(Seq("N" * size), id=genome, name=genome)
+                
+                for f in feats:
+                    color = "tomato" if f["is_focal"] else "skyblue"
+                    strand = 1 if str(f["strand"]) in ["1", "+"] else -1
+                    loc = FeatureLocation(f["start"] - min_start, f["end"] - min_start, strand=strand)
+                    
+                    qualifiers = {
+                        "color": [color],
+                        "locus_tag": [f.get("label", "")],
+                        # Pygenomeviz aligners require the transaction qualifier for protein alignments
+                        "translation": [f.get("translation", "")] if f.get("translation") else []
+                    }
+                    
+                    sf = SeqFeature(loc, type="CDS", id=f.get("uid", ""), qualifiers=qualifiers)
+                    rec.features.append(sf)
+                
+                pgv_records.append(rec)
+            
+            # Re-init GV with fully populated records
             if _pgv_v1:
                 gv = GenomeViz(
                     fig_width=syn_cfg.get("plot_width", 14),
@@ -459,74 +392,48 @@ def run_synteny(cfg, synteny_dir, tree_dir, scan_df, search_df, hmm_keep, force=
                     fig_width=syn_cfg.get("plot_width", 14),
                     fig_track_height=syn_cfg.get("plot_height_per_track", 0.35),
                 )
-        except TypeError:
-            # Fallback if neither kwarg is accepted
-            gv = GenomeViz()
-        
-        uid_to_feat = {}
-        
-        for genome, feats in neighborhoods:
-            if not feats: continue
-            min_start = min(f["start"] for f in feats)
-            max_end = max(f["end"] for f in feats)
-            size = max_end - min_start + 1
-            
-            track = gv.add_feature_track(genome, size)
-            for f in feats:
-                color = "tomato" if f["is_focal"] else "skyblue"
-                s_val = 1 if str(f["strand"]) in ["1", "+"] else -1
                 
-                # v1.0+ uses 'fc' instead of 'facecolor', and 'arrow' is default plotstyle
-                try:
+            for rec in pgv_records:
+                track = gv.add_feature_track(rec.id, len(rec.seq))
+                for feature in rec.features:
+                    color = feature.qualifiers.get("color", ["skyblue"])[0]
                     if _pgv_v1:
-                        feature_obj = track.add_feature(
-                            start=f["start"] - min_start,
-                            end=f["end"] - min_start,
-                            strand=s_val,
-                            label=f["label"],
-                            fc=color,
-                        )
+                        track.add_feature(feature, fc=color)
                     else:
-                        feature_obj = track.add_feature(
-                            start=f["start"] - min_start,
-                            end=f["end"] - min_start,
-                            strand=s_val,
-                            label=f["label"],
-                            facecolor=color,
-                            plotstyle="arrow",
+                        # Fallback for old pgv
+                        track.add_feature(
+                            start=int(feature.location.start), 
+                            end=int(feature.location.end), 
+                            strand=feature.location.strand,
+                            label=feature.qualifiers.get("locus_tag", [""])[0],
+                            facecolor=color, plotstyle="arrow"
                         )
-                except TypeError:
-                    # Final fallback with minimal args
-                    feature_obj = track.add_feature(
-                        start=f["start"] - min_start,
-                        end=f["end"] - min_start,
-                        strand=s_val,
-                        label=f["label"],
-                    )
-                if "uid" in f:
-                    uid_to_feat[f["uid"]] = feature_obj
-        
-        # Add links (v1.0+ uses gv.add_link(feat1, feat2, ...) directly)
-        count_links = 0
-        for q, s, ident in links:
-            if q in uid_to_feat and s in uid_to_feat:
-                if q != s:  # self links already filtered but check again
-                    try:
-                        if _pgv_v1:
-                            gv.add_link(uid_to_feat[q], uid_to_feat[s], color="grey")
-                        else:
-                            # Legacy v0.x API uses Link object
-                            try:
-                                from pygenomeviz import Link
-                                link = Link(uid_to_feat[q], uid_to_feat[s], normal_color="grey")
-                                gv.add_link(link)
-                            except ImportError:
-                                gv.add_link(uid_to_feat[q], uid_to_feat[s], color="grey")
-                    except Exception:
-                        pass  # Skip individual links that fail
-                    count_links += 1
+            
+            # Run alignment
+            sim_cfg = syn_cfg.get("similarity", {})
+            method = sim_cfg.get("method", "mmseqs")
+            
+            if method.lower() in ["mmseqs", "mmseqs2"]:
+                aligner = MMseqs(pgv_records, seqtype="protein")
+            else:
+                aligner = Blast(pgv_records, seqtype="protein")
+            
+            print(f"    Running {method} alignment...")
+            # aligner.run() caches the db correctly per-run without manual file mgmt
+            align_coords = aligner.run()
+            align_coords = align_coords.filter(
+                identity=float(sim_cfg.get("min_identity", 30)), 
+                bitscore=float(sim_cfg.get("min_bitscore", 50))
+            )
+            gv.add_align_links(align_coords)
+            
+        except Exception as e:
+            import sys
+            import traceback
+            print(f"[synteny] Note: native PGV block alignment failed: {e}", file=sys.stderr)
+            traceback.print_exc()
 
-        print(f"    Plotting {len(neighborhoods)} tracks with {count_links} links...")
+        print(f"    Plotting {len(neighborhoods)} tracks...")
         try:
             fig = gv.plotfig() if _pgv_v1 else None
             gv.savefig(pdf_out)
