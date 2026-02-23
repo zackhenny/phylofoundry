@@ -3,7 +3,7 @@ import glob
 from .constants import STEPS
 from .utils.helpers import safe_mkdir, write_json
 from .utils.bio import read_fasta
-from .tasks import prep, hmmer, extract, embed, phylo, post, synteny, codon, hyphy, asr
+from .tasks import prep, hmmer, extract, embed, phylo, curate, post, synteny, codon, hyphy, asr
 
 
 def step_in_range(step, start_at, stop_after):
