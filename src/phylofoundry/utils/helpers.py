@@ -16,8 +16,13 @@ def run_cmd(cmd, quiet=False, shell=False):
             print("Running:", " ".join(cmd) if isinstance(cmd, list) else cmd)
             
     stdout_target = subprocess.DEVNULL if quiet else None
-    stderr_target = subprocess.DEVNULL if quiet else None
-    subprocess.run(cmd, check=True, stdout=stdout_target, stderr=stderr_target, shell=shell)
+    try:
+        subprocess.run(cmd, check=True, stdout=stdout_target, stderr=subprocess.PIPE, shell=shell, text=True)
+    except subprocess.CalledProcessError as e:
+        import sys
+        if e.stderr:
+            print(f"[run_cmd abort] Stderr output:\n{e.stderr}", file=sys.stderr)
+        raise
 
 def normalize_genome_id(x: str) -> str:
     if x is None:

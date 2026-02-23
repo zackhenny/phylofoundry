@@ -2,8 +2,10 @@ import os
 import glob
 from ..utils.helpers import run_cmd
 
-def run_hyphy_wrapper(hyphy_bin, test_name, codon_aln_fp, tree_fp, out_json):
+def run_hyphy_wrapper(hyphy_bin, test_name, codon_aln_fp, tree_fp, out_json, extra_args=None):
     cmd = [hyphy_bin, test_name, "--alignment", codon_aln_fp, "--tree", tree_fp, "--output", out_json]
+    if extra_args:
+        cmd.extend(extra_args)
     try:
         run_cmd(cmd, quiet=True, shell=False)
         return True
@@ -17,6 +19,7 @@ def run_hyphy(cfg, codon_dir, tree_dir, hyphy_dir, hmm_keep, force=False):
     
     hyphy_cfg = cfg.get("hyphy", {})
     tests = [x.strip() for x in str(hyphy_cfg.get("hyphy_tests", "")).split(",") if x.strip()]
+    hyphy_args = hyphy_cfg.get("hyphy_args", {}) # e.g. {"MEME": ["--branches", "All"]}
 
     hmm_names = sorted([os.path.basename(x).split(".")[0] for x in glob.glob(os.path.join(codon_dir, "*.codon.fasta"))])
     if hmm_keep is not None:
@@ -32,4 +35,11 @@ def run_hyphy(cfg, codon_dir, tree_dir, hyphy_dir, hmm_keep, force=False):
             out_json = os.path.join(hyphy_dir, f"{hmm}.{test}.json")
             if os.path.exists(out_json) and not force:
                 continue
-            _ = run_hyphy_wrapper(hyphy_cfg.get("hyphy_bin", "hyphy"), test, codon_aln_fp, tree_fp, out_json)
+            
+            # Fetch any test-specific arguments from the config
+            extra_args = hyphy_args.get(test, [])
+            if isinstance(extra_args, str):
+                import shlex
+                extra_args = shlex.split(extra_args)
+                
+            _ = run_hyphy_wrapper(hyphy_cfg.get("hyphy_bin", "hyphy"), test, codon_aln_fp, tree_fp, out_json, extra_args=extra_args)

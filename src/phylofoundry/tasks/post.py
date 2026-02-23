@@ -28,7 +28,12 @@ def _import_skbio():
 
 def msa_from_fasta_dict(aln_seqs: dict):
     _, TabularMSA, Protein = _import_skbio()
-    seqs = [Protein(seq, metadata={"id": tip}) for tip, seq in aln_seqs.items()]
+    seqs = []
+    for tip, seq in aln_seqs.items():
+        # Replace degenerate characters known to break skbio conservation metrics
+        for c in "XBZJUOxbzjuo?*":
+            seq = seq.replace(c, "-")
+        seqs.append(Protein(seq, metadata={"id": tip}))
     return TabularMSA(seqs)
 
 
