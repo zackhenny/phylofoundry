@@ -52,7 +52,7 @@
         }
     },
     "embeddings": {
-        "enabled": true,
+        "enabled": false,
         "backend": "esm",
         "model": "esm2_t33_650M_UR50D",
         "device": "cuda",
@@ -64,13 +64,18 @@
         "cluster_embeddings": true,
         "hdbscan_min_cluster_size": 5
     },
+    "curate": {
+        "enabled": false,
+        "use_esm_filter": true,
+        "use_treeshrink": true
+    },
     "post": {
-        "enabled": true,
-        "compute_conservation": true,
+        "enabled": false,
+        "compute_conservation": false,
         "conservation_metric": "inverse_shannon_uncertainty",
-        "compute_kl": true,
-        "clades_tsv": "/project2/thrash_89/zjhenning/clades.tsv",
-        "kl_pairs": "lowC:highC,lowC:background"
+        "compute_kl": false,
+        "clades_tsv": null,
+        "kl_pairs": null
     },
     "codon": {
         "enabled": false,
@@ -82,7 +87,21 @@
         "enabled": false,
         "run_hyphy": false,
         "hyphy_bin": "hyphy",
-        "hyphy_tests": "RELAX,aBSREL,MEME"
+        "hyphy_tests": "RELAX,aBSREL,MEME",
+        "hyphy_args": {
+            "MEME": [
+                "--branches",
+                "All"
+            ],
+            "aBSREL": [
+                "--branches",
+                "All"
+            ],
+            "RELAX": [
+                "--test",
+                "Test"
+            ]
+        }
     },
     "motifs": {
         "enabled": false,
