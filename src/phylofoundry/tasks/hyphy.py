@@ -3,7 +3,9 @@ import glob
 from ..utils.helpers import run_cmd
 
 def run_hyphy_wrapper(hyphy_bin, test_name, codon_aln_fp, tree_fp, out_json, extra_args=None):
-    cmd = [hyphy_bin, test_name, "--alignment", codon_aln_fp, "--tree", tree_fp, "--output", out_json]
+    builtins = {"meme", "absrel", "relax", "fel", "busted", "slac", "fade", "fubar"}
+    exe_test = test_name.lower() if test_name.lower() in builtins else test_name
+    cmd = [hyphy_bin, exe_test, "--alignment", codon_aln_fp, "--tree", tree_fp, "--output", out_json]
     if extra_args:
         cmd.extend(extra_args)
     try:

@@ -398,16 +398,17 @@ def run_synteny(cfg, synteny_dir, tree_dir, scan_df, search_df, hmm_keep, force=
                 for feature in rec.features:
                     color = feature.qualifiers.get("color", ["skyblue"])[0]
                     if _pgv_v1:
-                        track.add_feature(feature, fc=color)
-                    else:
-                        # Fallback for old pgv
+                        # PyGenomeViz >= 1.0.0 uses start, end, strand args
                         track.add_feature(
-                            start=int(feature.location.start), 
-                            end=int(feature.location.end), 
-                            strand=feature.location.strand,
+                            int(feature.location.start), 
+                            int(feature.location.end), 
+                            feature.location.strand,
                             label=feature.qualifiers.get("locus_tag", [""])[0],
                             facecolor=color, plotstyle="arrow"
                         )
+                    else:
+                        # Fallback for old pgv (< 1.0.0)
+                        track.add_feature(feature, facecolor=color, plotstyle="arrow")
             
             # Run alignment
             sim_cfg = syn_cfg.get("similarity", {})
