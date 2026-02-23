@@ -152,17 +152,15 @@ def discover_motifs(cfg, fasta_dir, summary_dir, hmm_keep, force=False):
         return None
 
     clade_df = pd.read_csv(clade_fp, sep="\t")
-    std_ids = set(clade_df[clade_df["cluster_id"] == standard_clade]["protein"].values)
-    nov_ids = set(clade_df[clade_df["cluster_id"] == novel_clade]["protein"].values)
-
-    if not std_ids or not nov_ids:
-        print(f"[discover] Standard clade {standard_clade} has {len(std_ids)} seqs, "
-              f"novel clade {novel_clade} has {len(nov_ids)} seqs. "
-              f"Need both to be non-empty.", file=sys.stderr)
+    
+    # Identify all valid clusters (exclude noise / -1 if possible)
+    all_clusters = [c for c in clade_df["cluster_id"].unique() if pd.notna(c) and c != -1]
+    
+    if len(all_clusters) < 2:
+        print("[discover] Not enough clusters (< 2) for comparative motif discovery.", file=sys.stderr)
         return None
 
-    print(f"[discover] Standard clade {standard_clade}: {len(std_ids)} seqs, "
-          f"Novel clade {novel_clade}: {len(nov_ids)} seqs")
+    print(f"[discover] Found {len(all_clusters)} clades for motif discovery.")
 
     # Load all sequences
     all_seqs = {}
@@ -172,27 +170,9 @@ def discover_motifs(cfg, fasta_dir, summary_dir, hmm_keep, force=False):
         if hmm_keep is not None and hmm not in hmm_keep:
             continue
         seqs = read_fasta(fp)
-        all_seqs.update(seqs)
+        all_seqs.update({k: v.replace("*", "").replace("-", "") for k, v in seqs.items()})
 
-        # Also load ancestral sequences if available
-        anc_fp = os.path.join(fasta_dir, f"{hmm}.ancestral_nodes.fasta")
-        if os.path.exists(anc_fp):
-            anc_seqs = read_fasta(anc_fp)
-            for k, v in anc_seqs.items():
-                all_seqs[f"ANC|{k}"] = v
-
-    # Filter sequences by clade
-    std_seqs = {k: v.replace("*", "").replace("-", "")
-                for k, v in all_seqs.items() if k in std_ids}
-    nov_seqs = {k: v.replace("*", "").replace("-", "")
-                for k, v in all_seqs.items() if k in nov_ids}
-
-    if not std_seqs or not nov_seqs:
-        print("[discover] Could not find sequences for the specified clades.",
-              file=sys.stderr)
-        return None
-
-    # Load ESM model
+    # Load ESM model globally
     emb_cfg = cfg.get("embeddings", {})
     model_name = emb_cfg.get("model", "esm2_t33_650M_UR50D")
     device = emb_cfg.get("device", "cuda")
@@ -207,98 +187,88 @@ def discover_motifs(cfg, fasta_dir, summary_dir, hmm_keep, force=False):
         print(f"[discover] Failed to load ESM model: {e}", file=sys.stderr)
         return None
 
-    # Compute attention profiles for each clade
-    print(f"[discover] Computing attention profiles for standard clade "
-          f"({len(std_seqs)} seqs)...")
-    std_profiles = []
-    for seq_id, seq in std_seqs.items():
-        if len(seq) < 10:
-            continue
+    # Pre-calculate attention profiles for all sequences to avoid re-computing
+    print("[discover] Pre-computing attention profiles for all sequences...")
+    all_profiles = {}
+    for seq_id, seq in all_seqs.items():
+        if len(seq) < 10: continue
         try:
-            profile = _compute_attention_profile(model, alphabet, seq, device,
-                                                  n_layers=n_layers)
-            std_profiles.append(profile)
+            profile = _compute_attention_profile(model, alphabet, seq, device, n_layers=n_layers)
+            all_profiles[seq_id] = profile
         except Exception as e:
-            print(f"[discover] Profile extraction failed for {seq_id}: {e}",
-                  file=sys.stderr)
+            pass
 
-    print(f"[discover] Computing attention profiles for novel clade "
-          f"({len(nov_seqs)} seqs)...")
-    nov_profiles = []
-    nov_profile_seqs = []  # Track which sequences produced profiles
-    for seq_id, seq in nov_seqs.items():
-        if len(seq) < 10:
-            continue
-        try:
-            profile = _compute_attention_profile(model, alphabet, seq, device,
-                                                  n_layers=n_layers)
-            nov_profiles.append(profile)
-            nov_profile_seqs.append((seq_id, seq))
-        except Exception as e:
-            print(f"[discover] Profile extraction failed for {seq_id}: {e}",
-                  file=sys.stderr)
-
-    if not std_profiles or not nov_profiles:
-        print("[discover] Insufficient profiles computed.", file=sys.stderr)
-        return None
-
-    # Align profiles to common length and compute delta
+    # 1-vs-All clade comparison
     target_len = 500
-    std_aligned = _align_profiles_to_fixed_length(std_profiles, target_len)
-    nov_aligned = _align_profiles_to_fixed_length(nov_profiles, target_len)
+    all_discovered_motifs = []
+    
+    for novel_clade in all_clusters:
+        nov_ids = set(clade_df[clade_df["cluster_id"] == novel_clade]["protein"].values)
+        std_ids = set(clade_df[clade_df["cluster_id"] != novel_clade]["protein"].values)
+        
+        nov_profiles = [all_profiles[s] for s in nov_ids if s in all_profiles]
+        std_profiles = [all_profiles[s] for s in std_ids if s in all_profiles]
+        
+        if not nov_profiles or not std_profiles:
+            continue
+            
+        nov_aligned = _align_profiles_to_fixed_length(nov_profiles, target_len)
+        std_aligned = _align_profiles_to_fixed_length(std_profiles, target_len)
+        
+        nov_mean = nov_aligned.mean(axis=0)
+        std_mean = std_aligned.mean(axis=0)
+        
+        attention_delta = nov_mean - std_mean
+        peaks = _find_peaks_in_delta(attention_delta, top_n=top_n)
+        
+        clade_rows = []
+        for peak_pos_norm, delta_val in peaks:
+            if delta_val <= 0: continue
+            
+            # Map peaks back to raw sequences of the active target clade
+            for seq_id in nov_ids:
+                if seq_id not in all_seqs: continue
+                seq = all_seqs[seq_id]
+                if len(seq) < 10: continue
+                
+                raw_pos = int(peak_pos_norm / target_len * len(seq))
+                raw_pos = min(raw_pos, len(seq) - 1)
+                kmer = _extract_kmer_at_position(seq, raw_pos, k=kmer_size)
 
-    std_mean = std_aligned.mean(axis=0) if len(std_aligned) > 0 else np.zeros(target_len)
-    nov_mean = nov_aligned.mean(axis=0) if len(nov_aligned) > 0 else np.zeros(target_len)
+                clade_rows.append({
+                    "kmer": kmer,
+                    "position": raw_pos,
+                    "normalized_position": peak_pos_norm,
+                    "attention_delta": delta_val,
+                    "source_clade": novel_clade,
+                    "representative_seq_id": seq_id,
+                })
+                
+        if clade_rows:
+            df_clade = pd.DataFrame(clade_rows)
+            kmer_summary = (
+                df_clade.groupby("kmer")
+                .agg(
+                    n_sequences=("representative_seq_id", "nunique"),
+                    mean_attention_delta=("attention_delta", "mean"),
+                    median_position=("position", "median"),
+                    representative_seq_id=("representative_seq_id", "first"),
+                )
+                .reset_index()
+                .sort_values("mean_attention_delta", ascending=False)
+                .head(top_n)
+            )
+            kmer_summary["source_clade"] = novel_clade
+            kmer_summary["reference_clade"] = "ALL_OTHERS"
+            all_discovered_motifs.append(kmer_summary)
 
-    attention_delta = nov_mean - std_mean
-
-    # Find peaks in the delta (where novel clade has higher attention)
-    peaks = _find_peaks_in_delta(attention_delta, top_n=top_n)
-
-    # Map peaks back to raw sequences and extract k-mers
-    all_rows = []
-    for peak_pos_norm, delta_val in peaks:
-        if delta_val <= 0:
-            continue  # Only interested in positive delta (novel > standard)
-
-        # Map normalized position back to raw sequence positions
-        for seq_id, seq in nov_profile_seqs:
-            raw_pos = int(peak_pos_norm / target_len * len(seq))
-            raw_pos = min(raw_pos, len(seq) - 1)
-            kmer = _extract_kmer_at_position(seq, raw_pos, k=kmer_size)
-
-            all_rows.append({
-                "kmer": kmer,
-                "position": raw_pos,
-                "normalized_position": peak_pos_norm,
-                "attention_delta": delta_val,
-                "source_clade": novel_clade,
-                "representative_seq_id": seq_id,
-            })
-
-    if not all_rows:
-        print("[discover] No significant attention peaks found.", file=sys.stderr)
+    if not all_discovered_motifs:
+        print("[discover] No significant attention peaks found across all clades.", file=sys.stderr)
         return None
 
-    # Aggregate: count unique k-mers and their frequencies
-    df = pd.DataFrame(all_rows)
-
-    # Group by kmer and compute summary stats
-    kmer_summary = (
-        df.groupby("kmer")
-        .agg(
-            n_sequences=("representative_seq_id", "nunique"),
-            mean_attention_delta=("attention_delta", "mean"),
-            median_position=("position", "median"),
-            representative_seq_id=("representative_seq_id", "first"),
-        )
-        .reset_index()
-        .sort_values("mean_attention_delta", ascending=False)
-        .head(top_n)
-    )
-    kmer_summary["source_clade"] = novel_clade
-    kmer_summary["reference_clade"] = standard_clade
-
+    # Combine all clade findings and export
+    kmer_summary = pd.concat(all_discovered_motifs, ignore_index=True)
+    
     os.makedirs(summary_dir, exist_ok=True)
     kmer_summary.to_csv(out_fp, sep="\t", index=False)
     print(f"[discover] Wrote discovered motifs: {out_fp} ({len(kmer_summary)} k-mers)")

@@ -12,7 +12,7 @@
 -   **Ancestral Sequence Reconstruction**: Parses IQ-TREE `.state` files to reconstruct ancestral protein sequences, embeds them alongside modern sequences, and visualizes evolutionary trajectories in UMAP space.
 -   **Combined Tree Mode**: `--combined` flag to build a single tree from all HMM hits, with combined embeddings and clustering.
 -   **Motif Scoring** (Optional): Uses ESM-2 attention weights to score structurally important motifs (e.g., `--motifs HPEVY,HPEVF`).
--   **Motif Discovery** (Optional): Compares attention profiles between HDBSCAN clades to discover novel structural hubs (`--standard-clade 0 --novel-clade 1`).
+-   **Motif Discovery** (Optional): Compares attention profiles across all HDBSCAN clades to discover novel structural hubs natively in a 1-vs-All manner.
 -   **Synteny Analysis** (Optional): Extracts gene neighborhoods (configurable window), computes similarity (DIAMOND/MMseqs2), and plots synteny tracks ordered by phylogeny.
 -   **HDBSCAN Clustering** (Optional): Clusters protein embeddings and outputs `clade_assignment.tsv` with taxonomy.
 -   **GTDB Taxonomy Integration**: Merges GTDB-Tk taxonomy into summary tables and cluster assignments.
@@ -254,9 +254,9 @@ The pipeline runs as a series of sequential **Steps**. You can control execution
 -   **Output**: `summary/motif_attention_scores.tsv` — columns: `seq_id`, `motif`, `start_pos`, `end_pos`, `attention_score`, `clade_id`, `type`.
 
 ### Step 10: `discover_motifs` (Optional)
--   **Action**: Compares 1D attention profiles between two HDBSCAN clades, finds peaks in the attention delta, extracts k-mers as candidate novel structural hubs.
--   **CLI**: `--standard-clade 0 --novel-clade 1`
--   **Output**: `summary/discovered_motifs.tsv` — columns: `kmer`, `n_sequences`, `mean_attention_delta`, `source_clade`.
+-   **Action**: Iterates over all HDBSCAN clades, comparing the 1D attention profiles of each clade against the combined average of all others. Finds peaks in the attention delta and extracts k-mers as candidate novel structural hubs for that specific clade.
+-   **CLI**: N/A, runs automatically if `discover.enabled` is `true`.
+-   **Output**: `summary/discovered_motifs.tsv` — columns: `kmer`, `n_sequences`, `mean_attention_delta`, `source_clade`, `reference_clade`.
 
 ---
 

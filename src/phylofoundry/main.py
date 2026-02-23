@@ -35,11 +35,6 @@ def main():
                          "(e.g., HPEVY,HPEVF)")
 
     # Motif discovery flags
-    ap.add_argument("--standard-clade", type=int, default=None,
-                    help="HDBSCAN cluster ID for the standard reference clade")
-    ap.add_argument("--novel-clade", type=int, default=None,
-                    help="HDBSCAN cluster ID for the novel comparison clade")
-
     args = ap.parse_args()
 
     cfg = resolve_config(args)
@@ -55,13 +50,6 @@ def main():
         if motif_list:
             cfg.setdefault("motifs", {})["enabled"] = True
             cfg["motifs"]["motif_list"] = motif_list
-
-    if args.standard_clade is not None:
-        cfg.setdefault("discover", {})["standard_clade"] = args.standard_clade
-    if args.novel_clade is not None:
-        cfg.setdefault("discover", {})["novel_clade"] = args.novel_clade
-    if args.standard_clade is not None and args.novel_clade is not None:
-        cfg.setdefault("discover", {})["enabled"] = True
 
     validate_config(cfg)
 

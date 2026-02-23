@@ -132,8 +132,6 @@ DEFAULT_CONFIG = {
     },
     "discover": {
         "enabled": False,
-        "standard_clade": None,     # HDBSCAN cluster ID for reference clade
-        "novel_clade": None,        # HDBSCAN cluster ID for novel clade
         "kmer_size": 5,
         "top_n_peaks": 20,
         "attention_layers": 4,

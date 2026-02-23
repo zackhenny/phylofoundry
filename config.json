@@ -110,8 +110,6 @@
     },
     "discover": {
         "enabled": false,
-        "standard_clade": null,
-        "novel_clade": null,
         "kmer_size": 5,
         "top_n_peaks": 20,
         "attention_layers": 4
