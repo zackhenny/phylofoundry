@@ -9,7 +9,7 @@ AA_ALPHABET = set(list("ACDEFGHIKLMNPQRSTVWY"))
 GAP_CHARS = set(["-", ".", "X", "x", "?", "*"])
 
 # Workflow
-STEPS = ["prep", "hmmer", "extract", "embed", "phylo", "post",
+STEPS = ["prep", "hmmer", "extract", "embed", "phylo", "curate", "post",
          "synteny", "codon", "hyphy", "score_motifs", "discover_motifs"]
 
 # Defaults
@@ -69,6 +69,11 @@ DEFAULT_CONFIG = {
         "write_full_vectors": False,  # if True, write TSV with all dims (can be huge); always writes .npy
         "cluster_embeddings": True,   # run HDBSCAN on raw embeddings
         "hdbscan_min_cluster_size": 5  # HDBSCAN min_cluster_size param
+    },
+    "curate": {
+        "enabled": False,
+        "use_treeshrink": True,
+        "use_esm_filter": True
     },
     "post": {
         "enabled": False,

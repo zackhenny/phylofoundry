@@ -16,6 +16,7 @@ dependencies:
   - iqtree
   - pal2nal
   - pygenomeviz
+  - treeshrink
   - biopython
   - matplotlib
   - diamond
@@ -26,4 +27,6 @@ dependencies:
     - fair-esm
     - transformers
     - torch
+    - streamlit
+    - bqplot
     - .  # Install the current package in editable mode

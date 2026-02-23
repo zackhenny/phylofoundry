@@ -225,6 +225,12 @@ def run_pipeline(cfg):
     if stop_after == "phylo":
         return
 
+    # ── STEP: curate ───────────────────────────────────────────────────────
+    if step_in_range("curate", start_at, stop_after):
+        curate.run_curate(cfg, tree_dir, fasta_dir, clipkit_dir, emb_dir, summary_dir, hmm_keep, force)
+    if stop_after == "curate":
+        return
+
     # ── STEP: post ─────────────────────────────────────────────────────────
     if step_in_range("post", start_at, stop_after) and post_cfg.get("enabled", False):
         post.run_post(cfg, tree_dir, clipkit_dir, aln_dir, post_dir, summary_dir, hmm_keep, force)
