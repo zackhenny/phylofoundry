@@ -3,6 +3,7 @@ channels:
   - conda-forge
   - bioconda
   - defaults
+  - smirarab
 dependencies:
   - python=3.10
   - pandas
@@ -14,8 +15,7 @@ dependencies:
   - mafft
   - clipkit
   - iqtree
-  - tree_shrink
-
+  - treeshrink
   - biopython
   - matplotlib
   - diamond
