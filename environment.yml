@@ -14,9 +14,8 @@ dependencies:
   - mafft
   - clipkit
   - iqtree
-  - pal2nal
-  - pygenomeviz
-  - treeshrink
+  - tree_shrink
+
   - biopython
   - matplotlib
   - diamond
@@ -29,4 +28,5 @@ dependencies:
     - torch
     - streamlit
     - bqplot
+    - clinker-vis
     - .  # Install the current package in editable mode

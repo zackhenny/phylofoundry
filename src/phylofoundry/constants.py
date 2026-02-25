@@ -19,7 +19,8 @@ DEFAULT_CONFIG = {
         "hmm_input": None,   # directory of *.hmm OR a single .hmm
         "cds_dir": None,      # optional directory of CDS nucleotide FASTAs (per genome)
         "gtdb_dir": None,     # optional directory of GTA-Tk output
-        "taxonomy_file": None # optional TSV with genome->lineage mapping
+        "taxonomy_file": None, # optional TSV with genome->lineage mapping
+        "pfam_dir": None      # optional directory of Pfam .dat and .hmm files
     },
     "output": {
         "outdir": None
@@ -92,26 +93,10 @@ DEFAULT_CONFIG = {
         "max_hits_per_hmm": 50,
         "dedup_by_genome": True,
         "prefer_best_hit": True,
-        "reference_mode": "per_hmm",
         "protein_id_field": ["ID", "protein_id", "locus_tag"],
         "gene_label_field": ["gene", "product", "Name", "locus_tag"],
-        "strand_colors": False,
-        "output_format": "pdf",
-        "plot_height_per_track": 0.35,
         "plot_width": 14,
         "include_tree": True,
-        "tree_source": "iqtree",
-        "tree_tip_label_mode": "genome",
-        "tree_order": "ladderize",
-        "similarity": {
-            "method": "diamond",
-            "diamond_bin": "diamond",
-            "mmseqs_bin": "mmseqs",
-            "min_identity": 30,
-            "min_bitscore": 50,
-            "max_evalue": 1e-5,
-            "max_targets": 2000
-        }
     },
     "codon": {
         "enabled": False,

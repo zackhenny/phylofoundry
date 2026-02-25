@@ -178,35 +178,24 @@ def run_synteny(cfg, synteny_dir, tree_dir, scan_df, search_df, hmm_keep, force=
     if not syn_cfg.get("enabled", False):
         return
 
-    # Check dependencies
+    # Check for clinker availability
     try:
-        import pygenomeviz
-        from pygenomeviz import GenomeViz
+        import clinker
     except ImportError as e:
         import sys
-        print(f"[synteny] FAILED: pygenomeviz is not installed or could not be imported: {e}", file=sys.stderr)
-        print("[synteny] Install with: pip install pygenomeviz  (or: conda install -c conda-forge pygenomeviz)", file=sys.stderr)
+        print(f"[synteny] FAILED: clinker is not installed or could not be imported: {e}", file=sys.stderr)
+        print("[synteny] Install with: pip install clinker-vis", file=sys.stderr)
         return
-
-    # Detect pygenomeviz version for API compatibility
-    _pgv_version = tuple(int(x) for x in pygenomeviz.__version__.split(".")[:2]) if hasattr(pygenomeviz, "__version__") else (0, 4)
-    _pgv_v1 = _pgv_version >= (1, 0)
 
     gbk_dir = syn_cfg.get("gbk_dir")
     gff_dir = syn_cfg.get("gff_dir")
+    pfam_dir = cfg["inputs"].get("pfam_dir")
     
-    # We need at least one source
     if not gbk_dir and not gff_dir:
         print("WARNING: No gbk_dir or gff_dir provided for synteny. Skipping.")
         return
 
     # Aggregate hits
-    # We use competitive best hits usually, but user might want all
-    # "use pipeline hit tables"
-    # To be robust, let's load best_hits.competitive.tsv if strictly preferring best
-    # Or merge the passed scan_df/search_df
-    
-    # Re-load best hits if prefer_best_hit is True
     summary_dir = os.path.join(cfg["output"]["outdir"], "summary")
     best_hits_tsv = os.path.join(summary_dir, "best_hits.competitive.tsv")
     
@@ -214,47 +203,39 @@ def run_synteny(cfg, synteny_dir, tree_dir, scan_df, search_df, hmm_keep, force=
     if syn_cfg.get("prefer_best_hit", True) and os.path.exists(best_hits_tsv):
         hits = pd.read_csv(best_hits_tsv, sep="\t")
     else:
-        # Fallback to whatever was passed (e.g. all hits)
         dfs = []
         if not scan_df.empty: dfs.append(scan_df)
         if not search_df.empty: dfs.append(search_df)
         if dfs:
             hits = pd.concat(dfs, ignore_index=True)
-            # Dedup if needed
             hits = hits.drop_duplicates(subset=["genome", "protein", "hmm"])
 
     if hits.empty:
         print("No hits found for synteny analysis.")
         return
 
-    # Filter hmm_keep
     if hmm_keep:
         hits = hits[hits["hmm"].isin(hmm_keep)]
 
-    # Group by HMM
     for hmm, group in hits.groupby("hmm"):
         hmm_out_dir = os.path.join(synteny_dir, hmm)
         safe_mkdir(hmm_out_dir)
         
-        pdf_out = os.path.join(hmm_out_dir, f"synteny.{hmm}.pdf")
-        if os.path.exists(pdf_out) and not force:
+        html_out = os.path.join(hmm_out_dir, f"synteny.{hmm}.html")
+        if os.path.exists(html_out) and not force:
             continue
 
         print(f"  Processing HMM: {hmm} ({len(group)} hits)...")
         
-        # Deduplicate per genome if requested
         if syn_cfg.get("dedup_by_genome", True):
-            # Sort by bitscore desc to keep best
             group = group.sort_values("bitscore", ascending=False).groupby("genome").head(1)
-            # Limit total hits
             max_hits = int(syn_cfg.get("max_hits_per_hmm", 50))
             if len(group) > max_hits:
                 group = group.head(max_hits)
 
-        neighborhoods = [] # list of (genome, track_name, [features])
+        neighborhoods = [] # list of (genome, track_feats)
         all_prots = {}     # uid -> sequence
 
-        # Extract neighborhoods
         window = int(syn_cfg.get("window_genes", 10))
         fields_id = syn_cfg.get("protein_id_field", ["ID", "protein_id", "locus_tag"])
         fields_label = syn_cfg.get("gene_label_field", ["gene", "product", "Name", "locus_tag"])
@@ -263,38 +244,27 @@ def run_synteny(cfg, synteny_dir, tree_dir, scan_df, search_df, hmm_keep, force=
             genome = r["genome"]
             protein = r["protein"]
             
-            # Locate input file
-            # Try GBK
             found_feats = []
             if gbk_dir:
-                # Try genome.gbk, genome.gbff, etc.
                 base = normalize_genome_id(genome)
                 cand = glob.glob(os.path.join(gbk_dir, f"{base}*.gb*"))
                 if cand:
                     found_feats = load_genbank_neighborhood(cand[0], protein, window, fields_id, fields_label)
             
-            # Try GFF if no GBK or not found
             if not found_feats and gff_dir:
                 base = normalize_genome_id(genome)
                 cand = glob.glob(os.path.join(gff_dir, f"{base}*.gff*"))
                 if cand:
                     found_feats = load_gff_neighborhood(cand[0], protein, window, fields_id, fields_label)
-                    # If GFF, we might need external protein sequences for similarity
-                    # We can try looking up in the global proteome inputs if available
-                    # For now, if translation is missing, similarity check will just skip or fail gracefully
             
             if not found_feats:
                 continue
 
-            # Assign unique IDs for all proteins in neighborhood
-            # {genome}|{contig}|{locus}|{idx}
             track_feats = []
             for i, f in enumerate(found_feats):
-                # Construct a stable UID
-                # Note: protein_id might not be unique if paralogs, so use index
                 uid = f"{genome}|{f['contig']}|{f['protein_id']}|{i}"
                 f["uid"] = uid
-                if f["translation"]:
+                if f.get("translation"):
                     all_prots[uid] = f["translation"]
                 track_feats.append(f)
             
@@ -303,144 +273,91 @@ def run_synteny(cfg, synteny_dir, tree_dir, scan_df, search_df, hmm_keep, force=
         if not neighborhoods:
             print(f"    No neighborhoods extracted for {hmm}.")
             continue
-        # Tree ordering logic remains the same
-        ordered_genomes = [n[0] for n in neighborhoods]
-        if syn_cfg.get("include_tree", True):
-             tree_fp = os.path.join(tree_dir, f"{hmm}.treefile")
-             if os.path.exists(tree_fp):
-                 try:
-                     from Bio import Phylo
-                     t = Phylo.read(tree_fp, "newick")
-                     if syn_cfg.get("tree_order") == "ladderize":
-                         t.ladderize()
-                     # Get leaf order
-                     leaves = [term.name for term in t.get_terminals()]
-                     # Map leaves to genomes
-                     leaf_to_genome = {}
-                     for leak in leaves:
-                         g_cand = leak.split("|")[0]
-                         leaf_to_genome[leak] = g_cand
-                     
-                     # Reorder
-                     ordered_temp = []
-                     seen = set()
-                     for leaf in leaves:
-                         g = leaf_to_genome.get(leaf)
-                         for i, (ng, nfeats) in enumerate(neighborhoods):
-                             if ng == g and i not in seen:
-                                 ordered_temp.append(neighborhoods[i])
-                                 seen.add(i)
-                                 break
-                     
-                     # Append leftovers
-                     for i, n in enumerate(neighborhoods):
-                         if i not in seen:
-                             ordered_temp.append(n)
-                     
-                     if ordered_temp:
-                         ordered_genomes = [n[0] for n in ordered_temp]
-                         neighborhoods = ordered_temp
-                 except Exception as e:
-                     print(f"    Tree ordering failed: {e}")
 
+        # Optional Pfam annotation
+        pfam_mapping = {}
+        if pfam_dir and all_prots:
+            print("    Running Pfam annotation on neighborhood proteins...")
+            import tempfile, json
+            with tempfile.TemporaryDirectory() as td:
+                faa_path = os.path.join(td, "proteins.faa")
+                write_fasta(faa_path, all_prots)
+                
+                pfam_out = os.path.join(td, "pfam.json")
+                # pfam_scan.py was copied into src/phylofoundry/utils/pfam_scan.py
+                script_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "utils", "pfam_scan.py")
+                cmd = ["python", script_path, faa_path, pfam_dir, "-outfmt", "json", "-out", pfam_out]
+                try:
+                    subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+                    with open(pfam_out) as f:
+                        pfam_res = json.load(f)
+                    for uid, domains in pfam_res.items():
+                        dom_names = [d["hmm_name"] for d in domains]
+                        if dom_names:
+                            pfam_mapping[uid] = "Pfam: " + ", ".join(dom_names)
+                except Exception as e:
+                    import sys
+                    print(f"    Warning: Pfam scan failed: {e}", file=sys.stderr)
 
+        # Build GenBank files for clinker
+        from Bio.SeqRecord import SeqRecord
+        from Bio.Seq import Seq
+        from Bio.SeqFeature import SeqFeature, FeatureLocation
         
-        # Rebuild pygenomeviz object using native alignment
-        try:
-            from pygenomeviz.align import MMseqs, Blast
-            from Bio.SeqRecord import SeqRecord
-            from Bio.Seq import Seq
-            from Bio.SeqFeature import SeqFeature, FeatureLocation
+        gbk_files = []
+        for genome, feats in neighborhoods:
+            if not feats: continue
+            min_start = min(f["start"] for f in feats)
+            max_end = max(f["end"] for f in feats)
+            size = max_end - min_start + 1
             
-            pgv_records = []
+            # Using molecule_type="DNA" allows writing out to genbank
+            rec = SeqRecord(Seq("N" * size), id=genome, name=genome[:16], description=f"Neighborhood for {hmm}", annotations={"molecule_type": "DNA"})
             
-            for genome, feats in neighborhoods:
-                if not feats: continue
-                # Calculate extent
-                min_start = min(f["start"] for f in feats)
-                max_end = max(f["end"] for f in feats)
-                size = max_end - min_start + 1
+            for f in feats:
+                strand = 1 if str(f["strand"]) in ["1", "+"] else -1
+                loc = FeatureLocation(f["start"] - min_start, f["end"] - min_start, strand=strand)
                 
-                # Make parent record
-                rec = SeqRecord(Seq("N" * size), id=genome, name=genome)
-                
-                for f in feats:
-                    color = "tomato" if f["is_focal"] else "skyblue"
-                    strand = 1 if str(f["strand"]) in ["1", "+"] else -1
-                    loc = FeatureLocation(f["start"] - min_start, f["end"] - min_start, strand=strand)
-                    
-                    qualifiers = {
-                        "color": [color],
-                        "locus_tag": [f.get("label", "")],
-                        # Pygenomeviz aligners require the transaction qualifier for protein alignments
-                        "translation": [f.get("translation", "")] if f.get("translation") else []
-                    }
-                    
-                    sf = SeqFeature(loc, type="CDS", id=f.get("uid", ""), qualifiers=qualifiers)
-                    rec.features.append(sf)
-                
-                pgv_records.append(rec)
-            
-            # Re-init GV with fully populated records
-            if _pgv_v1:
-                gv = GenomeViz(
-                    fig_width=syn_cfg.get("plot_width", 14),
-                    fig_track_height=syn_cfg.get("plot_height_per_track", 0.35),
-                )
-            else:
-                gv = GenomeViz(
-                    fig_width=syn_cfg.get("plot_width", 14),
-                    fig_track_height=syn_cfg.get("plot_height_per_track", 0.35),
-                )
-                
-            for rec in pgv_records:
-                track = gv.add_feature_track(rec.id, len(rec.seq))
-                for feature in rec.features:
-                    color = feature.qualifiers.get("color", ["skyblue"])[0]
-                    if _pgv_v1:
-                        # PyGenomeViz >= 1.0.0 uses start, end, strand args
-                        track.add_feature(
-                            int(feature.location.start), 
-                            int(feature.location.end), 
-                            feature.location.strand,
-                            label=feature.qualifiers.get("locus_tag", [""])[0],
-                            facecolor=color, plotstyle="arrow"
-                        )
+                qualifiers = {
+                    "locus_tag": [f.get("label", "")],
+                }
+                if f.get("translation"):
+                    qualifiers["translation"] = [f["translation"]]
+
+                # Add Pfam annotation if available
+                uid = f.get("uid", "")
+                product_str = f.get("label", "")
+                if uid in pfam_mapping:
+                    if product_str and product_str != "NA":
+                        product_str += f" ({pfam_mapping[uid]})"
                     else:
-                        # Fallback for old pgv (< 1.0.0)
-                        track.add_feature(feature, facecolor=color, plotstyle="arrow")
+                        product_str = pfam_mapping[uid]
+                
+                if product_str and product_str != "NA":
+                    qualifiers["product"] = [product_str]
+
+                sf = SeqFeature(loc, type="CDS", id=uid, qualifiers=qualifiers)
+                rec.features.append(sf)
             
-            # Run alignment
-            sim_cfg = syn_cfg.get("similarity", {})
-            method = sim_cfg.get("method", "mmseqs")
+            gbk_path = os.path.join(hmm_out_dir, f"{genome}.gbk")
+            with open(gbk_path, "w") as outf:
+                SeqIO.write(rec, outf, "genbank")
+            gbk_files.append(gbk_path)
             
-            if method.lower() in ["mmseqs", "mmseqs2"]:
-                aligner = MMseqs(pgv_records, seqtype="protein")
-            else:
-                aligner = Blast(pgv_records, seqtype="protein")
+        # Run clinker
+        print("    Generating Clinker synteny plot...")
+        try:
+            cmd = ["clinker", *gbk_files, "-p", html_out]
+            subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+            print(f"    Saved Clinker plot: {html_out}")
             
-            print(f"    Running {method} alignment...")
-            # aligner.run() caches the db correctly per-run without manual file mgmt
-            align_coords = aligner.run()
-            align_coords = align_coords.filter(
-                identity=float(sim_cfg.get("min_identity", 30)), 
-                bitscore=float(sim_cfg.get("min_bitscore", 50))
-            )
-            gv.add_align_links(align_coords)
-            
+            # Optionally clean up intermediate genbanks here, uncomment if preferred
+            # for f in gbk_files:
+            #     os.remove(f)
         except Exception as e:
             import sys
             import traceback
-            print(f"[synteny] Note: native PGV block alignment failed: {e}", file=sys.stderr)
-            traceback.print_exc()
-
-        print(f"    Plotting {len(neighborhoods)} tracks...")
-        try:
-            fig = gv.plotfig() if _pgv_v1 else None
-            gv.savefig(pdf_out)
-            print(f"    Saved: {pdf_out}")
-        except Exception as e:
-            import sys
             print(f"    Plotting failed for {hmm}: {e}", file=sys.stderr)
+            traceback.print_exc()
 
     return

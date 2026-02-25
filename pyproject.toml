@@ -28,7 +28,7 @@ all = [
   "transformers",
   "fair-esm",
   "biopython",
-  "pygenomeviz",
+  "clinker-vis",
   "matplotlib",
   "scipy",
 ]
@@ -48,7 +48,7 @@ post = [
 ]
 # Synteny
 synteny = [
-  "pygenomeviz",
+  "clinker-vis",
   "biopython",
   "matplotlib",
 ]
