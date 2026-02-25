@@ -62,7 +62,7 @@ def build_codon_alignment_pal2nal(aa_aln_fp, cds_subset_fp, out_codon_fp,
                                    codon_format="fasta"):
     """Run pal2nal with -nogap -nomismatch to tolerate minor differences."""
     cmd = (f"{pal2nal_cmd} {aa_aln_fp} {cds_subset_fp} "
-           f"-output {codon_format} > {out_codon_fp}")
+           f"-output {codon_format} -nogap -nomismatch > {out_codon_fp}")
     run_cmd(cmd, quiet=True, shell=True)
 
 

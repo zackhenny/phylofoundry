@@ -128,10 +128,6 @@ def discover_motifs(cfg, fasta_dir, summary_dir, hmm_keep, force=False):
 
     standard_clade = disc_cfg.get("standard_clade", None)
     novel_clade = disc_cfg.get("novel_clade", None)
-    if standard_clade is None or novel_clade is None:
-        print("[discover] standard_clade and novel_clade must be set. Skipping.",
-              file=sys.stderr)
-        return None
 
     standard_clade = int(standard_clade)
     novel_clade = int(novel_clade)

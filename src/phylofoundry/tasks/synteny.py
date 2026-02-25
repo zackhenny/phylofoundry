@@ -217,7 +217,12 @@ def run_synteny(cfg, synteny_dir, tree_dir, scan_df, search_df, hmm_keep, force=
 
     for hmm, group in hits.groupby("hmm"):
         hmm_out_dir = os.path.join(synteny_dir, hmm)
+        anno_dir = os.path.join(hmm_out_dir, "annotations")
+        seqs_dir = os.path.join(hmm_out_dir, "seqs")
+        
         safe_mkdir(hmm_out_dir)
+        safe_mkdir(anno_dir)
+        safe_mkdir(seqs_dir)
         
         html_out = os.path.join(hmm_out_dir, f"synteny.{hmm}.html")
         if os.path.exists(html_out) and not force:
@@ -297,6 +302,11 @@ def run_synteny(cfg, synteny_dir, tree_dir, scan_df, search_df, hmm_keep, force=
                     import sys
                     print(f"    Warning: Pfam scan failed: {e}", file=sys.stderr)
 
+        # Save local structural proteins
+        if all_prots:
+            seq_out = os.path.join(seqs_dir, "neighborhood_proteins.faa")
+            write_fasta(seq_out, all_prots)
+
         # Build GenBank files for clinker
         from Bio.SeqRecord import SeqRecord
         from Bio.Seq import Seq
@@ -337,7 +347,7 @@ def run_synteny(cfg, synteny_dir, tree_dir, scan_df, search_df, hmm_keep, force=
                 sf = SeqFeature(loc, type="CDS", id=uid, qualifiers=qualifiers)
                 rec.features.append(sf)
             
-            gbk_path = os.path.join(hmm_out_dir, f"{genome}.gbk")
+            gbk_path = os.path.join(anno_dir, f"{genome}.gbk")
             with open(gbk_path, "w") as outf:
                 SeqIO.write(rec, outf, "genbank")
             gbk_files.append(gbk_path)
