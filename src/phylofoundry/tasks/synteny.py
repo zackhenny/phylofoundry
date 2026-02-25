@@ -179,12 +179,10 @@ def run_synteny(cfg, synteny_dir, tree_dir, scan_df, search_df, hmm_keep, force=
         return
 
     # Check for clinker availability
-    try:
-        import clinker
-    except ImportError as e:
+    if not shutil.which("clinker"):
         import sys
-        print(f"[synteny] FAILED: clinker is not installed or could not be imported: {e}", file=sys.stderr)
-        print("[synteny] Install with: pip install clinker-vis", file=sys.stderr)
+        print("[synteny] FAILED: clinker command line tool is not installed or not in PATH.", file=sys.stderr)
+        print("[synteny] Install with: pip install clinker-py", file=sys.stderr)
         return
 
     gbk_dir = syn_cfg.get("gbk_dir")
