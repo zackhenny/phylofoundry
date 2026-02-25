@@ -21,6 +21,7 @@ dependencies:
   - diamond
   - mmseqs2
   - hyphy
+  - clinker-py
   - pip
   - pip:
     - fair-esm
@@ -28,5 +29,4 @@ dependencies:
     - torch
     - streamlit
     - bqplot
-    - clinker-vis
     - .  # Install the current package in editable mode
