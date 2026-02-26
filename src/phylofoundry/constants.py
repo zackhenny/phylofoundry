@@ -108,7 +108,12 @@ DEFAULT_CONFIG = {
         "enabled": False,
         "run_hyphy": False,
         "hyphy_bin": "hyphy",
-        "hyphy_tests": "RELAX,aBSREL,MEME"
+        "hyphy_tests": "RELAX,aBSREL,MEME",
+        "hyphy_args": {
+            "MEME": ["--branches", "All"],
+            "aBSREL": ["--branches", "All"],
+            "RELAX": ["--test", "Test"]
+        }
     },
     "motifs": {
         "enabled": False,

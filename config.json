@@ -1,20 +1,20 @@
 {
     "inputs": {
-        "faa_dir": "/project2/thrash_89/zjhenning/proteomes",
-        "hmm_input": "/project2/thrash_89/zjhenning/hmms",
-        "cds_dir": "/project2/thrash_89/zjhenning/cds",
+        "faa_dir": null,
+        "hmm_input": null,
+        "cds_dir": null,
         "gtdb_dir": null,
         "taxonomy_file": null,
         "pfam_dir": null
     },
     "output": {
-        "outdir": "/project2/thrash_89/zjhenning/out/hmm_run01"
+        "outdir": null
     },
     "resources": {
-        "cpu": 64
+        "cpu": 8
     },
     "workflow": {
-        "start_at": "prep",
+        "start_at": null,
         "stop_after": null,
         "force": false,
         "hmm_manifest": null
@@ -25,32 +25,23 @@
     },
     "filtering": {
         "scores_tsv": null,
-        "global_min_score": 30.0,
-        "min_coverage": 0.6,
+        "global_min_score": 25.0,
+        "min_coverage": 0.5,
         "keep_tbl": false
     },
     "phylo": {
-        "mafft": true,
+        "mafft": false,
         "also_mafft": false,
         "mafft_for_tree": false,
+        "mafft_mode": "auto",
         "no_trim_hmmalign": false,
         "skip_clipkit": false,
         "no_asr": false,
         "iq_boot": 1000,
         "use_hmmsearch_alignment": false,
         "keep_all_hits": false,
-        "combined_tree": false
-    },
-    "synteny": {
-        "enabled": false,
-        "gbk_dir": null,
-        "gff_dir": null,
-        "window_genes": 10,
-        "similarity": {
-            "method": "diamond",
-            "min_identity": 30,
-            "min_bitscore": 50
-        }
+        "combined_tree": false,
+        "iqtree_bin": "iqtree"
     },
     "embeddings": {
         "enabled": false,
@@ -67,8 +58,8 @@
     },
     "curate": {
         "enabled": false,
-        "use_esm_filter": true,
-        "use_treeshrink": true
+        "use_treeshrink": true,
+        "use_esm_filter": true
     },
     "post": {
         "enabled": false,
@@ -77,6 +68,29 @@
         "compute_kl": false,
         "clades_tsv": null,
         "kl_pairs": null
+    },
+    "synteny": {
+        "enabled": false,
+        "gbk_dir": null,
+        "gff_dir": null,
+        "genome_fasta_dir": null,
+        "window_genes": 10,
+        "max_hits_per_hmm": 50,
+        "dedup_by_genome": true,
+        "prefer_best_hit": true,
+        "protein_id_field": [
+            "ID",
+            "protein_id",
+            "locus_tag"
+        ],
+        "gene_label_field": [
+            "gene",
+            "product",
+            "Name",
+            "locus_tag"
+        ],
+        "plot_width": 14,
+        "include_tree": true
     },
     "codon": {
         "enabled": false,
