@@ -169,7 +169,6 @@ def load_gff_neighborhood(gff_path, protein_id, window_genes, protein_id_fields,
         })
         
     return neighborhood, None
-    return neighborhood
 
 # Removed custom diamond functions - using pygenomeviz builtin
 
@@ -187,6 +186,12 @@ def run_synteny(cfg, synteny_dir, tree_dir, scan_df, search_df, hmm_keep, force=
         print("[synteny] FAILED: clinker command line tool is not installed or not in PATH.", file=sys.stderr)
         print("[synteny] Install with: pip install clinker-py", file=sys.stderr)
         return
+
+    # Check for pgv-mmseqs availability
+    if not shutil.which("pgv-mmseqs"):
+        import sys
+        print("[synteny] WARNING: pgv-mmseqs command line tool is not installed or not in PATH. pyGenomeViz plot will be skipped.", file=sys.stderr)
+        print("[synteny] Install with: pip install pygenomeviz", file=sys.stderr)
 
     gbk_dir = syn_cfg.get("gbk_dir")
     gff_dir = syn_cfg.get("gff_dir")
@@ -372,13 +377,29 @@ def run_synteny(cfg, synteny_dir, tree_dir, scan_df, search_df, hmm_keep, force=
             subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
             print(f"    Saved Clinker plot: {html_out}")
             
-            # Optionally clean up intermediate genbanks here, uncomment if preferred
-            # for f in gbk_files:
-            #     os.remove(f)
         except Exception as e:
             import sys
             import traceback
-            print(f"    Plotting failed for {hmm}: {e}", file=sys.stderr)
+            print(f"    Clinker plotting failed for {hmm}: {e}", file=sys.stderr)
             traceback.print_exc()
+
+        # Run pgv-mmseqs
+        if shutil.which("pgv-mmseqs"):
+            print("    Generating pyGenomeViz synteny plot (pgv-mmseqs)...")
+            try:
+                pgv_out_dir = os.path.join(hmm_out_dir, "pgv_out")
+                pgv_cmd = ["pgv-mmseqs", *gbk_files, "-o", pgv_out_dir]
+                # Default behavior is to launch the image to outdir/result.png (or pdf)
+                subprocess.run(pgv_cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+                print(f"    Saved pyGenomeViz plot: {pgv_out_dir}")
+            except Exception as e:
+                import sys
+                import traceback
+                print(f"    pyGenomeViz plotting failed for {hmm}: {e}", file=sys.stderr)
+                traceback.print_exc()
+            
+            # Optionally clean up intermediate genbanks here, uncomment if preferred
+            # for f in gbk_files:
+            #     os.remove(f)
 
     return

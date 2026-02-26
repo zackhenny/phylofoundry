@@ -29,4 +29,5 @@ dependencies:
     - torch
     - streamlit
     - bqplot
+    - pygenomeviz
     - .  # Install the current package in editable mode
