@@ -16,10 +16,11 @@ def load_genbank_neighborhood(gbk_path, protein_id, window_genes, protein_id_fie
     """
     Scan a GenBank file for a specific protein_id (or locus_tag) and extract
     the neighborhood of +/- window_genes.
-    Returns: list of dicts (feature info), focal_feature
+    Returns: list of dicts (feature info), contig_seq (Bio.Seq object)
     """
     neighborhood = []
     focal_feature = None
+    contig_seq = None
     
     try:
         # We assume one record per file usually, or iterate all
@@ -81,12 +82,12 @@ def load_genbank_neighborhood(gbk_path, protein_id, window_genes, protein_id_fie
                         "is_focal": (f is focal_feature)
                     })
                 
-                return neighborhood
+                return neighborhood, record.seq
                 
     except Exception as e:
         import sys
         print(f"[synteny] Warning: Failed to parse GenBank {gbk_path}: {e}", file=sys.stderr)
-    return []
+    return [], None
 
 def parse_gff_line(line):
     parts = line.strip().split("\t")
@@ -128,7 +129,7 @@ def load_gff_neighborhood(gff_path, protein_id, window_genes, protein_id_fields,
         if target_idx != -1: break
     
     if target_idx == -1:
-        return []
+        return [], None
 
     # 3. Extract window
     start_i = max(0, target_idx - window_genes)
@@ -166,6 +167,8 @@ def load_gff_neighborhood(gff_path, protein_id, window_genes, protein_id_fields,
             "translation": "", # Filled later if possible
             "is_focal": (current_idx == target_idx)
         })
+        
+    return neighborhood, None
     return neighborhood
 
 # Removed custom diamond functions - using pygenomeviz builtin
@@ -248,17 +251,18 @@ def run_synteny(cfg, synteny_dir, tree_dir, scan_df, search_df, hmm_keep, force=
             protein = r["protein"]
             
             found_feats = []
+            contig_seq = None
             if gbk_dir:
                 base = normalize_genome_id(genome)
                 cand = glob.glob(os.path.join(gbk_dir, f"{base}*.gb*"))
                 if cand:
-                    found_feats = load_genbank_neighborhood(cand[0], protein, window, fields_id, fields_label)
+                    found_feats, contig_seq = load_genbank_neighborhood(cand[0], protein, window, fields_id, fields_label)
             
             if not found_feats and gff_dir:
                 base = normalize_genome_id(genome)
                 cand = glob.glob(os.path.join(gff_dir, f"{base}*.gff*"))
                 if cand:
-                    found_feats = load_gff_neighborhood(cand[0], protein, window, fields_id, fields_label)
+                    found_feats, contig_seq = load_gff_neighborhood(cand[0], protein, window, fields_id, fields_label)
             
             if not found_feats:
                 continue
@@ -271,7 +275,7 @@ def run_synteny(cfg, synteny_dir, tree_dir, scan_df, search_df, hmm_keep, force=
                     all_prots[uid] = f["translation"]
                 track_feats.append(f)
             
-            neighborhoods.append((genome, track_feats))
+            neighborhoods.append((genome, track_feats, contig_seq))
 
         if not neighborhoods:
             print(f"    No neighborhoods extracted for {hmm}.")
@@ -313,14 +317,21 @@ def run_synteny(cfg, synteny_dir, tree_dir, scan_df, search_df, hmm_keep, force=
         from Bio.SeqFeature import SeqFeature, FeatureLocation
         
         gbk_files = []
-        for genome, feats in neighborhoods:
+        for genome, feats, contig_seq in neighborhoods:
             if not feats: continue
             min_start = min(f["start"] for f in feats)
             max_end = max(f["end"] for f in feats)
             size = max_end - min_start + 1
             
+            if contig_seq is not None:
+                nucl_seq = contig_seq[min_start:max_end]
+                if isinstance(nucl_seq, str):
+                    nucl_seq = Seq(nucl_seq)
+            else:
+                nucl_seq = Seq("N" * size)
+            
             # Using molecule_type="DNA" allows writing out to genbank
-            rec = SeqRecord(Seq("N" * size), id=genome, name=genome[:16], description=f"Neighborhood for {hmm}", annotations={"molecule_type": "DNA"})
+            rec = SeqRecord(nucl_seq, id=genome, name=genome[:16], description=f"Neighborhood for {hmm}", annotations={"molecule_type": "DNA"})
             
             for f in feats:
                 strand = 1 if str(f["strand"]) in ["1", "+"] else -1
@@ -343,6 +354,8 @@ def run_synteny(cfg, synteny_dir, tree_dir, scan_df, search_df, hmm_keep, force=
                 
                 if product_str and product_str != "NA":
                     qualifiers["product"] = [product_str]
+                    qualifiers["gene"] = [product_str]  # Add as gene so clinker puts it on the figure
+                    qualifiers["name"] = [product_str]
 
                 sf = SeqFeature(loc, type="CDS", id=uid, qualifiers=qualifiers)
                 rec.features.append(sf)
