@@ -128,9 +128,6 @@ def discover_motifs(cfg, fasta_dir, summary_dir, hmm_keep, force=False):
 
     standard_clade = disc_cfg.get("standard_clade", None)
     novel_clade = disc_cfg.get("novel_clade", None)
-
-    standard_clade = int(standard_clade)
-    novel_clade = int(novel_clade)
     kmer_size = disc_cfg.get("kmer_size", 5)
     top_n = disc_cfg.get("top_n_peaks", 20)
     n_layers = disc_cfg.get("attention_layers", 4)

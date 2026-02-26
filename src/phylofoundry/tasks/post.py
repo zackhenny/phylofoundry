@@ -33,6 +33,7 @@ def msa_from_fasta_dict(aln_seqs: dict):
         # Replace degenerate characters known to break skbio conservation metrics
         for c in "XBZJUOxbzjuo?*":
             seq = seq.replace(c, "-")
+        seq = seq.upper()
         seqs.append(Protein(seq, metadata={"id": tip}))
     return TabularMSA(seqs)
 

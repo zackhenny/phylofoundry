@@ -37,7 +37,7 @@ def _clean_aa_alignment(aln_seqs: dict) -> dict:
     """Strip stop codons from all sequences in an AA alignment dict."""
     cleaned = {}
     for k, v in aln_seqs.items():
-        cleaned[k] = _strip_stop_from_protein(v)
+        cleaned[k] = _strip_stop_from_protein(v).upper()
     return cleaned
 
 

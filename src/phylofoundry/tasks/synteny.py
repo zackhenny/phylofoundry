@@ -280,7 +280,7 @@ def run_synteny(cfg, synteny_dir, tree_dir, scan_df, search_df, hmm_keep, force=
                     all_prots[uid] = f["translation"]
                 track_feats.append(f)
             
-            neighborhoods.append((genome, track_feats, contig_seq))
+            neighborhoods.append((genome, protein, track_feats, contig_seq))
 
         if not neighborhoods:
             print(f"    No neighborhoods extracted for {hmm}.")
@@ -322,7 +322,7 @@ def run_synteny(cfg, synteny_dir, tree_dir, scan_df, search_df, hmm_keep, force=
         from Bio.SeqFeature import SeqFeature, FeatureLocation
         
         gbk_files = []
-        for genome, feats, contig_seq in neighborhoods:
+        for genome, protein, feats, contig_seq in neighborhoods:
             if not feats: continue
             min_start = min(f["start"] for f in feats)
             max_end = max(f["end"] for f in feats)
@@ -335,8 +335,14 @@ def run_synteny(cfg, synteny_dir, tree_dir, scan_df, search_df, hmm_keep, force=
             else:
                 nucl_seq = Seq("N" * size)
             
+            # Make track name unique to support multiple contigs/proteins per genome
+            safe_prot = protein.replace("|", "_").split("~")[-1]
+            track_name = f"{genome}_{safe_prot}"
+            if len(track_name) > 16:
+                track_name = track_name[:16]
+
             # Using molecule_type="DNA" allows writing out to genbank
-            rec = SeqRecord(nucl_seq, id=genome, name=genome[:16], description=f"Neighborhood for {hmm}", annotations={"molecule_type": "DNA"})
+            rec = SeqRecord(nucl_seq, id=f"{genome}_{safe_prot}", name=track_name, description=f"Neighborhood for {hmm}", annotations={"molecule_type": "DNA"})
             
             for f in feats:
                 strand = 1 if str(f["strand"]) in ["1", "+"] else -1
@@ -365,7 +371,7 @@ def run_synteny(cfg, synteny_dir, tree_dir, scan_df, search_df, hmm_keep, force=
                 sf = SeqFeature(loc, type="CDS", id=uid, qualifiers=qualifiers)
                 rec.features.append(sf)
             
-            gbk_path = os.path.join(anno_dir, f"{genome}.gbk")
+            gbk_path = os.path.join(anno_dir, f"{genome}_{safe_prot}.gbk")
             with open(gbk_path, "w") as outf:
                 SeqIO.write(rec, outf, "genbank")
             gbk_files.append(gbk_path)
