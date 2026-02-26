@@ -105,9 +105,7 @@ def run_codon(cfg, tree_dir, clipkit_dir, aln_dir, codon_dir, hmm_keep, force=Fa
         aln_seqs_raw = read_fasta(aa_aln_fp)
         aln_seqs = _clean_aa_alignment(aln_seqs_raw)
 
-        # Write cleaned AA alignment to temp file for pal2nal
         cleaned_aa_fp = os.path.join(codon_dir, f"{hmm}.cleaned_aa.faa")
-        write_fasta(cleaned_aa_fp, aln_seqs)
 
         # ── Find matching CDS for each tip ───────────────────────────────
         cds_subset = {}
@@ -187,6 +185,11 @@ def run_codon(cfg, tree_dir, clipkit_dir, aln_dir, codon_dir, hmm_keep, force=Fa
 
         cds_subset_fp = os.path.join(codon_dir, f"{hmm}.cds.fna")
         write_fasta(cds_subset_fp, ordered_cds_subset)
+
+        # Write cleaned AA alignment with only the sequences that have a matching CDS entry,
+        # so that pal2nal receives files with the exact same set of sequences in the same order.
+        matched_aa_seqs = {tip: aln_seqs[tip] for tip in ordered_cds_subset}
+        write_fasta(cleaned_aa_fp, matched_aa_seqs)
 
         # ── Run pal2nal ──────────────────────────────────────────────────
         try:

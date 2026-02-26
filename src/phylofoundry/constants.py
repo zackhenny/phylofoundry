@@ -112,7 +112,7 @@ DEFAULT_CONFIG = {
         "hyphy_args": {
             "MEME": ["--branches", "All"],
             "aBSREL": ["--branches", "All"],
-            "RELAX": ["--test", "Test"]
+            "RELAX": ["--test", "Test", "--reference", "Reference"]
         }
     },
     "motifs": {

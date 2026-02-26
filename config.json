@@ -114,7 +114,9 @@
             ],
             "RELAX": [
                 "--test",
-                "Test"
+                "Test",
+                "--reference",
+                "Reference"
             ]
         }
     },
