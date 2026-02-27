@@ -1,1 +1,21 @@
-from . import prep, hmmer, extract, embed, phylo, post, synteny, codon, hyphy, asr, motifs, discover, curate
+"""Task modules for the PhyloFoundry pipeline.
+
+Keep package import lightweight: individual task modules are imported lazily
+where they are needed to avoid importing optional heavy dependencies at import time.
+"""
+
+__all__ = [
+    "prep",
+    "hmmer",
+    "extract",
+    "embed",
+    "phylo",
+    "post",
+    "synteny",
+    "codon",
+    "hyphy",
+    "asr",
+    "motifs",
+    "discover",
+    "curate",
+]

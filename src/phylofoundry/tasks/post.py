@@ -7,6 +7,7 @@ import math
 import shutil
 import subprocess
 import tempfile
+import numpy as np
 import pandas as pd
 from collections import defaultdict, Counter
 from ..utils.bio import read_fasta
@@ -230,6 +231,220 @@ def _write_detected_clades(summary_dir, clades):
         pd.DataFrame(rows).to_csv(os.path.join(summary_dir, "detected_clades.tsv"), sep="\t", index=False)
 
 
+def _load_embedding_coords(emb_dir, hmm, n_pcs):
+    """Load per-tip embedding coordinates for one HMM, preferring precomputed PCA."""
+    pca_fp = os.path.join(emb_dir, f"{hmm}.pca.tsv")
+    if os.path.exists(pca_fp):
+        df = pd.read_csv(pca_fp, sep="\t", dtype={"tip": str})
+        pc_cols = [c for c in df.columns if c.startswith("PC")]
+        if "tip" not in df.columns or not pc_cols:
+            return None
+        use_cols = pc_cols[:max(1, int(n_pcs))]
+        M = df[use_cols].apply(pd.to_numeric, errors="coerce").to_numpy(dtype=float)
+        keep = ~np.isnan(M).any(axis=1)
+        return dict(zip(df.loc[keep, "tip"].astype(str), M[keep]))
+
+    vec_fp = os.path.join(emb_dir, f"{hmm}.vectors.tsv")
+    if os.path.exists(vec_fp):
+        from sklearn.decomposition import PCA
+
+        df = pd.read_csv(vec_fp, sep="\t", dtype={"tip": str})
+        vec_cols = [c for c in df.columns if c.startswith("d")]
+        if "tip" not in df.columns or not vec_cols:
+            return None
+        X = df[vec_cols].apply(pd.to_numeric, errors="coerce").to_numpy(dtype=float)
+        keep = ~np.isnan(X).any(axis=1)
+        X = X[keep]
+        tips = df.loc[keep, "tip"].astype(str).tolist()
+        if X.shape[0] < 2:
+            return None
+        ncomp = min(max(2, int(n_pcs)), X.shape[0] - 1, X.shape[1])
+        Z = PCA(n_components=ncomp, random_state=0).fit_transform(X)
+        return dict(zip(tips, Z))
+
+    return None
+
+
+def _parse_support(node):
+    v = getattr(node, "support", None)
+    if v is not None:
+        try:
+            return float(v)
+        except (TypeError, ValueError):
+            pass
+    if node.name is not None:
+        try:
+            return float(str(node.name))
+        except (TypeError, ValueError):
+            return None
+    return None
+
+
+def _distance_fn(metric):
+    metric = str(metric or "euclidean").strip().lower()
+
+    def euclidean(A, b):
+        return np.sqrt(((A - b) ** 2).sum(axis=1))
+
+    def cosine(A, b):
+        A_norm = np.linalg.norm(A, axis=1)
+        b_norm = np.linalg.norm(b)
+        denom = np.clip(A_norm * max(b_norm, 1e-12), 1e-12, None)
+        return 1.0 - np.clip((A @ b) / denom, -1.0, 1.0)
+
+    return cosine if metric == "cosine" else euclidean
+
+
+def _point_distance(metric, a, b):
+    if metric == "cosine":
+        na = np.linalg.norm(a)
+        nb = np.linalg.norm(b)
+        denom = max(na * nb, 1e-12)
+        return float(1.0 - np.clip(np.dot(a, b) / denom, -1.0, 1.0))
+    return float(np.linalg.norm(a - b))
+
+
+def _approx_tree_diameter(node):
+    tips = list(node.tips())
+    if len(tips) < 2:
+        return 0.0
+    try:
+        a = tips[0]
+        b = max(tips, key=lambda t: a.distance(t))
+        c = max(tips, key=lambda t: b.distance(t))
+        return float(b.distance(c))
+    except Exception:
+        return None
+
+
+def _detect_tree_embed_clades(tree_dir, emb_dir, post_cfg, hmm_keep=None):
+    """Detect clades by embedding shift across internal tree nodes."""
+    support_min = float(post_cfg.get("embedtree_support_min", 80))
+    min_size = int(post_cfg.get("embedtree_min_size", 5))
+    max_size_cfg = post_cfg.get("embedtree_max_size", 5000)
+    max_size = None if max_size_cfg in [None, "", 0] else int(max_size_cfg)
+    top_k = int(post_cfg.get("embedtree_top_k", 10))
+    n_pcs = int(post_cfg.get("embedtree_pcs", 10))
+    distance = str(post_cfg.get("embedtree_distance", "euclidean")).strip().lower()
+    allow_nested = bool(post_cfg.get("embedtree_allow_nested", False))
+    emit_all = bool(post_cfg.get("embedtree_emit_all", False))
+    eps = 1e-8
+
+    per_hmm_selected = []
+    score_rows = []
+
+    tree_files = sorted(glob.glob(os.path.join(tree_dir, "*.treefile")))
+    if hmm_keep is not None:
+        tree_files = [fp for fp in tree_files if os.path.basename(fp).split(".")[0] in hmm_keep]
+
+    for tree_fp in tree_files:
+        hmm = os.path.basename(tree_fp).split(".")[0]
+        coords = _load_embedding_coords(emb_dir, hmm, n_pcs=n_pcs)
+        if not coords:
+            continue
+
+        tree = tree_load(tree_fp)
+        tip_names = {n.name for n in tree.tips() if n.name is not None}
+        shared = tip_names.intersection(coords.keys())
+        if not shared:
+            continue
+
+        dist_to_centroid = _distance_fn(distance)
+        candidates = []
+        traversal = 0
+
+        for node in tree.preorder(include_self=True):
+            if node.is_tip():
+                continue
+            traversal += 1
+            tips = [t.name for t in node.tips() if t.name in shared]
+            size = len(tips)
+            if size < min_size:
+                continue
+            if max_size is not None and size > max_size:
+                continue
+
+            support = _parse_support(node)
+            if support is not None and support < support_min:
+                continue
+
+            children = [c for c in node.children if not c.is_tip() or c.name in shared]
+            if len(children) < 2:
+                continue
+            child_tips = []
+            for child in children:
+                ct = [t.name for t in child.tips() if t.name in shared]
+                if ct:
+                    child_tips.append(ct)
+            if len(child_tips) < 2:
+                continue
+            child_tips.sort(key=len, reverse=True)
+            left_tips, right_tips = child_tips[0], child_tips[1]
+
+            M = np.vstack([coords[t] for t in tips])
+            centroid = M.mean(axis=0)
+            within_dispersion = float(np.median(dist_to_centroid(M, centroid)))
+
+            L = np.vstack([coords[t] for t in left_tips])
+            R = np.vstack([coords[t] for t in right_tips])
+            lc = L.mean(axis=0)
+            rc = R.mean(axis=0)
+            child_sep = _point_distance(distance, lc, rc)
+            left_within = float(np.median(dist_to_centroid(L, lc)))
+            right_within = float(np.median(dist_to_centroid(R, rc)))
+            pooled = (left_within + right_within) / 2.0
+            effect = float(child_sep / (pooled + eps))
+            diameter = _approx_tree_diameter(node)
+
+            node_label = f"{hmm}|node_{node.id}"
+            score_rows.append({
+                "node_id": node_label,
+                "clade_size": int(size),
+                "support_min": support,
+                "within_dispersion": within_dispersion,
+                "child_separation": child_sep,
+                "effect_size": effect,
+                "tree_diameter": diameter,
+                "hmm_name": hmm,
+            })
+            candidates.append({
+                "node": node,
+                "tips": tips,
+                "effect_size": effect,
+                "traversal": traversal,
+                "hmm": hmm,
+            })
+
+        candidates.sort(key=lambda x: (-x["effect_size"], x["traversal"]))
+        chosen = []
+        chosen_ids = set()
+        for cand in candidates:
+            node = cand["node"]
+            if not allow_nested:
+                p = node.parent
+                blocked = False
+                while p is not None:
+                    if p.id in chosen_ids:
+                        blocked = True
+                        break
+                    p = p.parent
+                if blocked:
+                    continue
+            chosen.append(cand)
+            chosen_ids.add(node.id)
+            if not emit_all and len(chosen) >= top_k:
+                break
+
+        per_hmm_selected.extend(chosen)
+
+    per_hmm_selected.sort(key=lambda x: (-x["effect_size"], x["hmm"], x["traversal"]))
+    clades = {}
+    for i, sel in enumerate(per_hmm_selected, start=1):
+        cname = f"embed__C{i:05d}"
+        clades[cname] = sel["tips"]
+    return clades, score_rows
+
+
 
 def run_post(cfg, tree_dir, clipkit_dir, aln_dir, post_dir, summary_dir, hmm_keep, force=False):
     print("\n[post] scikit-bio post-processing...")
@@ -266,7 +481,9 @@ def run_post(cfg, tree_dir, clipkit_dir, aln_dir, post_dir, summary_dir, hmm_kee
                     print(f"[post] Wrote {out_fp}")
     
     post_cfg = cfg.get("post", {})
+    emb_dir = os.path.join(os.path.dirname(summary_dir), "embeddings")
     clades = None
+    embed_node_scores = []
     if post_cfg.get("clades_tsv", None):
         clades = load_clades_tsv(post_cfg["clades_tsv"])
     else:
@@ -279,8 +496,21 @@ def run_post(cfg, tree_dir, clipkit_dir, aln_dir, post_dir, summary_dir, hmm_kee
                 post_cfg.get("treecluster_threshold", 0.045),
                 post_cfg.get("treecluster_method", "max_clade"),
             )
+        elif detect_method == "tree_embed":
+            clades, embed_node_scores = _detect_tree_embed_clades(
+                tree_dir,
+                emb_dir,
+                post_cfg,
+                hmm_keep=hmm_keep,
+            )
         if clades:
             _write_detected_clades(summary_dir, clades)
+        if embed_node_scores:
+            pd.DataFrame(embed_node_scores).to_csv(
+                os.path.join(summary_dir, "node_scores.embedtree.tsv"),
+                sep="\t",
+                index=False,
+            )
 
     if post_cfg.get("compute_kl", False) and not clades:
         raise SystemExit("post.compute_kl requires post.clades_tsv")

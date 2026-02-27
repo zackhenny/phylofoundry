@@ -135,7 +135,11 @@ The pipeline creates a structured `results` directory:
 | `synteny/<HMM>/synteny.<HMM>.pdf` | Synteny plot of gene neighborhoods. | PDF |
 | `synteny/<HMM>/neighborhood_proteins.faa` | Sequences of all genes in the extracted neighborhoods. | FASTA |
 | `codon_alignments/<HMM>.codon.fasta` | Codon-aware alignment (if enabled). | FASTA |
-| `summary/hyphy/<HMM>.<test>.json` | Selection test results (e.g., RELAX, MEME). | JSON |
+| `summary/hyphy/<HMM>.<test>.json` | Legacy single-run HyPhy output when clade-aware mode is disabled or no clades are detected. | JSON |
+| `summary/hyphy/<HMM>/<TEST>/<CLADE>.json` | Clade-aware HyPhy output (auto-generated from `summary/detected_clades.tsv`). | JSON |
+| `summary/hyphy/<HMM>/<TEST>/<CLADE>.log` | Captured HyPhy run log for each clade-aware run. | LOG |
+| `summary/hyphy/clade_runs.tsv` | QC manifest of all clade-aware HyPhy attempts and output paths. | TSV |
+| `trees_labeled/<HMM>/<CLADE>.<TEST>.nwk` | Auto-generated labeled trees consumed by HyPhy (e.g., `{FG}`, `{test}`, `{reference}`). | Newick |
 
 ---
 
@@ -246,8 +250,8 @@ The pipeline runs as a series of sequential **Steps**. You can control execution
 -   **Output**: `codon_alignments/<hmm_name>.codon.fasta`.
 
 ### Step 8: `hyphy` (Optional)
--   **Action**: Runs selection tests (e.g., RELAX, aBSREL, MEME) on the codon alignments and trees.
--   **Output**: `summary/hyphy/<hmm_name>.<test>.json`.
+-   **Action**: Runs selection tests (e.g., RELAX, aBSREL, MEME) on codon alignments and trees. If `summary/detected_clades.tsv` exists and `hyphy.use_detected_clades=true`, HyPhy automatically builds labeled trees and runs per-clade analyses (no manual RELAX labeling required).
+-   **Output**: Legacy `summary/hyphy/<hmm_name>.<test>.json` plus clade-aware outputs under `summary/hyphy/<hmm_name>/<TEST>/<clade_name>.json` and labeled trees under `trees_labeled/<hmm_name>/`.
 
 ### Step 9: `score_motifs` (Optional)
 -   **Action**: Passes sequences through ESM-2 with `output_attentions=True`, extracts attention weights at user-specified motif positions.
@@ -404,10 +408,20 @@ Post-processing metrics.
 -   `enabled`: Set to `true` to run.
 -   `compute_conservation`: (Default: `false`) Calculate conservation scores.
 -   `clades_tsv`: (Optional) TSV mapping tips to groups for dispersion analysis.
--   `detect_clades_method`: (Optional) `taxonomy` or `treecluster` to auto-generate `summary/detected_clades.tsv`.
+-   `detect_clades_method`: (Optional) `taxonomy`, `treecluster`, or `tree_embed` to auto-generate `summary/detected_clades.tsv`.
 -   `taxonomy_clade_level`: (Default: `"genus"`) Taxonomic rank used when `detect_clades_method=taxonomy`.
 -   `treecluster_threshold`: (Default: `0.045`) Distance threshold passed to TreeCluster.
 -   `treecluster_method`: (Default: `"max_clade"`) TreeCluster clustering method.
+-   `embedtree_support_min`: (Default: `80`) Minimum internal-node support for candidate splits when `detect_clades_method=tree_embed`.
+-   `embedtree_min_size`: (Default: `5`) Minimum tips in a candidate clade.
+-   `embedtree_max_size`: (Default: `5000`) Maximum tips in a candidate clade (`null` to disable).
+-   `embedtree_top_k`: (Default: `10`) Maximum non-overlapping embedding-shift clades emitted per HMM.
+-   `embedtree_pcs`: (Default: `10`) Number of embedding PCs used for split scoring.
+-   `embedtree_distance`: (Default: `"euclidean"`) Distance metric for centroid and dispersion calculations (`"euclidean"` or `"cosine"`).
+-   `embedtree_allow_nested`: (Default: `false`) If `true`, descendants of selected splits may also be emitted.
+-   `embedtree_require_monophyly`: (Default: `true`) Enforces clades to be internal tree nodes (monophyletic by construction).
+-   `embedtree_emit_all`: (Default: `false`) If `true`, emit all accepted nodes instead of truncating at `embedtree_top_k`.
+-   `summary/node_scores.embedtree.tsv`: Per-node QC table containing support, dispersion, separation, effect size, and tree diameter for tree-embedding scoring.
 -   `compute_kl`: If enabled and no explicit `kl_pairs`, computes `clade vs all other tips` for each detected clade.
 
 ### `codon`
@@ -419,3 +433,8 @@ Codon alignments.
 Selection tests.
 -   `enabled`: Set to `true` to run.
 -   `hyphy_tests`: (Default: `"RELAX,aBSREL,MEME"`) List of tests to run.
+-   `use_detected_clades`: (Default: `true`) Auto-load `summary/detected_clades.tsv` for clade-aware HyPhy runs.
+-   `min_clade_size`: (Default: `4`) Skip per-HMM clades smaller than this number of tips.
+-   `label_mode`: (Default: `"crown"`) Branch-label strategy for clade foreground (`"crown"` or `"stem"`).
+-   `relax_label_reference`: (Default: `true`) Add `{reference}` labels to non-foreground branches for RELAX.
+-   `hyphy_args`: Existing per-test args are still supported; in clade-aware mode, `aBSREL`/`BUSTED` branch labels are forced to `FG` and RELAX labels are synchronized to `test`/`reference`.
