@@ -512,8 +512,20 @@ def run_post(cfg, tree_dir, clipkit_dir, aln_dir, post_dir, summary_dir, hmm_kee
                 index=False,
             )
 
+    if not clades:
+        detected_clades_fp = os.path.join(summary_dir, "detected_clades.tsv")
+        if os.path.exists(detected_clades_fp):
+            try:
+                clades = load_clades_tsv(detected_clades_fp)
+                print(f"[post] Loaded clades from {detected_clades_fp}")
+            except Exception:
+                clades = None
+
     if post_cfg.get("compute_kl", False) and not clades:
-        raise SystemExit("post.compute_kl requires post.clades_tsv")
+        raise SystemExit(
+            "post.compute_kl requires clades from post.clades_tsv, "
+            "post.detect_clades_method, or summary/detected_clades.tsv"
+        )
 
     kl_pairs = []
     has_manual_kl_pairs = bool(post_cfg.get("kl_pairs", None))
