@@ -142,6 +142,8 @@ DEFAULT_CONFIG = {
     },
     "discover": {
         "enabled": False,
+        "standard_clade": None,   # optional: manually specify the reference clade ID/name
+        "novel_clade": None,       # optional: manually specify the focal clade ID/name
         "kmer_size": 5,
         "top_n_peaks": 20,
         "attention_layers": 4,

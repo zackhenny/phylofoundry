@@ -124,6 +124,14 @@ def score_motifs(cfg, fasta_dir, summary_dir, hmm_keep, force=False):
             key = row.get("protein", row.get("seq_id", ""))
             clade_map[key] = str(row.get("cluster_id", ""))
 
+    # Load detected clades from post step if available
+    detected_fp = os.path.join(summary_dir, "detected_clades.tsv")
+    detected_clade_map = {}
+    if os.path.exists(detected_fp):
+        detected_df = pd.read_csv(detected_fp, sep="\t")
+        for _, row in detected_df.iterrows():
+            detected_clade_map[row["tip"]] = row["clade_name"]
+
     # Load ESM model
     emb_cfg = cfg.get("embeddings", {})
     model_name = emb_cfg.get("model", "esm2_t33_650M_UR50D")
@@ -181,6 +189,7 @@ def score_motifs(cfg, fasta_dir, summary_dir, hmm_keep, force=False):
                         "attention_score": 0.0,
                         "motif_present": False,
                         "clade_id": clade_map.get(seq_id, ""),
+                        "detected_clade": detected_clade_map.get(seq_id, ""),
                         "type": seq_type,
                     })
                     continue
@@ -205,6 +214,7 @@ def score_motifs(cfg, fasta_dir, summary_dir, hmm_keep, force=False):
                         "attention_score": score,
                         "motif_present": True,
                         "clade_id": clade_map.get(seq_id, ""),
+                        "detected_clade": detected_clade_map.get(seq_id, ""),
                         "type": seq_type,
                     })
 
