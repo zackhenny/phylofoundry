@@ -20,7 +20,12 @@ def run_extract(cfg, scan_df, search_df, fasta_dir, hmm_keep, proteome_seqs, for
         return hmm_to_seqs
 
     if not phy_cfg.get("keep_all_hits", False):
-        base_df = base_df.sort_values("bitscore", ascending=False).groupby(["genome", "hmm"], as_index=False).head(1)
+        filt_cfg = cfg.get("filtering", {})
+        use_evalue = bool(filt_cfg.get("use_evalue", False))
+        if use_evalue:
+            base_df = base_df.sort_values("evalue", ascending=True).groupby(["genome", "hmm"], as_index=False).head(1)
+        else:
+            base_df = base_df.sort_values("bitscore", ascending=False).groupby(["genome", "hmm"], as_index=False).head(1)
 
     for _, r in base_df.iterrows():
         hmm = r["hmm"]

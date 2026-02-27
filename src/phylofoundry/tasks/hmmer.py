@@ -22,24 +22,36 @@ def parse_tblout_fast(tbl_file):
     except Exception:
         return pd.DataFrame()
 
-def apply_filtering(df, thresholds_map, global_min_score, global_min_cov):
+def apply_filtering(df, thresholds_map, global_min_score, global_min_cov,
+                    max_evalue=None, disable_bitscore_filter=False,
+                    disable_coverage_filter=False):
     if df.empty:
         return df
     df = df.copy()
-    if global_min_cov > 0:
+    if not disable_coverage_filter and global_min_cov > 0:
         df = df[df["coverage"] >= global_min_cov].copy()
-    df["min_score_required"] = global_min_score
-    if thresholds_map:
-        custom_scores = df["hmm"].map(thresholds_map)
-        df["min_score_required"] = custom_scores.fillna(df["min_score_required"])
-    df = df[df["bitscore"] >= df["min_score_required"]].copy()
+    if not disable_bitscore_filter:
+        df["min_score_required"] = global_min_score
+        if thresholds_map:
+            custom_scores = df["hmm"].map(thresholds_map)
+            df["min_score_required"] = custom_scores.fillna(df["min_score_required"])
+        df = df[df["bitscore"] >= df["min_score_required"]].copy()
+    if max_evalue is not None:
+        df = df[df["evalue"] <= max_evalue].copy()
     return df
 
-def best_hits(df):
-    """Find the single best HMM for each (genome, protein) pair by bitscore."""
+def best_hits(df, use_evalue=False):
+    """Find the single best HMM for each (genome, protein) pair.
+
+    When use_evalue=True, rank by e-value ascending (lower is better).
+    Otherwise rank by bitscore descending.
+    """
     if df.empty:
         return pd.DataFrame()
-    df_sorted = df.sort_values(["genome", "protein", "bitscore"], ascending=[True, True, False])
+    if use_evalue:
+        df_sorted = df.sort_values(["genome", "protein", "evalue"], ascending=[True, True, True])
+    else:
+        df_sorted = df.sort_values(["genome", "protein", "bitscore"], ascending=[True, True, False])
     rows = []
     for (genome, prot), chunk in df_sorted.groupby(["genome", "protein"], sort=False):
         best = chunk.iloc[0]
@@ -112,6 +124,11 @@ def run_hmmer(cfg, genomes, faa_dir, hmm_files, hmm_dir, combined_hmm, combined_
     hmmer_cfg = cfg.get("hmmer", {})
     run_scan = hmmer_cfg.get("run_scan", True)
     run_search = hmmer_cfg.get("run_search", True)
+
+    max_evalue = filt_cfg.get("max_evalue", None)
+    use_evalue = bool(filt_cfg.get("use_evalue", False))
+    disable_bitscore_filter = bool(filt_cfg.get("disable_bitscore_filter", False))
+    disable_coverage_filter = bool(filt_cfg.get("disable_coverage_filter", False))
     
     hits_scan_tsv = os.path.join(summary_dir, "hmmscan_hits.filtered.tsv")
     hits_search_tsv = os.path.join(summary_dir, "hmmsearch_hits.filtered.tsv")
@@ -174,7 +191,10 @@ def run_hmmer(cfg, genomes, faa_dir, hmm_files, hmm_dir, combined_hmm, combined_
         scan_df = apply_filtering(
             scan_df, thresholds_map,
             float(filt_cfg["global_min_score"]),
-            float(filt_cfg["min_coverage"])
+            float(filt_cfg["min_coverage"]),
+            max_evalue=max_evalue,
+            disable_bitscore_filter=disable_bitscore_filter,
+            disable_coverage_filter=disable_coverage_filter,
         )
         if not scan_df.empty:
             scan_df.to_csv(hits_scan_tsv, sep="\t", index=False)
@@ -225,7 +245,10 @@ def run_hmmer(cfg, genomes, faa_dir, hmm_files, hmm_dir, combined_hmm, combined_
         search_df = apply_filtering(
             search_df, thresholds_map,
             float(filt_cfg["global_min_score"]),
-            float(filt_cfg["min_coverage"])
+            float(filt_cfg["min_coverage"]),
+            max_evalue=max_evalue,
+            disable_bitscore_filter=disable_bitscore_filter,
+            disable_coverage_filter=disable_coverage_filter,
         )
         if not search_df.empty:
             search_df.to_csv(hits_search_tsv, sep="\t", index=False)
@@ -235,10 +258,10 @@ def run_hmmer(cfg, genomes, faa_dir, hmm_files, hmm_dir, combined_hmm, combined_
         best_df = pd.read_csv(best_hits_tsv, sep="\t")
     else:
         if not scan_df.empty:
-            best_df = best_hits(scan_df)
+            best_df = best_hits(scan_df, use_evalue=use_evalue)
             best_df["source"] = "hmmscan"
         elif not search_df.empty:
-            best_df = best_hits(search_df)
+            best_df = best_hits(search_df, use_evalue=use_evalue)
             best_df["source"] = "hmmsearch"
         else:
             best_df = pd.DataFrame()
