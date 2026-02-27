@@ -404,10 +404,20 @@ Post-processing metrics.
 -   `enabled`: Set to `true` to run.
 -   `compute_conservation`: (Default: `false`) Calculate conservation scores.
 -   `clades_tsv`: (Optional) TSV mapping tips to groups for dispersion analysis.
--   `detect_clades_method`: (Optional) `taxonomy` or `treecluster` to auto-generate `summary/detected_clades.tsv`.
+-   `detect_clades_method`: (Optional) `taxonomy`, `treecluster`, or `tree_embed` to auto-generate `summary/detected_clades.tsv`.
 -   `taxonomy_clade_level`: (Default: `"genus"`) Taxonomic rank used when `detect_clades_method=taxonomy`.
 -   `treecluster_threshold`: (Default: `0.045`) Distance threshold passed to TreeCluster.
 -   `treecluster_method`: (Default: `"max_clade"`) TreeCluster clustering method.
+-   `embedtree_support_min`: (Default: `80`) Minimum internal-node support for candidate splits when `detect_clades_method=tree_embed`.
+-   `embedtree_min_size`: (Default: `5`) Minimum tips in a candidate clade.
+-   `embedtree_max_size`: (Default: `5000`) Maximum tips in a candidate clade (`null` to disable).
+-   `embedtree_top_k`: (Default: `10`) Maximum non-overlapping embedding-shift clades emitted per HMM.
+-   `embedtree_pcs`: (Default: `10`) Number of embedding PCs used for split scoring.
+-   `embedtree_distance`: (Default: `"euclidean"`) Distance metric for centroid and dispersion calculations (`"euclidean"` or `"cosine"`).
+-   `embedtree_allow_nested`: (Default: `false`) If `true`, descendants of selected splits may also be emitted.
+-   `embedtree_require_monophyly`: (Default: `true`) Enforces clades to be internal tree nodes (monophyletic by construction).
+-   `embedtree_emit_all`: (Default: `false`) If `true`, emit all accepted nodes instead of truncating at `embedtree_top_k`.
+-   `summary/node_scores.embedtree.tsv`: Per-node QC table containing support, dispersion, separation, effect size, and tree diameter for tree-embedding scoring.
 -   `compute_kl`: If enabled and no explicit `kl_pairs`, computes `clade vs all other tips` for each detected clade.
 
 ### `codon`

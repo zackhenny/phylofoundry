@@ -71,7 +71,16 @@
         "detect_clades_method": null,
         "taxonomy_clade_level": "genus",
         "treecluster_threshold": 0.045,
-        "treecluster_method": "max_clade"
+        "treecluster_method": "max_clade",
+        "embedtree_support_min": 80,
+        "embedtree_min_size": 5,
+        "embedtree_max_size": 5000,
+        "embedtree_top_k": 10,
+        "embedtree_pcs": 10,
+        "embedtree_distance": "euclidean",
+        "embedtree_allow_nested": false,
+        "embedtree_require_monophyly": true,
+        "embedtree_emit_all": false
     },
     "synteny": {
         "enabled": false,
