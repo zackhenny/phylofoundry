@@ -38,10 +38,10 @@ def _get_attention_tensor(model, alphabet, sequence: str, device: str):
 
 
 def _attention_received_by_layer(attentions, seq_len: int) -> np.ndarray:
-    # average over heads, then column-sum (received attention)
     # keep amino-acid positions only (skip BOS/EOS)
-    by_layer = attentions[:, :, 1 : seq_len + 1, 1 : seq_len + 1].sum(dim=2).cpu().numpy()
-    return by_layer
+    # per layer+position: mean_h(sum_i A[l, h, i, j]) -> (L, S)
+    by_layer = attentions[:, :, 1 : seq_len + 1, 1 : seq_len + 1].sum(dim=2).mean(dim=1)
+    return by_layer.cpu().numpy()
 
 
 def _extract_attention_at_positions(attentions, positions: list, motif_len: int, n_layers: int = 4):
@@ -163,6 +163,7 @@ def score_motifs(cfg, fasta_dir, summary_dir, hmm_keep, force=False):
 
         hmm_ha_scores = {}
         hmm_ha_masks = {}
+        hmm_loc_layers = {}
         used_layer_start = None
         used_layer_end = None
 
@@ -180,9 +181,11 @@ def score_motifs(cfg, fasta_dir, summary_dir, hmm_keep, force=False):
 
             if use_ha:
                 layer_by_pos = _attention_received_by_layer(attentions, len(clean_seq))
-                ha_scores, ha_mask, ls, le = compute_ha_from_layer_profiles(layer_by_pos, ha_cfg)
+                ha_scores, ha_mask, ls, le, loc_layer = compute_ha_from_layer_profiles(layer_by_pos, ha_cfg)
                 hmm_ha_scores[seq_id] = ha_scores
                 hmm_ha_masks[seq_id] = ha_mask
+                if loc_layer is not None:
+                    hmm_loc_layers[seq_id] = loc_layer
                 used_layer_start, used_layer_end = ls, le
 
             for motif in motif_list:
@@ -232,6 +235,20 @@ def score_motifs(cfg, fasta_dir, summary_dir, hmm_keep, force=False):
                         "detected_clade": detected_clade_map.get(seq_id, ""),
                         "type": seq_type,
                     })
+
+        if use_ha and hmm_ha_scores:
+            write_ha_outputs(
+                attention_dir,
+                summary_dir,
+                hmm,
+                {k: v for k, v in seqs.items() if k in hmm_ha_scores},
+                hmm_ha_scores,
+                hmm_ha_masks,
+                used_layer_start,
+                used_layer_end,
+                ha_cfg,
+                per_seq_loc_layer=hmm_loc_layers,
+            )
 
     if not all_rows:
         print("[motifs] No motif scores generated.", file=sys.stderr)

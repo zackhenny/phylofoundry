@@ -18,6 +18,7 @@ dependencies:
   - treeshrink
   - biopython
   - matplotlib
+  - scipy
   - diamond
   - mmseqs2
   - hyphy
@@ -31,4 +32,5 @@ dependencies:
     - streamlit
     - bqplot
     - pygenomeviz
+    - pwlf
     - .  # Install the current package in editable mode

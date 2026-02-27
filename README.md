@@ -257,13 +257,14 @@ The pipeline runs as a series of sequential **Steps**. You can control execution
 -   **Action**: Passes sequences through ESM-2 with `output_attentions=True`, extracts attention weights at user-specified motif positions.
 -   **CLI**: `--motifs HPEVY,HPEVF`
 -   **Output**: `summary/motif_attention_scores.tsv` — columns: `seq_id`, `motif`, `start_pos`, `end_pos`, `attention_score`, `clade_id`, `type`.
--   **HA Output (optional)**: `summary/motif_ha_scores.tsv` with overlap and HA-score statistics per motif when `ha.enabled=true` and `motifs.use_ha=true`.
+-   **HA Output (optional)**: `attention/<HMM>.ha_sites.tsv` + `summary/ha_summary.tsv` when `ha.enabled=true` and `motifs.use_ha=true`.
 
 ### Step 10: `discover_motifs` (Optional)
 -   **Action**: Iterates over all HDBSCAN clades, comparing the 1D attention profiles of each clade against the combined average of all others. Finds peaks in the attention delta and extracts k-mers as candidate novel structural hubs for that specific clade.
 -   **CLI**: N/A, runs automatically if `discover.enabled` is `true`.
 -   **Output**: `summary/discovered_motifs.tsv` — columns: `kmer`, `n_sequences`, `mean_attention_delta`, `source_clade`, `reference_clade`.
 -   **HA Outputs (optional)**: `discover/<HMM>.ha_enrichment.tsv` and `discover/<HMM>.ha_hubs.tsv` when `ha.enabled=true` and `discover.use_ha=true`.
+-   **Candidate residue outputs (optional)**: `discover/<HMM>.candidate_residues.tsv` and `discover/<HMM>.candidate_regions.tsv` when `discover.candidates.enabled=true`.
 
 ---
 
@@ -403,12 +404,14 @@ Protein Language Model analysis.
 -   `model`: (Default: `"esm2_t33_650M_UR50D"`) ESM2 model.
 -   `device`: `"cuda"` (GPU) or `"cpu"`.
 -   `write_full_vectors`: (Default: `false`) Must be `true` for HA attention-based methods.
+    - Attention-driven analyses include HA/LoC calling, motif HA scoring, HA enrichment/hubs, and candidate residues.
 -   `cluster_embeddings`: (Default: `true`) Run HDBSCAN clustering on embeddings.
 -   `hdbscan_min_cluster_size`: (Default: `5`) Minimum cluster size for HDBSCAN.
 
 ### `ha`
 High-Attention (HA) site calling.
 -   `enabled`: (Default: `false`) Enable HA site extraction.
+-   `method`: (Default: `"middle"`) `"middle"` (legacy layer-range aggregation) or `"loc"` (paper-style convergence layer).
 -   `layer_mode`: `"middle"` (default) or `"range"`.
 -   `layer_start`, `layer_end`: Explicit layer interval when `layer_mode="range"`.
 -   `agg`: (Default: `"median"`) Layer aggregation statistic (`"median"` or `"mean"`).
@@ -416,6 +419,9 @@ High-Attention (HA) site calling.
 -   `percentile`: (Default: `0.05`) Top fraction when percentile mode is used.
 -   `topk`: (Default: `20`) Number of HA sites in top-k mode.
 -   `min_sites`, `max_sites`: (Defaults: `8`, `60`) Clamp called HA-site counts.
+-   `loc_norm_mode`: (Default: `"max"`) Per-layer normalization mode used in `method="loc"`.
+-   `loc_theta_target_deg`: (Default: `90`) Target angle for convergence-layer selection.
+-   `loc_break_adjust`: (Default: `-1`) Optional adjustment applied to the PWLF breakpoint-derived site count.
 
 ### `post`
 Post-processing metrics.
@@ -441,12 +447,14 @@ Post-processing metrics.
 
 ### HA Sites (High-Attention residues, paper-inspired)
 - HA sites summarize ESM2 attention into per-residue "attention received" scores.
-- We aggregate normalized layer-wise received-attention vectors across layers (default: **middle third** of layers) and call top residues as HA using percentile or top-k rules.
+- Two modes are supported:
+  - `ha.method="middle"`: aggregate normalized received-attention vectors across middle/configured layers, then call HA by percentile/top-k.
+  - `ha.method="loc"`: fit a piecewise linear model per layer, select a convergence layer (LoC), and call HA above the layer-specific breakpoint.
 - HA outputs:
-  - `attention/<HMM>.ha_sites.tsv` (`pos_ungapped` is 1-based)
-  - `summary/ha_summary.tsv`
+  - `attention/<HMM>.ha_sites.tsv` (`pos_ungapped` is 1-based; includes `loc_layer` when LoC mode is active)
+  - `summary/ha_summary.tsv` (includes `method`, and `loc_layer`/`norm_mode` for LoC)
 
-> ⚠️ Attention-based HA features require `embeddings.write_full_vectors: true`.
+> ⚠️ Attention-driven analyses (HA / convergence layer / motif scoring / HA discovery / candidate residues) require `embeddings.write_full_vectors: true`.
 > If HA is enabled while `write_full_vectors` is false, the pipeline exits with a clear error.
 
 Example HA config:
@@ -455,14 +463,11 @@ Example HA config:
   "embeddings": { "write_full_vectors": true },
   "ha": {
     "enabled": true,
-    "layer_mode": "middle",
-    "call_mode": "percentile",
-    "percentile": 0.05,
-    "min_sites": 8,
-    "max_sites": 60
+    "method": "loc",
+    "loc_norm_mode": "max"
   },
   "motifs": { "use_ha": true },
-  "discover": { "use_ha": true, "ha_window": 9, "ha_delta_min": 0.2 }
+  "discover": { "enabled": true, "use_ha": true, "candidates": { "enabled": true } }
 }
 ```
 
@@ -481,6 +486,11 @@ Unsupervised motif discovery.
 -   `ha_window`: (Default: `9`) Smoothing window for HA delta profiles.
 -   `ha_delta_min`: (Default: `0.2`) Minimum smoothed delta for HA hub calls.
 -   `ha_gap_frac_max`: (Default: `0.6`) Maximum mean gap fraction allowed in HA hubs.
+-   `candidates.enabled`: (Default: `true`) Emit clade-aware functional candidate residues/regions.
+-   `candidates.min_delta_ha`: (Default: `0.1`) Minimum clade-vs-rest HA enrichment.
+-   `candidates.min_cons_frac`: (Default: `0.6`) Minimum consensus frequency gate.
+-   `candidates.max_gap_frac`: (Default: `0.6`) Maximum gap fraction at candidate columns.
+-   `candidates.w_delta_ha`, `w_aa_shift`, `w_js`: Score weights for HA enrichment, consensus shift, and JS divergence.
 
 ### `hyphy`
 Selection tests.

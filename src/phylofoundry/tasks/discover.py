@@ -4,6 +4,7 @@ discover.py — Unsupervised motif discovery via comparative ESM-2 attention pro
 
 import os
 import sys
+from collections import Counter
 import numpy as np
 import pandas as pd
 from ..utils.bio import read_fasta
@@ -36,7 +37,49 @@ def _compute_attention_profile(model, alphabet, sequence: str, device: str, n_la
 
 
 def _attention_received_by_layer(attentions, seq_len: int) -> np.ndarray:
-    return attentions[:, :, 1 : seq_len + 1, 1 : seq_len + 1].sum(dim=2).cpu().numpy()
+    by_layer = attentions[:, :, 1 : seq_len + 1, 1 : seq_len + 1].sum(dim=2).mean(dim=1)
+    return by_layer.cpu().numpy()
+
+
+def _resolve_seq_ids(protein_ids, available_ids):
+    suffix_lookup = {}
+    for seq_id in available_ids:
+        if "|" in seq_id:
+            suffix_lookup.setdefault(seq_id.split("|", 1)[1], seq_id)
+    resolved = set()
+    for pid in protein_ids:
+        if pid in available_ids:
+            resolved.add(pid)
+        elif pid in suffix_lookup:
+            resolved.add(suffix_lookup[pid])
+    return resolved
+
+
+def _aa_distribution(chars):
+    aa = [c for c in chars if c != "-"]
+    if not aa:
+        return {}, "-", 0.0
+    counts = Counter(aa)
+    total = float(sum(counts.values()))
+    consensus, cons_n = counts.most_common(1)[0]
+    return {k: v / total for k, v in counts.items()}, consensus, cons_n / total
+
+
+def _js_divergence_from_distributions(p, q):
+    keys = sorted(set(p.keys()) | set(q.keys()))
+    if not keys:
+        return 0.0
+    p_vec = np.array([p.get(k, 0.0) for k in keys], dtype=float)
+    q_vec = np.array([q.get(k, 0.0) for k in keys], dtype=float)
+    m_vec = 0.5 * (p_vec + q_vec)
+
+    def _kl(a, b):
+        mask = (a > 0) & (b > 0)
+        if not np.any(mask):
+            return 0.0
+        return float(np.sum(a[mask] * np.log2(a[mask] / b[mask])))
+
+    return 0.5 * _kl(p_vec, m_vec) + 0.5 * _kl(q_vec, m_vec)
 
 
 def _align_profiles_to_fixed_length(profiles: list, target_len: int = 500) -> np.ndarray:
@@ -214,6 +257,168 @@ def _compute_ha_enrichment_for_hmm(hmm, aln_seqs, clade_df_hmm, ha_cfg, disc_cfg
     pd.DataFrame(hub_rows).to_csv(os.path.join(discover_dir, f"{hmm}.ha_hubs.tsv"), sep="\t", index=False)
 
 
+def _compute_candidate_residues_for_hmm(hmm, aln_seqs, clade_df_hmm, disc_cfg, attention_dir, discover_dir):
+    cand_cfg = disc_cfg.get("candidates", {})
+    if not cand_cfg.get("enabled", True):
+        return
+
+    use_clusters = sorted([c for c in clade_df_hmm["cluster_id"].dropna().unique() if c != -1])
+    if not use_clusters:
+        return
+
+    ha_fp = os.path.join(attention_dir, f"{hmm}.ha_sites.tsv")
+    if not os.path.exists(ha_fp):
+        return
+    ha_df = pd.read_csv(ha_fp, sep="\t")
+    if ha_df.empty:
+        return
+
+    by_seq = {}
+    for seq_id, sub in ha_df.groupby("seq_id"):
+        by_seq[seq_id] = set(sub.loc[sub["is_ha"] == 1, "pos_ungapped"].astype(int).tolist())
+
+    maps = {sid: ungapped_to_msa_column(aln) for sid, aln in aln_seqs.items()}
+    n_cols = len(next(iter(aln_seqs.values()))) if aln_seqs else 0
+
+    min_delta_ha = float(cand_cfg.get("min_delta_ha", 0.1))
+    min_cons_frac = float(cand_cfg.get("min_cons_frac", 0.6))
+    max_gap_frac = float(cand_cfg.get("max_gap_frac", 0.6))
+    w_delta = float(cand_cfg.get("w_delta_ha", 1.0))
+    w_shift = float(cand_cfg.get("w_aa_shift", 1.0))
+    w_js = float(cand_cfg.get("w_js", 0.5))
+    top_n = int(cand_cfg.get("top_n", 200))
+
+    all_rows = []
+    region_rows = []
+    for clade_id in use_clusters:
+        raw_clade = set(clade_df_hmm.loc[clade_df_hmm["cluster_id"] == clade_id, "protein"].astype(str))
+        raw_rest = set(clade_df_hmm.loc[clade_df_hmm["cluster_id"] != clade_id, "protein"].astype(str))
+        clade_ids = _resolve_seq_ids(raw_clade, set(aln_seqs.keys()))
+        rest_ids = _resolve_seq_ids(raw_rest, set(aln_seqs.keys()))
+        if not clade_ids or not rest_ids:
+            continue
+
+        pvals = []
+        clade_rows = []
+        for col in range(n_cols):
+            clade_has = 0
+            rest_has = 0
+            for sid in clade_ids:
+                inv = maps.get(sid, {})
+                if any((u in inv and inv[u] == col) for u in by_seq.get(sid, set())):
+                    clade_has += 1
+            for sid in rest_ids:
+                inv = maps.get(sid, {})
+                if any((u in inv and inv[u] == col) for u in by_seq.get(sid, set())):
+                    rest_has += 1
+
+            f_clade = clade_has / max(1, len(clade_ids))
+            f_rest = rest_has / max(1, len(rest_ids))
+            delta_ha = f_clade - f_rest
+
+            pval = np.nan
+            try:
+                from scipy.stats import fisher_exact
+
+                table = np.array(
+                    [[clade_has, len(clade_ids) - clade_has], [rest_has, len(rest_ids) - rest_has]]
+                )
+                _, pval = fisher_exact(table, alternative="greater")
+            except Exception:
+                pass
+
+            clade_chars = [aln_seqs[sid][col] for sid in clade_ids if col < len(aln_seqs[sid])]
+            rest_chars = [aln_seqs[sid][col] for sid in rest_ids if col < len(aln_seqs[sid])]
+            all_chars = clade_chars + rest_chars
+            gap_frac_all = float(sum(c == "-" for c in all_chars) / max(1, len(all_chars)))
+
+            clade_dist, clade_consensus, clade_cons_frac = _aa_distribution(clade_chars)
+            rest_dist, rest_consensus, rest_cons_frac = _aa_distribution(rest_chars)
+            aa_shift = int(
+                clade_consensus != "-"
+                and rest_consensus != "-"
+                and clade_consensus != rest_consensus
+                and clade_cons_frac >= min_cons_frac
+                and rest_cons_frac >= min_cons_frac
+            )
+            js_div = _js_divergence_from_distributions(clade_dist, rest_dist)
+            aa_shift_strength = max(clade_cons_frac, rest_cons_frac) if aa_shift else 0.0
+            score = (w_delta * max(delta_ha, 0.0)) + (w_shift * aa_shift_strength) + (w_js * js_div)
+
+            row = {
+                "hmm": hmm,
+                "clade_id": clade_id,
+                "msa_col": col,
+                "f_clade_ha": f_clade,
+                "f_rest_ha": f_rest,
+                "delta_ha": delta_ha,
+                "pval": pval,
+                "clade_consensus_aa": clade_consensus,
+                "clade_cons_frac": clade_cons_frac,
+                "rest_consensus_aa": rest_consensus,
+                "rest_cons_frac": rest_cons_frac,
+                "aa_shift": aa_shift,
+                "js_div": js_div,
+                "gap_frac_all": gap_frac_all,
+                "candidate_score": score,
+            }
+            clade_rows.append(row)
+            pvals.append(pval)
+
+        qvals = bh_fdr(pvals)
+        for row, qval in zip(clade_rows, qvals):
+            row["qval"] = qval
+
+        gated = [
+            r
+            for r in clade_rows
+            if r["gap_frac_all"] <= max_gap_frac
+            and r["delta_ha"] >= min_delta_ha
+            and (r["clade_cons_frac"] >= min_cons_frac or r["rest_cons_frac"] >= min_cons_frac)
+        ]
+        gated.sort(key=lambda r: r["candidate_score"], reverse=True)
+        all_rows.extend(gated[:top_n])
+
+        region_threshold = min_delta_ha
+        if gated:
+            by_col = {r["msa_col"]: r for r in gated}
+            cols = sorted(by_col)
+            start = cols[0]
+            prev = cols[0]
+            for col in cols[1:] + [None]:
+                if col is not None and col == prev + 1 and by_col[col]["candidate_score"] >= region_threshold:
+                    prev = col
+                    continue
+                region_cols = list(range(start, prev + 1))
+                region_scores = [by_col[c]["candidate_score"] for c in region_cols if c in by_col]
+                if region_scores:
+                    top_sites = sorted(region_cols, key=lambda c: by_col[c]["candidate_score"], reverse=True)[:5]
+                    region_qvals = [by_col[c]["qval"] for c in region_cols if c in by_col and not np.isnan(by_col[c]["qval"])]
+                    region_rows.append(
+                        {
+                            "hmm": hmm,
+                            "clade_id": clade_id,
+                            "start_col": start,
+                            "end_col": prev,
+                            "width": prev - start + 1,
+                            "delta_ha_mean": float(np.mean([by_col[c]["delta_ha"] for c in region_cols if c in by_col])),
+                            "qval_min": float(min(region_qvals)) if region_qvals else np.nan,
+                            "js_div_mean": float(np.mean([by_col[c]["js_div"] for c in region_cols if c in by_col])),
+                            "consensus_region": "".join(by_col[c]["clade_consensus_aa"] for c in region_cols if c in by_col),
+                            "gap_frac_mean": float(np.mean([by_col[c]["gap_frac_all"] for c in region_cols if c in by_col])),
+                            "top_sites": ",".join(str(c) for c in top_sites),
+                        }
+                    )
+                if col is None:
+                    break
+                start = col
+                prev = col
+
+    os.makedirs(discover_dir, exist_ok=True)
+    pd.DataFrame(all_rows).to_csv(os.path.join(discover_dir, f"{hmm}.candidate_residues.tsv"), sep="\t", index=False)
+    pd.DataFrame(region_rows).to_csv(os.path.join(discover_dir, f"{hmm}.candidate_regions.tsv"), sep="\t", index=False)
+
+
 def discover_motifs(cfg, fasta_dir, summary_dir, hmm_keep, force=False):
     import glob
 
@@ -224,13 +429,17 @@ def discover_motifs(cfg, fasta_dir, summary_dir, hmm_keep, force=False):
     kmer_size = disc_cfg.get("kmer_size", 5)
     top_n = disc_cfg.get("top_n_peaks", 20)
     n_layers = disc_cfg.get("attention_layers", 4)
+    standard_clade = disc_cfg.get("standard_clade")
+    novel_clade = disc_cfg.get("novel_clade")
 
     ha_cfg = cfg.get("ha", {})
+    candidates_enabled = bool(disc_cfg.get("candidates", {}).get("enabled", True))
+    needs_ha = bool(ha_cfg.get("enabled", False) and (disc_cfg.get("use_ha", False) or candidates_enabled))
     use_ha = bool(ha_cfg.get("enabled", False) and disc_cfg.get("use_ha", False))
-    if use_ha and not cfg.get("embeddings", {}).get("write_full_vectors", False):
+    if needs_ha and not cfg.get("embeddings", {}).get("write_full_vectors", False):
         raise SystemExit(
-            "HA motif discovery requires embeddings.write_full_vectors: true to ensure attention-derived "
-            "per-residue vectors are available/reproducible."
+            "Attention-driven discovery outputs (HA/LoC enrichment, motif hubs, candidate residues) require "
+            "embeddings.write_full_vectors: true so attention extraction is reproducible."
         )
 
     out_fp = os.path.join(summary_dir, "discovered_motifs.tsv")
@@ -305,11 +514,10 @@ def discover_motifs(cfg, fasta_dir, summary_dir, hmm_keep, force=False):
 
     print("[discover] Pre-computing attention profiles for all sequences...")
     all_profiles = {}
-    all_layer_profiles = {}
     seq_ha_scores = {}
     seq_ha_mask = {}
-    layer_start = None
-    layer_end = None
+    seq_layer_bounds = {}
+    seq_loc_layer = {}
 
     for seq_id, seq in all_seqs.items():
         if len(seq) < 10:
@@ -327,36 +535,16 @@ def discover_motifs(cfg, fasta_dir, summary_dir, hmm_keep, force=False):
             profile = attn_avg[1 : len(seq) + 1, 1 : len(seq) + 1].sum(dim=0).cpu().numpy()
             all_profiles[seq_id] = profile
 
-            if use_ha:
+            if needs_ha:
                 layer_by_pos = _attention_received_by_layer(attentions, len(seq))
-                all_layer_profiles[seq_id] = layer_by_pos
-                h_scores, h_mask, ls, le = compute_ha_from_layer_profiles(layer_by_pos, ha_cfg)
+                h_scores, h_mask, ls, le, loc_layer = compute_ha_from_layer_profiles(layer_by_pos, ha_cfg)
                 seq_ha_scores[seq_id] = h_scores
                 seq_ha_mask[seq_id] = h_mask
-                layer_start, layer_end = ls, le
+                seq_layer_bounds[seq_id] = (ls, le)
+                if loc_layer is not None:
+                    seq_loc_layer[seq_id] = loc_layer
         except Exception:
             pass
-
-    # Helper: resolve protein identifiers for a clade against available profiles.
-    # HDBSCAN clusters store short protein IDs; sequence keys are genome|protein format.
-    # Detected clades store tip as genome|protein directly.
-    # Build a suffix lookup map once: protein_id -> seq_id (genome|protein)
-    suffix_lookup = {}
-    for seq_id in all_profiles:
-        if "|" in seq_id:
-            protein_part = seq_id.split("|", 1)[1]
-            suffix_lookup.setdefault(protein_part, seq_id)
-
-    def _resolve_seq_ids(protein_ids):
-        """Return seq_ids present in all_profiles, trying direct match first,
-        then looking up via the suffix map (genome|protein format)."""
-        resolved = set()
-        for pid in protein_ids:
-            if pid in all_profiles:
-                resolved.add(pid)
-            elif pid in suffix_lookup:
-                resolved.add(suffix_lookup[pid])
-        return resolved
 
     # 1-vs-All clade comparison
     target_len = 500
@@ -392,8 +580,8 @@ def discover_motifs(cfg, fasta_dir, summary_dir, hmm_keep, force=False):
                 if other_clade != focal_clade:
                     std_protein_ids.update(other_ids)
 
-        nov_ids = _resolve_seq_ids(nov_protein_ids)
-        std_ids = _resolve_seq_ids(std_protein_ids)
+        nov_ids = _resolve_seq_ids(nov_protein_ids, set(all_profiles.keys()))
+        std_ids = _resolve_seq_ids(std_protein_ids, set(all_profiles.keys()))
 
         nov_profiles = [all_profiles[s] for s in nov_ids if s in all_profiles]
         std_profiles = [all_profiles[s] for s in std_ids if s in all_profiles]
@@ -430,19 +618,10 @@ def discover_motifs(cfg, fasta_dir, summary_dir, hmm_keep, force=False):
                         "position": raw_pos,
                         "normalized_position": peak_pos_norm,
                         "attention_delta": delta_val,
-                        "source_clade": novel_clade,
+                        "source_clade": focal_clade,
                         "representative_seq_id": seq_id,
                     }
                 )
-
-                clade_rows.append({
-                    "kmer": kmer,
-                    "position": raw_pos,
-                    "normalized_position": peak_pos_norm,
-                    "attention_delta": delta_val,
-                    "source_clade": focal_clade,
-                    "representative_seq_id": seq_id,
-                })
 
         if clade_rows:
             df_clade = pd.DataFrame(clade_rows)
@@ -474,7 +653,7 @@ def discover_motifs(cfg, fasta_dir, summary_dir, hmm_keep, force=False):
     kmer_summary.to_csv(out_fp, sep="\t", index=False)
     print(f"[discover] Wrote discovered motifs: {out_fp} ({len(kmer_summary)} k-mers)")
 
-    if use_ha:
+    if needs_ha:
         attention_dir = os.path.join(os.path.dirname(summary_dir), "attention")
         discover_dir = os.path.join(os.path.dirname(summary_dir), "discover")
         align_clipkit_dir = os.path.join(os.path.dirname(summary_dir), "alignments_clipkit")
@@ -484,6 +663,9 @@ def discover_motifs(cfg, fasta_dir, summary_dir, hmm_keep, force=False):
             hmm_scores = {sid: seq_ha_scores[sid] for sid in seqs if sid in seq_ha_scores}
             hmm_masks = {sid: seq_ha_mask[sid] for sid in seqs if sid in seq_ha_mask}
             if hmm_scores:
+                bounds = [seq_layer_bounds.get(sid) for sid in hmm_scores if sid in seq_layer_bounds]
+                layer_start = bounds[0][0] if bounds else 0
+                layer_end = bounds[0][1] if bounds else 1
                 write_ha_outputs(
                     attention_dir,
                     summary_dir,
@@ -494,6 +676,7 @@ def discover_motifs(cfg, fasta_dir, summary_dir, hmm_keep, force=False):
                     layer_start,
                     layer_end,
                     ha_cfg,
+                    per_seq_loc_layer={sid: seq_loc_layer[sid] for sid in hmm_scores if sid in seq_loc_layer},
                 )
 
             clip_fp = os.path.join(align_clipkit_dir, f"{hmm}.clipkit.faa")
@@ -505,14 +688,24 @@ def discover_motifs(cfg, fasta_dir, summary_dir, hmm_keep, force=False):
             aln_seqs = read_fasta(aln_fp)
 
             clade_sub = clade_df[clade_df["hmm"] == hmm] if "hmm" in clade_df.columns else clade_df
-            _compute_ha_enrichment_for_hmm(
-                hmm,
-                aln_seqs,
-                clade_sub,
-                ha_cfg,
-                disc_cfg,
-                attention_dir,
-                discover_dir,
-            )
+            if use_ha:
+                _compute_ha_enrichment_for_hmm(
+                    hmm,
+                    aln_seqs,
+                    clade_sub,
+                    ha_cfg,
+                    disc_cfg,
+                    attention_dir,
+                    discover_dir,
+                )
+            if candidates_enabled:
+                _compute_candidate_residues_for_hmm(
+                    hmm,
+                    aln_seqs,
+                    clade_sub,
+                    disc_cfg,
+                    attention_dir,
+                    discover_dir,
+                )
 
     return kmer_summary
