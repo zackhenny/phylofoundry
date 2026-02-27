@@ -89,7 +89,11 @@ DEFAULT_CONFIG = {
         "conservation_metric": "inverse_shannon_uncertainty",
         "compute_kl": False,
         "clades_tsv": None,  # TSV columns: clade_name, tip (tip label must match alignment tip labels)
-        "kl_pairs": None     # "A:B,A:background"
+        "kl_pairs": None,    # "A:B,A:background"
+        "detect_clades_method": None,  # None|"taxonomy"|"treecluster"
+        "taxonomy_clade_level": "genus",
+        "treecluster_threshold": 0.045,
+        "treecluster_method": "max_clade"
     },
     "synteny": {
         "enabled": False,

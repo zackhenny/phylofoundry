@@ -93,3 +93,61 @@ def test_run_post_merges_taxonomy(tmp_path):
     # genomeC.fna -> normalize -> genomeC -> TaxC
     rowC = df[df["genome"] == "genomeC.fna"].iloc[0]
     assert rowC["taxonomy"] == "TaxC"
+
+
+def test_detect_taxonomy_clades(tmp_path):
+    summary_dir = tmp_path / "summary"
+    summary_dir.mkdir()
+    pd.DataFrame({
+        "genome": ["genomeA.faa", "genomeB.faa"],
+        "protein": ["p1", "p2"],
+    }).to_csv(summary_dir / "best_hits.competitive.tsv", sep="\t", index=False)
+    tax_map = {
+        "genomeA": "d__Bacteria;p__Firmicutes;g__Bacillus",
+        "genomeB": "d__Bacteria;p__Firmicutes;g__Bacillus",
+    }
+
+    clades = post._detect_taxonomy_clades(str(summary_dir), tax_map, "genus")
+    assert "g__Bacillus" in clades
+    assert sorted(clades["g__Bacillus"]) == ["genomeA.faa|p1", "genomeB.faa|p2"]
+
+
+def test_compute_kl_defaults_to_clade_vs_others(tmp_path, monkeypatch):
+    outdir = tmp_path / "results"
+    tree_dir = outdir / "trees"
+    clipkit_dir = outdir / "clipkit"
+    summary_dir = outdir / "summary"
+    post_dir = summary_dir / "post_scikitbio"
+    os.makedirs(tree_dir)
+    os.makedirs(clipkit_dir)
+    os.makedirs(summary_dir)
+    os.makedirs(post_dir)
+
+    with open(tree_dir / "HMM1.treefile", "w") as f:
+        f.write("(g1|p1:0.1,g2|p2:0.1,g3|p3:0.1);")
+    with open(clipkit_dir / "HMM1.clipkit.faa", "w") as f:
+        f.write(">g1|p1\nAAAA\n>g2|p2\nAAAA\n>g3|p3\nAAAA\n")
+    clades_fp = tmp_path / "clades.tsv"
+    with open(clades_fp, "w") as f:
+        f.write("clade_name\ttip\n")
+        f.write("CladeA\tg1|p1\n")
+        f.write("CladeB\tg2|p2\n")
+
+    def fake_counts(_aln_seqs, subset_tips=None):
+        n = len(_aln_seqs) if subset_tips is None else len(subset_tips)
+        return [{"A": n}]
+
+    monkeypatch.setattr(post, "site_counts_from_subset", fake_counts)
+    monkeypatch.setattr(post, "kl_divergence", lambda *_args, **_kwargs: 0.0)
+
+    cfg = {
+        "inputs": {"gtdb_dir": None, "taxonomy_file": None},
+        "post": {"enabled": True, "compute_kl": True, "clades_tsv": str(clades_fp), "kl_pairs": None}
+    }
+    post.run_post(cfg, str(tree_dir), str(clipkit_dir), "", str(post_dir), str(summary_dir), None, force=True)
+
+    kl_fp = post_dir / "kl_divergence.tsv"
+    assert os.path.exists(kl_fp)
+    kl_df = pd.read_csv(kl_fp, sep="\t")
+    assert set(kl_df["pair"]) == {"CladeA:others::CladeA", "CladeB:others::CladeB"}
+    assert sorted(kl_df["nB"].tolist()) == [2, 2]
