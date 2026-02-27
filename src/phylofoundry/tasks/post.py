@@ -4,6 +4,9 @@ KL divergence, and MRCA sanity checks."""
 import os
 import glob
 import math
+import shutil
+import subprocess
+import tempfile
 import pandas as pd
 from collections import defaultdict, Counter
 from ..utils.bio import read_fasta
@@ -140,6 +143,93 @@ def _load_taxonomy(gtdb_dir, tax_file):
     return tax_map
 
 
+def _extract_taxon_label(lineage, level):
+    rank_map = {
+        "domain": "d__", "phylum": "p__", "class": "c__", "order": "o__",
+        "family": "f__", "genus": "g__", "species": "s__"
+    }
+    level = str(level or "genus").strip().lower()
+    prefix = rank_map.get(level, level)
+    if len(prefix) == 1:
+        prefix = f"{prefix}__"
+    if "__" not in prefix and len(prefix) <= 3:
+        prefix = f"{prefix}__"
+    for token in str(lineage or "").split(";"):
+        token = token.strip()
+        if token.lower().startswith(prefix.lower()) and token:
+            return token
+    return None
+
+
+def _detect_taxonomy_clades(summary_dir, tax_map, level):
+    from ..utils.helpers import normalize_genome_id
+    best_hits_fp = os.path.join(summary_dir, "best_hits.competitive.tsv")
+    if not os.path.exists(best_hits_fp):
+        return {}
+    df = pd.read_csv(best_hits_fp, sep="\t", dtype=str)
+    if "genome" not in df.columns or "protein" not in df.columns:
+        return {}
+    clades = defaultdict(list)
+    for _, row in df.iterrows():
+        genome = str(row["genome"])
+        protein = str(row["protein"])
+        tip = f"{genome}|{protein}"
+        lineage = tax_map.get(normalize_genome_id(genome))
+        label = _extract_taxon_label(lineage, level)
+        if label:
+            clades[label].append(tip)
+    return dict(clades)
+
+
+def _detect_treecluster_clades(tree_dir, threshold, method):
+    treecluster_bin = shutil.which("TreeCluster.py") or shutil.which("treecluster")
+    if not treecluster_bin:
+        print("[post] TreeCluster not found in PATH; skipping TreeCluster clade detection.")
+        return {}
+
+    clades = defaultdict(list)
+    for tree_fp in sorted(glob.glob(os.path.join(tree_dir, "*.treefile"))):
+        hmm = os.path.basename(tree_fp).split(".")[0]
+        with tempfile.NamedTemporaryFile(suffix=".tsv", delete=False) as tmp:
+            out_fp = tmp.name
+        try:
+            cmd = [
+                treecluster_bin, "-i", tree_fp, "-o", out_fp,
+                "-t", str(threshold), "-m", str(method)
+            ]
+            subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            df = pd.read_csv(out_fp, sep="\t", dtype=str)
+            if len(df.columns) < 2:
+                continue
+            tip_col = "SequenceName" if "SequenceName" in df.columns else df.columns[0]
+            cluster_col = "ClusterNumber" if "ClusterNumber" in df.columns else df.columns[1]
+            for _, row in df.iterrows():
+                cluster_id = str(row[cluster_col])
+                if cluster_id == "-1":
+                    continue
+                clade_name = f"{hmm}|cluster_{cluster_id}"
+                clades[clade_name].append(str(row[tip_col]))
+        except Exception as e:
+            print(f"[post] TreeCluster failed for {tree_fp}: {e}")
+        finally:
+            try:
+                os.remove(out_fp)
+            except OSError:
+                pass
+    return dict(clades)
+
+
+def _write_detected_clades(summary_dir, clades):
+    if not clades:
+        return
+    rows = []
+    for cname, tips in clades.items():
+        for tip in tips:
+            rows.append({"clade_name": cname, "tip": tip})
+    if rows:
+        pd.DataFrame(rows).to_csv(os.path.join(summary_dir, "detected_clades.tsv"), sep="\t", index=False)
+
+
 
 def run_post(cfg, tree_dir, clipkit_dir, aln_dir, post_dir, summary_dir, hmm_keep, force=False):
     print("\n[post] scikit-bio post-processing...")
@@ -179,11 +269,24 @@ def run_post(cfg, tree_dir, clipkit_dir, aln_dir, post_dir, summary_dir, hmm_kee
     clades = None
     if post_cfg.get("clades_tsv", None):
         clades = load_clades_tsv(post_cfg["clades_tsv"])
+    else:
+        detect_method = str(post_cfg.get("detect_clades_method", "")).strip().lower()
+        if detect_method == "taxonomy":
+            clades = _detect_taxonomy_clades(summary_dir, tax_map if (gtdb_dir or tax_file) else {}, post_cfg.get("taxonomy_clade_level", "genus"))
+        elif detect_method == "treecluster":
+            clades = _detect_treecluster_clades(
+                tree_dir,
+                post_cfg.get("treecluster_threshold", 0.045),
+                post_cfg.get("treecluster_method", "max_clade"),
+            )
+        if clades:
+            _write_detected_clades(summary_dir, clades)
 
     if post_cfg.get("compute_kl", False) and not clades:
         raise SystemExit("post.compute_kl requires post.clades_tsv")
 
     kl_pairs = []
+    has_manual_kl_pairs = bool(post_cfg.get("kl_pairs", None))
     if post_cfg.get("kl_pairs", None):
         for pair in str(post_cfg["kl_pairs"]).split(","):
             pair = pair.strip()
@@ -193,15 +296,6 @@ def run_post(cfg, tree_dir, clipkit_dir, aln_dir, post_dir, summary_dir, hmm_kee
                 raise SystemExit("post.kl_pairs must look like 'A:B' or 'A:background'")
             a, b = pair.split(":", 1)
             kl_pairs.append((a.strip(), b.strip()))
-    else:
-        if post_cfg.get("compute_kl", False) and clades and len(clades) >= 2:
-            keys = list(clades.keys())
-            for i in range(len(keys)):
-                for j in range(i + 1, len(keys)):
-                    kl_pairs.append((keys[i], keys[j]))
-        if post_cfg.get("compute_kl", False) and clades and len(clades) == 1:
-            k = list(clades.keys())[0]
-            kl_pairs.append((k, "background"))
 
     cons_rows = []
     kl_rows = []
@@ -239,11 +333,20 @@ def run_post(cfg, tree_dir, clipkit_dir, aln_dir, post_dir, summary_dir, hmm_kee
         if post_cfg.get("compute_kl", False) and clades:
             counts = {}
             counts["background"] = site_counts_from_subset(aln_seqs, subset_tips=None)
+            dynamic_pairs = []
             for cname, tips in clades.items():
-                counts[cname] = site_counts_from_subset(aln_seqs, subset_tips=tips)
+                tips_in_aln = [x for x in tips if x in aln_seqs]
+                counts[cname] = site_counts_from_subset(aln_seqs, subset_tips=tips_in_aln)
+                if not has_manual_kl_pairs and tips_in_aln:
+                    others_key = f"others::{cname}"
+                    others_tips = [x for x in aln_seqs if x not in set(tips_in_aln)]
+                    if others_tips:
+                        counts[others_key] = site_counts_from_subset(aln_seqs, subset_tips=others_tips)
+                        dynamic_pairs.append((cname, others_key))
 
             L = len(counts["background"])
-            for a, b in kl_pairs:
+            pairs_to_use = kl_pairs if has_manual_kl_pairs else dynamic_pairs
+            for a, b in pairs_to_use:
                 if a not in counts or b not in counts:
                     continue
                 if len(counts[a]) != L or len(counts[b]) != L:

@@ -67,7 +67,11 @@
         "conservation_metric": "inverse_shannon_uncertainty",
         "compute_kl": false,
         "clades_tsv": null,
-        "kl_pairs": null
+        "kl_pairs": null,
+        "detect_clades_method": null,
+        "taxonomy_clade_level": "genus",
+        "treecluster_threshold": 0.045,
+        "treecluster_method": "max_clade"
     },
     "synteny": {
         "enabled": false,

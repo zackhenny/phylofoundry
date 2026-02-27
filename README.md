@@ -121,6 +121,7 @@ The pipeline creates a structured `results` directory:
 | `summary/best_hits.competitive.tsv` | **Key Result**. Table of the best HMM hit for each protein (resolved by bitscore). | TSV |
 | `summary/best_hits.with_taxonomy.tsv` | **Key Result + Tax**. Same as above, but with a `taxonomy` column merged from GTDB. | TSV |
 | `summary/genome_taxonomy.tsv` | Helper table mapping `genome` -> `classification`. | TSV |
+| `summary/detected_clades.tsv` | Auto-detected clades (taxonomy rank or TreeCluster), columns `clade_name`, `tip`. | TSV |
 | `summary/resolved_config.json` | The exact configuration used for the run (provenance). | JSON |
 | `trees_iqtree/<HMM>.treefile` | The final Maximum Likelihood phylogenetic tree. | Newick |
 | `fasta_per_hmm/<HMM>.faa` | Unaligned protein sequences extracted for that HMM. | FASTA |
@@ -403,6 +404,11 @@ Post-processing metrics.
 -   `enabled`: Set to `true` to run.
 -   `compute_conservation`: (Default: `false`) Calculate conservation scores.
 -   `clades_tsv`: (Optional) TSV mapping tips to groups for dispersion analysis.
+-   `detect_clades_method`: (Optional) `taxonomy` or `treecluster` to auto-generate `summary/detected_clades.tsv`.
+-   `taxonomy_clade_level`: (Default: `"genus"`) Taxonomic rank used when `detect_clades_method=taxonomy`.
+-   `treecluster_threshold`: (Default: `0.045`) Distance threshold passed to TreeCluster.
+-   `treecluster_method`: (Default: `"max_clade"`) TreeCluster clustering method.
+-   `compute_kl`: If enabled and no explicit `kl_pairs`, computes `clade vs all other tips` for each detected clade.
 
 ### `codon`
 Codon alignments.
@@ -413,4 +419,3 @@ Codon alignments.
 Selection tests.
 -   `enabled`: Set to `true` to run.
 -   `hyphy_tests`: (Default: `"RELAX,aBSREL,MEME"`) List of tests to run.
-

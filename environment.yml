@@ -21,6 +21,7 @@ dependencies:
   - diamond
   - mmseqs2
   - hyphy
+  - treecluster
   - clinker-py
   - pip
   - pip:
