@@ -90,10 +90,19 @@ DEFAULT_CONFIG = {
         "compute_kl": False,
         "clades_tsv": None,  # TSV columns: clade_name, tip (tip label must match alignment tip labels)
         "kl_pairs": None,    # "A:B,A:background"
-        "detect_clades_method": None,  # None|"taxonomy"|"treecluster"
+        "detect_clades_method": None,  # None|"taxonomy"|"treecluster"|"tree_embed"
         "taxonomy_clade_level": "genus",
         "treecluster_threshold": 0.045,
-        "treecluster_method": "max_clade"
+        "treecluster_method": "max_clade",
+        "embedtree_support_min": 80,
+        "embedtree_min_size": 5,
+        "embedtree_max_size": 5000,
+        "embedtree_top_k": 10,
+        "embedtree_pcs": 10,
+        "embedtree_distance": "euclidean",  # "euclidean"|"cosine"
+        "embedtree_allow_nested": False,
+        "embedtree_require_monophyly": True,
+        "embedtree_emit_all": False
     },
     "synteny": {
         "enabled": False,
