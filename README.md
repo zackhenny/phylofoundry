@@ -440,8 +440,6 @@ Post-processing metrics.
 
 
 ### HA Sites (High-Attention residues, paper-inspired)
-Reference: Das et al., *Applying protein language model (ESM2) and molecular dynamics simulations to investigate local adaptation in NADP-ME proteins from C4 and CAM plants*, **Scientific Reports** (2025). https://pmc.ncbi.nlm.nih.gov/articles/PMC12448987/
-
 - HA sites summarize ESM2 attention into per-residue "attention received" scores.
 - We aggregate normalized layer-wise received-attention vectors across layers (default: **middle third** of layers) and call top residues as HA using percentile or top-k rules.
 - HA outputs:

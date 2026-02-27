@@ -117,6 +117,15 @@ def score_motifs(cfg, fasta_dir, summary_dir, hmm_keep, force=False):
             key = row.get("protein", row.get("seq_id", ""))
             clade_map[key] = str(row.get("cluster_id", ""))
 
+    # Load detected clades from post step if available
+    detected_fp = os.path.join(summary_dir, "detected_clades.tsv")
+    detected_clade_map = {}
+    if os.path.exists(detected_fp):
+        detected_df = pd.read_csv(detected_fp, sep="\t")
+        for _, row in detected_df.iterrows():
+            detected_clade_map[row["tip"]] = row["clade_name"]
+
+    # Load ESM model
     emb_cfg = cfg.get("embeddings", {})
     model_name = emb_cfg.get("model", "esm2_t33_650M_UR50D")
     device = emb_cfg.get("device", "cuda")
@@ -179,40 +188,19 @@ def score_motifs(cfg, fasta_dir, summary_dir, hmm_keep, force=False):
             for motif in motif_list:
                 positions = _find_motif_positions(clean_seq, motif)
                 if not positions:
-                    all_rows.append(
-                        {
-                            "hmm": hmm,
-                            "seq_id": seq_id,
-                            "motif": motif,
-                            "start_pos": -1,
-                            "end_pos": -1,
-                            "attention_score": 0.0,
-                            "motif_present": False,
-                            "clade_id": clade_map.get(seq_id, ""),
-                            "type": seq_type,
-                        }
-                    )
-                    if use_ha:
-                        occ, ov_mean, ov_max, hs_mean, hs_sum_mean = _motif_ha_metrics(
-                            positions, len(motif), hmm_ha_scores[seq_id], hmm_ha_masks[seq_id]
-                        )
-                        ha_rows.append(
-                            {
-                                "hmm": hmm,
-                                "seq_id": seq_id,
-                                "motif": motif,
-                                "occurrences": occ,
-                                "ha_overlap_mean": ov_mean,
-                                "ha_overlap_max": ov_max,
-                                "ha_score_mean": hs_mean,
-                                "ha_score_sum_mean": hs_sum_mean,
-                                "layer_start": used_layer_start,
-                                "layer_end": used_layer_end,
-                                "ha_call_mode": ha_cfg.get("call_mode", "percentile"),
-                                "ha_percentile": ha_cfg.get("percentile", np.nan),
-                                "ha_topk": ha_cfg.get("topk", np.nan),
-                            }
-                        )
+                    # Record zero score for sequences lacking the motif
+                    all_rows.append({
+                        "hmm": hmm,
+                        "seq_id": seq_id,
+                        "motif": motif,
+                        "start_pos": -1,
+                        "end_pos": -1,
+                        "attention_score": 0.0,
+                        "motif_present": False,
+                        "clade_id": clade_map.get(seq_id, ""),
+                        "detected_clade": detected_clade_map.get(seq_id, ""),
+                        "type": seq_type,
+                    })
                     continue
 
                 score = _extract_attention_at_positions(attentions, positions, len(motif), n_layers=n_layers)
@@ -231,40 +219,19 @@ def score_motifs(cfg, fasta_dir, summary_dir, hmm_keep, force=False):
                         }
                     )
 
-                if use_ha:
-                    occ, ov_mean, ov_max, hs_mean, hs_sum_mean = _motif_ha_metrics(
-                        positions, len(motif), hmm_ha_scores[seq_id], hmm_ha_masks[seq_id]
-                    )
-                    ha_rows.append(
-                        {
-                            "hmm": hmm,
-                            "seq_id": seq_id,
-                            "motif": motif,
-                            "occurrences": occ,
-                            "ha_overlap_mean": ov_mean,
-                            "ha_overlap_max": ov_max,
-                            "ha_score_mean": hs_mean,
-                            "ha_score_sum_mean": hs_sum_mean,
-                            "layer_start": used_layer_start,
-                            "layer_end": used_layer_end,
-                            "ha_call_mode": ha_cfg.get("call_mode", "percentile"),
-                            "ha_percentile": ha_cfg.get("percentile", np.nan),
-                            "ha_topk": ha_cfg.get("topk", np.nan),
-                        }
-                    )
-
-        if use_ha and hmm_ha_scores:
-            write_ha_outputs(
-                attention_dir,
-                summary_dir,
-                hmm,
-                {k: v.replace("*", "").replace("-", "").replace("X", "") for k, v in seqs.items() if k in hmm_ha_scores},
-                hmm_ha_scores,
-                hmm_ha_masks,
-                used_layer_start,
-                used_layer_end,
-                ha_cfg,
-            )
+                for pos in positions:
+                    all_rows.append({
+                        "hmm": hmm,
+                        "seq_id": seq_id,
+                        "motif": motif,
+                        "start_pos": pos,
+                        "end_pos": pos + len(motif),
+                        "attention_score": score,
+                        "motif_present": True,
+                        "clade_id": clade_map.get(seq_id, ""),
+                        "detected_clade": detected_clade_map.get(seq_id, ""),
+                        "type": seq_type,
+                    })
 
     if not all_rows:
         print("[motifs] No motif scores generated.", file=sys.stderr)
