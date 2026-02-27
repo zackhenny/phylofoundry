@@ -151,3 +151,41 @@ def test_compute_kl_defaults_to_clade_vs_others(tmp_path, monkeypatch):
     kl_df = pd.read_csv(kl_fp, sep="\t")
     assert set(kl_df["pair"]) == {"CladeA:others::CladeA", "CladeB:others::CladeB"}
     assert sorted(kl_df["nB"].tolist()) == [2, 2]
+
+
+def test_compute_kl_uses_detected_clades_when_clades_tsv_missing(tmp_path, monkeypatch):
+    outdir = tmp_path / "results"
+    tree_dir = outdir / "trees"
+    clipkit_dir = outdir / "clipkit"
+    summary_dir = outdir / "summary"
+    post_dir = summary_dir / "post_scikitbio"
+    os.makedirs(tree_dir)
+    os.makedirs(clipkit_dir)
+    os.makedirs(summary_dir)
+    os.makedirs(post_dir)
+
+    with open(tree_dir / "HMM1.treefile", "w") as f:
+        f.write("(g1|p1:0.1,g2|p2:0.1,g3|p3:0.1);")
+    with open(clipkit_dir / "HMM1.clipkit.faa", "w") as f:
+        f.write(">g1|p1\nAAAA\n>g2|p2\nAAAA\n>g3|p3\nAAAA\n")
+
+    with open(summary_dir / "detected_clades.tsv", "w") as f:
+        f.write("clade_name\ttip\n")
+        f.write("CladeA\tg1|p1\n")
+        f.write("CladeB\tg2|p2\n")
+
+    def fake_counts(_aln_seqs, subset_tips=None):
+        n = len(_aln_seqs) if subset_tips is None else len(subset_tips)
+        return [{"A": n}]
+
+    monkeypatch.setattr(post, "site_counts_from_subset", fake_counts)
+    monkeypatch.setattr(post, "kl_divergence", lambda *_args, **_kwargs: 0.0)
+
+    cfg = {
+        "inputs": {"gtdb_dir": None, "taxonomy_file": None},
+        "post": {"enabled": True, "compute_kl": True, "clades_tsv": None, "kl_pairs": None}
+    }
+    post.run_post(cfg, str(tree_dir), str(clipkit_dir), "", str(post_dir), str(summary_dir), None, force=True)
+
+    kl_fp = post_dir / "kl_divergence.tsv"
+    assert os.path.exists(kl_fp)
