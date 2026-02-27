@@ -145,15 +145,35 @@ def discover_motifs(cfg, fasta_dir, summary_dir, hmm_keep, force=False):
         return None
 
     clade_df = pd.read_csv(clade_fp, sep="\t")
-    
-    # Identify all valid clusters (exclude noise / -1 if possible)
-    all_clusters = [c for c in clade_df["cluster_id"].unique() if pd.notna(c) and c != -1]
-    
-    if len(all_clusters) < 2:
+
+    # Build clade_to_proteins mapping from HDBSCAN clusters (protein column)
+    # Keys are cluster IDs (numeric); values are sets of protein identifiers
+    clade_to_proteins = {}
+    for cluster_id, grp in clade_df.groupby("cluster_id"):
+        if pd.isna(cluster_id) or cluster_id == -1:
+            continue
+        clade_to_proteins[cluster_id] = set(grp["protein"].values)
+
+    # Load detected clades from post step if available
+    detected_fp = os.path.join(summary_dir, "detected_clades.tsv")
+    if os.path.exists(detected_fp):
+        detected_df = pd.read_csv(detected_fp, sep="\t")
+        n_detected_proteins = 0
+        for clade_name, grp in detected_df.groupby("clade_name"):
+            tips = set(grp["tip"].values)
+            clade_to_proteins[clade_name] = tips
+            n_detected_proteins += len(tips)
+        n_detected_clades = detected_df["clade_name"].nunique()
+        print(f"[discover] Loaded {n_detected_clades} detected clades from "
+              f"detected_clades.tsv ({n_detected_proteins} total proteins).")
+
+    all_clades = list(clade_to_proteins.keys())
+
+    if len(all_clades) < 2:
         print("[discover] Not enough clusters (< 2) for comparative motif discovery.", file=sys.stderr)
         return None
 
-    print(f"[discover] Found {len(all_clusters)} clades for motif discovery.")
+    print(f"[discover] Found {len(all_clades)} clades for motif discovery.")
 
     # Load all sequences
     all_seqs = {}
@@ -191,39 +211,89 @@ def discover_motifs(cfg, fasta_dir, summary_dir, hmm_keep, force=False):
         except Exception as e:
             pass
 
+    # Helper: resolve protein identifiers for a clade against available profiles.
+    # HDBSCAN clusters store short protein IDs; sequence keys are genome|protein format.
+    # Detected clades store tip as genome|protein directly.
+    # Build a suffix lookup map once: protein_id -> seq_id (genome|protein)
+    suffix_lookup = {}
+    for seq_id in all_profiles:
+        if "|" in seq_id:
+            protein_part = seq_id.split("|", 1)[1]
+            suffix_lookup.setdefault(protein_part, seq_id)
+
+    def _resolve_seq_ids(protein_ids):
+        """Return seq_ids present in all_profiles, trying direct match first,
+        then looking up via the suffix map (genome|protein format)."""
+        resolved = set()
+        for pid in protein_ids:
+            if pid in all_profiles:
+                resolved.add(pid)
+            elif pid in suffix_lookup:
+                resolved.add(suffix_lookup[pid])
+        return resolved
+
     # 1-vs-All clade comparison
     target_len = 500
     all_discovered_motifs = []
-    
-    for novel_clade in all_clusters:
-        nov_ids = set(clade_df[clade_df["cluster_id"] == novel_clade]["protein"].values)
-        std_ids = set(clade_df[clade_df["cluster_id"] != novel_clade]["protein"].values)
-        
+
+    # Determine which clades to iterate over
+    if standard_clade is not None and novel_clade is not None:
+        print(f"[discover] Manual override: comparing novel_clade={novel_clade} "
+              f"vs standard_clade={standard_clade}.")
+        comparison_clades = [novel_clade]
+    else:
+        comparison_clades = all_clades
+
+    for focal_clade in comparison_clades:
+        if focal_clade not in clade_to_proteins:
+            print(f"[discover] Clade '{focal_clade}' not found in clade assignments. "
+                  f"Skipping.", file=sys.stderr)
+            continue
+
+        nov_protein_ids = clade_to_proteins[focal_clade]
+
+        if standard_clade is not None and novel_clade is not None:
+            # Manual override: compare against specified standard_clade only
+            if standard_clade not in clade_to_proteins:
+                print(f"[discover] standard_clade '{standard_clade}' not found in "
+                      f"clade assignments. Skipping.", file=sys.stderr)
+                continue
+            std_protein_ids = clade_to_proteins[standard_clade]
+        else:
+            # 1-vs-All: compare focal clade against all other clades combined
+            std_protein_ids = set()
+            for other_clade, other_ids in clade_to_proteins.items():
+                if other_clade != focal_clade:
+                    std_protein_ids.update(other_ids)
+
+        nov_ids = _resolve_seq_ids(nov_protein_ids)
+        std_ids = _resolve_seq_ids(std_protein_ids)
+
         nov_profiles = [all_profiles[s] for s in nov_ids if s in all_profiles]
         std_profiles = [all_profiles[s] for s in std_ids if s in all_profiles]
-        
+
         if not nov_profiles or not std_profiles:
             continue
-            
+
         nov_aligned = _align_profiles_to_fixed_length(nov_profiles, target_len)
         std_aligned = _align_profiles_to_fixed_length(std_profiles, target_len)
-        
+
         nov_mean = nov_aligned.mean(axis=0)
         std_mean = std_aligned.mean(axis=0)
-        
+
         attention_delta = nov_mean - std_mean
         peaks = _find_peaks_in_delta(attention_delta, top_n=top_n)
-        
+
         clade_rows = []
         for peak_pos_norm, delta_val in peaks:
             if delta_val <= 0: continue
-            
+
             # Map peaks back to raw sequences of the active target clade
             for seq_id in nov_ids:
                 if seq_id not in all_seqs: continue
                 seq = all_seqs[seq_id]
                 if len(seq) < 10: continue
-                
+
                 raw_pos = int(peak_pos_norm / target_len * len(seq))
                 raw_pos = min(raw_pos, len(seq) - 1)
                 kmer = _extract_kmer_at_position(seq, raw_pos, k=kmer_size)
@@ -233,10 +303,10 @@ def discover_motifs(cfg, fasta_dir, summary_dir, hmm_keep, force=False):
                     "position": raw_pos,
                     "normalized_position": peak_pos_norm,
                     "attention_delta": delta_val,
-                    "source_clade": novel_clade,
+                    "source_clade": focal_clade,
                     "representative_seq_id": seq_id,
                 })
-                
+
         if clade_rows:
             df_clade = pd.DataFrame(clade_rows)
             kmer_summary = (
@@ -251,8 +321,11 @@ def discover_motifs(cfg, fasta_dir, summary_dir, hmm_keep, force=False):
                 .sort_values("mean_attention_delta", ascending=False)
                 .head(top_n)
             )
-            kmer_summary["source_clade"] = novel_clade
-            kmer_summary["reference_clade"] = "ALL_OTHERS"
+            kmer_summary["source_clade"] = focal_clade
+            if standard_clade is not None and novel_clade is not None:
+                kmer_summary["reference_clade"] = standard_clade
+            else:
+                kmer_summary["reference_clade"] = "ALL_OTHERS"
             all_discovered_motifs.append(kmer_summary)
 
     if not all_discovered_motifs:
