@@ -127,11 +127,15 @@
             ],
             "RELAX": [
                 "--test",
-                "Test",
+                "test",
                 "--reference",
-                "Reference"
+                "reference"
             ]
-        }
+        },
+        "use_detected_clades": true,
+        "min_clade_size": 4,
+        "label_mode": "crown",
+        "relax_label_reference": true
     },
     "motifs": {
         "enabled": false,

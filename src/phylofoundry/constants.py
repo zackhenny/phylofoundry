@@ -129,10 +129,14 @@ DEFAULT_CONFIG = {
         "run_hyphy": False,
         "hyphy_bin": "hyphy",
         "hyphy_tests": "RELAX,aBSREL,MEME",
+        "use_detected_clades": True,
+        "min_clade_size": 4,
+        "label_mode": "crown",  # "crown"|"stem"
+        "relax_label_reference": True,
         "hyphy_args": {
             "MEME": ["--branches", "All"],
             "aBSREL": ["--branches", "All"],
-            "RELAX": ["--test", "Test", "--reference", "Reference"]
+            "RELAX": ["--test", "test", "--reference", "reference"]
         }
     },
     "motifs": {

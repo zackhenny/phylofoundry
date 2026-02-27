@@ -135,7 +135,11 @@ The pipeline creates a structured `results` directory:
 | `synteny/<HMM>/synteny.<HMM>.pdf` | Synteny plot of gene neighborhoods. | PDF |
 | `synteny/<HMM>/neighborhood_proteins.faa` | Sequences of all genes in the extracted neighborhoods. | FASTA |
 | `codon_alignments/<HMM>.codon.fasta` | Codon-aware alignment (if enabled). | FASTA |
-| `summary/hyphy/<HMM>.<test>.json` | Selection test results (e.g., RELAX, MEME). | JSON |
+| `summary/hyphy/<HMM>.<test>.json` | Legacy single-run HyPhy output when clade-aware mode is disabled or no clades are detected. | JSON |
+| `summary/hyphy/<HMM>/<TEST>/<CLADE>.json` | Clade-aware HyPhy output (auto-generated from `summary/detected_clades.tsv`). | JSON |
+| `summary/hyphy/<HMM>/<TEST>/<CLADE>.log` | Captured HyPhy run log for each clade-aware run. | LOG |
+| `summary/hyphy/clade_runs.tsv` | QC manifest of all clade-aware HyPhy attempts and output paths. | TSV |
+| `trees_labeled/<HMM>/<CLADE>.<TEST>.nwk` | Auto-generated labeled trees consumed by HyPhy (e.g., `{FG}`, `{test}`, `{reference}`). | Newick |
 
 ---
 
@@ -246,8 +250,8 @@ The pipeline runs as a series of sequential **Steps**. You can control execution
 -   **Output**: `codon_alignments/<hmm_name>.codon.fasta`.
 
 ### Step 8: `hyphy` (Optional)
--   **Action**: Runs selection tests (e.g., RELAX, aBSREL, MEME) on the codon alignments and trees.
--   **Output**: `summary/hyphy/<hmm_name>.<test>.json`.
+-   **Action**: Runs selection tests (e.g., RELAX, aBSREL, MEME) on codon alignments and trees. If `summary/detected_clades.tsv` exists and `hyphy.use_detected_clades=true`, HyPhy automatically builds labeled trees and runs per-clade analyses (no manual RELAX labeling required).
+-   **Output**: Legacy `summary/hyphy/<hmm_name>.<test>.json` plus clade-aware outputs under `summary/hyphy/<hmm_name>/<TEST>/<clade_name>.json` and labeled trees under `trees_labeled/<hmm_name>/`.
 
 ### Step 9: `score_motifs` (Optional)
 -   **Action**: Passes sequences through ESM-2 with `output_attentions=True`, extracts attention weights at user-specified motif positions.
@@ -429,3 +433,8 @@ Codon alignments.
 Selection tests.
 -   `enabled`: Set to `true` to run.
 -   `hyphy_tests`: (Default: `"RELAX,aBSREL,MEME"`) List of tests to run.
+-   `use_detected_clades`: (Default: `true`) Auto-load `summary/detected_clades.tsv` for clade-aware HyPhy runs.
+-   `min_clade_size`: (Default: `4`) Skip per-HMM clades smaller than this number of tips.
+-   `label_mode`: (Default: `"crown"`) Branch-label strategy for clade foreground (`"crown"` or `"stem"`).
+-   `relax_label_reference`: (Default: `true`) Add `{reference}` labels to non-foreground branches for RELAX.
+-   `hyphy_args`: Existing per-test args are still supported; in clade-aware mode, `aBSREL`/`BUSTED` branch labels are forced to `FG` and RELAX labels are synchronized to `test`/`reference`.
