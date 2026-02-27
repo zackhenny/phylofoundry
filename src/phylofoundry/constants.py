@@ -38,11 +38,18 @@ DEFAULT_CONFIG = {
         "run_scan": True,
         "run_search": True
     },
+    "prep": {
+        "cleanup_combined_faa": False
+    },
     "filtering": {
         "scores_tsv": None,
         "global_min_score": 25.0,
         "min_coverage": 0.5,
-        "keep_tbl": False
+        "keep_tbl": False,
+        "max_evalue": None,
+        "use_evalue": False,
+        "disable_bitscore_filter": False,
+        "disable_coverage_filter": False
     },
     "phylo": {
         "mafft": False,

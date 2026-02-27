@@ -129,6 +129,11 @@ def run_pipeline(cfg):
             combined_faa, outdir, summary_dir, hmmscan_dir, hmmsearch_dir,
             hmm_keep, force
         )
+        # Optional: clean up combined FAA to reclaim disk space
+        prep_cfg = cfg.get("prep", {})
+        if prep_cfg.get("cleanup_combined_faa", False) and os.path.exists(combined_faa):
+            os.remove(combined_faa)
+            print("[pipeline] Removed combined_proteomes.faa (prep.cleanup_combined_faa=true).")
     if stop_after == "hmmer":
         return
 

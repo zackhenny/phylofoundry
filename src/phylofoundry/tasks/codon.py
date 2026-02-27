@@ -2,6 +2,7 @@ import os
 import sys
 import glob
 import re
+import subprocess
 from collections import defaultdict
 from ..utils.bio import read_fasta, write_fasta
 from ..utils.helpers import run_cmd, find_cds_fasta_for_genome, normalize_genome_id
@@ -60,10 +61,16 @@ def map_aa_id_to_cds_id(aa_id, mode="after_last_pipe"):
 def build_codon_alignment_pal2nal(aa_aln_fp, cds_subset_fp, out_codon_fp,
                                    pal2nal_cmd="pal2nal.pl",
                                    codon_format="fasta"):
-    """Run pal2nal with -nogap -nomismatch to tolerate minor differences."""
+    """Run pal2nal with -nogap -nomismatch to tolerate minor differences.
+
+    Stderr from pal2nal is captured and printed so the user can see diagnostic
+    messages (e.g. "ERROR: CDS does not match protein sequence").
+    """
     cmd = (f"{pal2nal_cmd} {aa_aln_fp} {cds_subset_fp} "
            f"-output {codon_format} -nogap -nomismatch > {out_codon_fp}")
-    run_cmd(cmd, quiet=True, shell=True)
+    result = subprocess.run(cmd, shell=True, stderr=subprocess.PIPE, text=True)
+    if result.stderr:
+        print(f"[codon] pal2nal stderr:\n{result.stderr}", file=sys.stderr)
 
 
 # ---------------------------------------------------------------------------
@@ -111,7 +118,8 @@ def run_codon(cfg, tree_dir, clipkit_dir, aln_dir, codon_dir, hmm_keep, force=Fa
         cds_subset = {}
         tips_by_genome = defaultdict(list)
         for tip in aln_seqs.keys():
-            genome = tip.split("|", 1)[0] if "|" in tip else "Unknown"
+            raw_genome = tip.split("|", 1)[0] if "|" in tip else "Unknown"
+            genome = normalize_genome_id(raw_genome)
             tips_by_genome[genome].append(tip)
 
         missing_cds_files = []
@@ -182,6 +190,35 @@ def run_codon(cfg, tree_dir, clipkit_dir, aln_dir, codon_dir, hmm_keep, force=Fa
         for tip in aln_seqs.keys():
             if tip in cds_subset:
                 ordered_cds_subset[tip] = cds_subset[tip]
+
+        # ── Debug: show first few AA and CDS headers ─────────────────────
+        aa_headers = list(aln_seqs.keys())[:3]
+        cds_headers = list(ordered_cds_subset.keys())[:3]
+        print(f"[codon] {hmm}: AA headers (first 3): {aa_headers}", file=sys.stderr)
+        print(f"[codon] {hmm}: CDS headers (first 3): {cds_headers}", file=sys.stderr)
+
+        # ── Validate CDS/AA length compatibility ─────────────────────────
+        length_ok = {}
+        length_bad = []
+        for tip, cds_seq in ordered_cds_subset.items():
+            aa_seq = aln_seqs[tip]
+            non_gap_aa = aa_seq.replace("-", "").replace(".", "")
+            expected_cds_len = len(non_gap_aa) * 3
+            if len(cds_seq) != expected_cds_len:
+                length_bad.append((tip, len(non_gap_aa), len(cds_seq)))
+            else:
+                length_ok[tip] = cds_seq
+        if length_bad:
+            print(f"[codon] Warning ({hmm}): {len(length_bad)} sequence(s) excluded due to "
+                  f"CDS/AA length mismatch (expected CDS=AA*3). "
+                  f"First few: {[(t, aa, cds) for t, aa, cds in length_bad[:3]]}",
+                  file=sys.stderr)
+            ordered_cds_subset = length_ok
+
+        if len(ordered_cds_subset) < 3:
+            print(f"[codon] Skipping {hmm}: only {len(ordered_cds_subset)} sequences pass "
+                  f"length validation (need ≥3).", file=sys.stderr)
+            continue
 
         cds_subset_fp = os.path.join(codon_dir, f"{hmm}.cds.fna")
         write_fasta(cds_subset_fp, ordered_cds_subset)
