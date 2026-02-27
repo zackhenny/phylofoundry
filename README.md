@@ -135,7 +135,11 @@ The pipeline creates a structured `results` directory:
 | `synteny/<HMM>/synteny.<HMM>.pdf` | Synteny plot of gene neighborhoods. | PDF |
 | `synteny/<HMM>/neighborhood_proteins.faa` | Sequences of all genes in the extracted neighborhoods. | FASTA |
 | `codon_alignments/<HMM>.codon.fasta` | Codon-aware alignment (if enabled). | FASTA |
-| `summary/hyphy/<HMM>.<test>.json` | Selection test results (e.g., RELAX, MEME). | JSON |
+| `summary/hyphy/<HMM>.<test>.json` | Legacy single-run HyPhy output when clade-aware mode is disabled or no clades are detected. | JSON |
+| `summary/hyphy/<HMM>/<TEST>/<CLADE>.json` | Clade-aware HyPhy output (auto-generated from `summary/detected_clades.tsv`). | JSON |
+| `summary/hyphy/<HMM>/<TEST>/<CLADE>.log` | Captured HyPhy run log for each clade-aware run. | LOG |
+| `summary/hyphy/clade_runs.tsv` | QC manifest of all clade-aware HyPhy attempts and output paths. | TSV |
+| `trees_labeled/<HMM>/<CLADE>.<TEST>.nwk` | Auto-generated labeled trees consumed by HyPhy (e.g., `{FG}`, `{test}`, `{reference}`). | Newick |
 
 ---
 
@@ -246,18 +250,20 @@ The pipeline runs as a series of sequential **Steps**. You can control execution
 -   **Output**: `codon_alignments/<hmm_name>.codon.fasta`.
 
 ### Step 8: `hyphy` (Optional)
--   **Action**: Runs selection tests (e.g., RELAX, aBSREL, MEME) on the codon alignments and trees.
--   **Output**: `summary/hyphy/<hmm_name>.<test>.json`.
+-   **Action**: Runs selection tests (e.g., RELAX, aBSREL, MEME) on codon alignments and trees. If `summary/detected_clades.tsv` exists and `hyphy.use_detected_clades=true`, HyPhy automatically builds labeled trees and runs per-clade analyses (no manual RELAX labeling required).
+-   **Output**: Legacy `summary/hyphy/<hmm_name>.<test>.json` plus clade-aware outputs under `summary/hyphy/<hmm_name>/<TEST>/<clade_name>.json` and labeled trees under `trees_labeled/<hmm_name>/`.
 
 ### Step 9: `score_motifs` (Optional)
 -   **Action**: Passes sequences through ESM-2 with `output_attentions=True`, extracts attention weights at user-specified motif positions.
 -   **CLI**: `--motifs HPEVY,HPEVF`
 -   **Output**: `summary/motif_attention_scores.tsv` — columns: `seq_id`, `motif`, `start_pos`, `end_pos`, `attention_score`, `clade_id`, `type`.
+-   **HA Output (optional)**: `summary/motif_ha_scores.tsv` with overlap and HA-score statistics per motif when `ha.enabled=true` and `motifs.use_ha=true`.
 
 ### Step 10: `discover_motifs` (Optional)
 -   **Action**: Iterates over all HDBSCAN clades, comparing the 1D attention profiles of each clade against the combined average of all others. Finds peaks in the attention delta and extracts k-mers as candidate novel structural hubs for that specific clade.
 -   **CLI**: N/A, runs automatically if `discover.enabled` is `true`.
 -   **Output**: `summary/discovered_motifs.tsv` — columns: `kmer`, `n_sequences`, `mean_attention_delta`, `source_clade`, `reference_clade`.
+-   **HA Outputs (optional)**: `discover/<HMM>.ha_enrichment.tsv` and `discover/<HMM>.ha_hubs.tsv` when `ha.enabled=true` and `discover.use_ha=true`.
 
 ---
 
@@ -396,26 +402,94 @@ Protein Language Model analysis.
 -   `enabled`: Set to `true` to run.
 -   `model`: (Default: `"esm2_t33_650M_UR50D"`) ESM2 model.
 -   `device`: `"cuda"` (GPU) or `"cpu"`.
+-   `write_full_vectors`: (Default: `false`) Must be `true` for HA attention-based methods.
 -   `cluster_embeddings`: (Default: `true`) Run HDBSCAN clustering on embeddings.
 -   `hdbscan_min_cluster_size`: (Default: `5`) Minimum cluster size for HDBSCAN.
+
+### `ha`
+High-Attention (HA) site calling.
+-   `enabled`: (Default: `false`) Enable HA site extraction.
+-   `layer_mode`: `"middle"` (default) or `"range"`.
+-   `layer_start`, `layer_end`: Explicit layer interval when `layer_mode="range"`.
+-   `agg`: (Default: `"median"`) Layer aggregation statistic (`"median"` or `"mean"`).
+-   `call_mode`: `"percentile"` (default) or `"topk"`.
+-   `percentile`: (Default: `0.05`) Top fraction when percentile mode is used.
+-   `topk`: (Default: `20`) Number of HA sites in top-k mode.
+-   `min_sites`, `max_sites`: (Defaults: `8`, `60`) Clamp called HA-site counts.
 
 ### `post`
 Post-processing metrics.
 -   `enabled`: Set to `true` to run.
 -   `compute_conservation`: (Default: `false`) Calculate conservation scores.
 -   `clades_tsv`: (Optional) TSV mapping tips to groups for dispersion analysis.
--   `detect_clades_method`: (Optional) `taxonomy` or `treecluster` to auto-generate `summary/detected_clades.tsv`.
+-   `detect_clades_method`: (Optional) `taxonomy`, `treecluster`, or `tree_embed` to auto-generate `summary/detected_clades.tsv`.
 -   `taxonomy_clade_level`: (Default: `"genus"`) Taxonomic rank used when `detect_clades_method=taxonomy`.
 -   `treecluster_threshold`: (Default: `0.045`) Distance threshold passed to TreeCluster.
 -   `treecluster_method`: (Default: `"max_clade"`) TreeCluster clustering method.
+-   `embedtree_support_min`: (Default: `80`) Minimum internal-node support for candidate splits when `detect_clades_method=tree_embed`.
+-   `embedtree_min_size`: (Default: `5`) Minimum tips in a candidate clade.
+-   `embedtree_max_size`: (Default: `5000`) Maximum tips in a candidate clade (`null` to disable).
+-   `embedtree_top_k`: (Default: `10`) Maximum non-overlapping embedding-shift clades emitted per HMM.
+-   `embedtree_pcs`: (Default: `10`) Number of embedding PCs used for split scoring.
+-   `embedtree_distance`: (Default: `"euclidean"`) Distance metric for centroid and dispersion calculations (`"euclidean"` or `"cosine"`).
+-   `embedtree_allow_nested`: (Default: `false`) If `true`, descendants of selected splits may also be emitted.
+-   `embedtree_require_monophyly`: (Default: `true`) Enforces clades to be internal tree nodes (monophyletic by construction).
+-   `embedtree_emit_all`: (Default: `false`) If `true`, emit all accepted nodes instead of truncating at `embedtree_top_k`.
+-   `summary/node_scores.embedtree.tsv`: Per-node QC table containing support, dispersion, separation, effect size, and tree diameter for tree-embedding scoring.
 -   `compute_kl`: If enabled and no explicit `kl_pairs`, computes `clade vs all other tips` for each detected clade.
+
+
+### HA Sites (High-Attention residues, paper-inspired)
+Reference: Das et al., *Applying protein language model (ESM2) and molecular dynamics simulations to investigate local adaptation in NADP-ME proteins from C4 and CAM plants*, **Scientific Reports** (2025). https://pmc.ncbi.nlm.nih.gov/articles/PMC12448987/
+
+- HA sites summarize ESM2 attention into per-residue "attention received" scores.
+- We aggregate normalized layer-wise received-attention vectors across layers (default: **middle third** of layers) and call top residues as HA using percentile or top-k rules.
+- HA outputs:
+  - `attention/<HMM>.ha_sites.tsv` (`pos_ungapped` is 1-based)
+  - `summary/ha_summary.tsv`
+
+> ⚠️ Attention-based HA features require `embeddings.write_full_vectors: true`.
+> If HA is enabled while `write_full_vectors` is false, the pipeline exits with a clear error.
+
+Example HA config:
+```json
+{
+  "embeddings": { "write_full_vectors": true },
+  "ha": {
+    "enabled": true,
+    "layer_mode": "middle",
+    "call_mode": "percentile",
+    "percentile": 0.05,
+    "min_sites": 8,
+    "max_sites": 60
+  },
+  "motifs": { "use_ha": true },
+  "discover": { "use_ha": true, "ha_window": 9, "ha_delta_min": 0.2 }
+}
+```
 
 ### `codon`
 Codon alignments.
 -   `enabled`: Set to `true` to run.
 -   `pal2nal_cmd`: (Default: `"pal2nal.pl"`) Path to PAL2NAL script.
 
+### `motifs`
+Targeted motif scoring.
+-   `use_ha`: (Default: `false`) Add HA-overlap and HA-score metrics to `summary/motif_ha_scores.tsv`.
+
+### `discover`
+Unsupervised motif discovery.
+-   `use_ha`: (Default: `false`) Enable alignment-aware HA enrichment/hub calling outputs.
+-   `ha_window`: (Default: `9`) Smoothing window for HA delta profiles.
+-   `ha_delta_min`: (Default: `0.2`) Minimum smoothed delta for HA hub calls.
+-   `ha_gap_frac_max`: (Default: `0.6`) Maximum mean gap fraction allowed in HA hubs.
+
 ### `hyphy`
 Selection tests.
 -   `enabled`: Set to `true` to run.
 -   `hyphy_tests`: (Default: `"RELAX,aBSREL,MEME"`) List of tests to run.
+-   `use_detected_clades`: (Default: `true`) Auto-load `summary/detected_clades.tsv` for clade-aware HyPhy runs.
+-   `min_clade_size`: (Default: `4`) Skip per-HMM clades smaller than this number of tips.
+-   `label_mode`: (Default: `"crown"`) Branch-label strategy for clade foreground (`"crown"` or `"stem"`).
+-   `relax_label_reference`: (Default: `true`) Add `{reference}` labels to non-foreground branches for RELAX.
+-   `hyphy_args`: Existing per-test args are still supported; in clade-aware mode, `aBSREL`/`BUSTED` branch labels are forced to `FG` and RELAX labels are synchronized to `test`/`reference`.
