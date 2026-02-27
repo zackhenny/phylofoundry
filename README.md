@@ -257,11 +257,13 @@ The pipeline runs as a series of sequential **Steps**. You can control execution
 -   **Action**: Passes sequences through ESM-2 with `output_attentions=True`, extracts attention weights at user-specified motif positions.
 -   **CLI**: `--motifs HPEVY,HPEVF`
 -   **Output**: `summary/motif_attention_scores.tsv` — columns: `seq_id`, `motif`, `start_pos`, `end_pos`, `attention_score`, `clade_id`, `type`.
+-   **HA Output (optional)**: `summary/motif_ha_scores.tsv` with overlap and HA-score statistics per motif when `ha.enabled=true` and `motifs.use_ha=true`.
 
 ### Step 10: `discover_motifs` (Optional)
 -   **Action**: Iterates over all HDBSCAN clades, comparing the 1D attention profiles of each clade against the combined average of all others. Finds peaks in the attention delta and extracts k-mers as candidate novel structural hubs for that specific clade.
 -   **CLI**: N/A, runs automatically if `discover.enabled` is `true`.
 -   **Output**: `summary/discovered_motifs.tsv` — columns: `kmer`, `n_sequences`, `mean_attention_delta`, `source_clade`, `reference_clade`.
+-   **HA Outputs (optional)**: `discover/<HMM>.ha_enrichment.tsv` and `discover/<HMM>.ha_hubs.tsv` when `ha.enabled=true` and `discover.use_ha=true`.
 
 ---
 
@@ -400,8 +402,20 @@ Protein Language Model analysis.
 -   `enabled`: Set to `true` to run.
 -   `model`: (Default: `"esm2_t33_650M_UR50D"`) ESM2 model.
 -   `device`: `"cuda"` (GPU) or `"cpu"`.
+-   `write_full_vectors`: (Default: `false`) Must be `true` for HA attention-based methods.
 -   `cluster_embeddings`: (Default: `true`) Run HDBSCAN clustering on embeddings.
 -   `hdbscan_min_cluster_size`: (Default: `5`) Minimum cluster size for HDBSCAN.
+
+### `ha`
+High-Attention (HA) site calling.
+-   `enabled`: (Default: `false`) Enable HA site extraction.
+-   `layer_mode`: `"middle"` (default) or `"range"`.
+-   `layer_start`, `layer_end`: Explicit layer interval when `layer_mode="range"`.
+-   `agg`: (Default: `"median"`) Layer aggregation statistic (`"median"` or `"mean"`).
+-   `call_mode`: `"percentile"` (default) or `"topk"`.
+-   `percentile`: (Default: `0.05`) Top fraction when percentile mode is used.
+-   `topk`: (Default: `20`) Number of HA sites in top-k mode.
+-   `min_sites`, `max_sites`: (Defaults: `8`, `60`) Clamp called HA-site counts.
 
 ### `post`
 Post-processing metrics.
@@ -424,10 +438,49 @@ Post-processing metrics.
 -   `summary/node_scores.embedtree.tsv`: Per-node QC table containing support, dispersion, separation, effect size, and tree diameter for tree-embedding scoring.
 -   `compute_kl`: If enabled and no explicit `kl_pairs`, computes `clade vs all other tips` for each detected clade.
 
+
+### HA Sites (High-Attention residues, paper-inspired)
+- HA sites summarize ESM2 attention into per-residue "attention received" scores.
+- We aggregate normalized layer-wise received-attention vectors across layers (default: **middle third** of layers) and call top residues as HA using percentile or top-k rules.
+- HA outputs:
+  - `attention/<HMM>.ha_sites.tsv` (`pos_ungapped` is 1-based)
+  - `summary/ha_summary.tsv`
+
+> ⚠️ Attention-based HA features require `embeddings.write_full_vectors: true`.
+> If HA is enabled while `write_full_vectors` is false, the pipeline exits with a clear error.
+
+Example HA config:
+```json
+{
+  "embeddings": { "write_full_vectors": true },
+  "ha": {
+    "enabled": true,
+    "layer_mode": "middle",
+    "call_mode": "percentile",
+    "percentile": 0.05,
+    "min_sites": 8,
+    "max_sites": 60
+  },
+  "motifs": { "use_ha": true },
+  "discover": { "use_ha": true, "ha_window": 9, "ha_delta_min": 0.2 }
+}
+```
+
 ### `codon`
 Codon alignments.
 -   `enabled`: Set to `true` to run.
 -   `pal2nal_cmd`: (Default: `"pal2nal.pl"`) Path to PAL2NAL script.
+
+### `motifs`
+Targeted motif scoring.
+-   `use_ha`: (Default: `false`) Add HA-overlap and HA-score metrics to `summary/motif_ha_scores.tsv`.
+
+### `discover`
+Unsupervised motif discovery.
+-   `use_ha`: (Default: `false`) Enable alignment-aware HA enrichment/hub calling outputs.
+-   `ha_window`: (Default: `9`) Smoothing window for HA delta profiles.
+-   `ha_delta_min`: (Default: `0.2`) Minimum smoothed delta for HA hub calls.
+-   `ha_gap_frac_max`: (Default: `0.6`) Maximum mean gap fraction allowed in HA hubs.
 
 ### `hyphy`
 Selection tests.

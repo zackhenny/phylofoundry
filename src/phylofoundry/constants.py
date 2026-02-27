@@ -139,10 +139,23 @@ DEFAULT_CONFIG = {
             "RELAX": ["--test", "test", "--reference", "reference"]
         }
     },
+    "ha": {
+        "enabled": False,
+        "layer_mode": "middle",  # "middle"|"range"
+        "layer_start": None,
+        "layer_end": None,
+        "agg": "median",  # "median"|"mean"
+        "call_mode": "percentile",  # "percentile"|"topk"
+        "percentile": 0.05,
+        "topk": 20,
+        "min_sites": 8,
+        "max_sites": 60
+    },
     "motifs": {
         "enabled": False,
         "motif_list": [],           # e.g. ["HPEVY", "HPEVF"]
         "attention_layers": 4,      # last N ESM-2 layers to average
+        "use_ha": False
     },
     "discover": {
         "enabled": False,
@@ -151,5 +164,9 @@ DEFAULT_CONFIG = {
         "kmer_size": 5,
         "top_n_peaks": 20,
         "attention_layers": 4,
+        "use_ha": False,
+        "ha_window": 9,
+        "ha_delta_min": 0.2,
+        "ha_gap_frac_max": 0.6
     },
 }

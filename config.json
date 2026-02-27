@@ -140,12 +140,29 @@
     "motifs": {
         "enabled": false,
         "motif_list": [],
-        "attention_layers": 4
+        "attention_layers": 4,
+        "use_ha": false
     },
     "discover": {
         "enabled": false,
         "kmer_size": 5,
         "top_n_peaks": 20,
-        "attention_layers": 4
+        "attention_layers": 4,
+        "use_ha": false,
+        "ha_window": 9,
+        "ha_delta_min": 0.2,
+        "ha_gap_frac_max": 0.6
+    },
+    "ha": {
+        "enabled": false,
+        "layer_mode": "middle",
+        "layer_start": null,
+        "layer_end": null,
+        "agg": "median",
+        "call_mode": "percentile",
+        "percentile": 0.05,
+        "topk": 20,
+        "min_sites": 8,
+        "max_sites": 60
     }
 }
