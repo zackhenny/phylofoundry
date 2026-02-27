@@ -90,10 +90,19 @@ DEFAULT_CONFIG = {
         "compute_kl": False,
         "clades_tsv": None,  # TSV columns: clade_name, tip (tip label must match alignment tip labels)
         "kl_pairs": None,    # "A:B,A:background"
-        "detect_clades_method": None,  # None|"taxonomy"|"treecluster"
+        "detect_clades_method": None,  # None|"taxonomy"|"treecluster"|"tree_embed"
         "taxonomy_clade_level": "genus",
         "treecluster_threshold": 0.045,
-        "treecluster_method": "max_clade"
+        "treecluster_method": "max_clade",
+        "embedtree_support_min": 80,
+        "embedtree_min_size": 5,
+        "embedtree_max_size": 5000,
+        "embedtree_top_k": 10,
+        "embedtree_pcs": 10,
+        "embedtree_distance": "euclidean",  # "euclidean"|"cosine"
+        "embedtree_allow_nested": False,
+        "embedtree_require_monophyly": True,
+        "embedtree_emit_all": False
     },
     "synteny": {
         "enabled": False,
@@ -120,21 +129,42 @@ DEFAULT_CONFIG = {
         "run_hyphy": False,
         "hyphy_bin": "hyphy",
         "hyphy_tests": "RELAX,aBSREL,MEME",
+        "use_detected_clades": True,
+        "min_clade_size": 4,
+        "label_mode": "crown",  # "crown"|"stem"
+        "relax_label_reference": True,
         "hyphy_args": {
             "MEME": ["--branches", "All"],
             "aBSREL": ["--branches", "All"],
-            "RELAX": ["--test", "Test", "--reference", "Reference"]
+            "RELAX": ["--test", "test", "--reference", "reference"]
         }
+    },
+    "ha": {
+        "enabled": False,
+        "layer_mode": "middle",  # "middle"|"range"
+        "layer_start": None,
+        "layer_end": None,
+        "agg": "median",  # "median"|"mean"
+        "call_mode": "percentile",  # "percentile"|"topk"
+        "percentile": 0.05,
+        "topk": 20,
+        "min_sites": 8,
+        "max_sites": 60
     },
     "motifs": {
         "enabled": False,
         "motif_list": [],           # e.g. ["HPEVY", "HPEVF"]
         "attention_layers": 4,      # last N ESM-2 layers to average
+        "use_ha": False
     },
     "discover": {
         "enabled": False,
         "kmer_size": 5,
         "top_n_peaks": 20,
         "attention_layers": 4,
+        "use_ha": False,
+        "ha_window": 9,
+        "ha_delta_min": 0.2,
+        "ha_gap_frac_max": 0.6
     },
 }
