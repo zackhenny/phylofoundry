@@ -234,3 +234,103 @@ class TestHmmer:
         result = apply_filtering(df, {}, global_min_score=25.0, global_min_cov=0.5)
         assert len(result) == 1  # only hmmA passes both filters
         assert result.iloc[0]["hmm"] == "hmmA"
+
+
+# ──── codon.py ────────────────────────────────────────────────────────────────
+
+class TestCodon:
+    def test_strip_stop_from_protein_removes_stop(self):
+        from phylofoundry.tasks.codon import _strip_stop_from_protein
+
+        assert _strip_stop_from_protein("MACD*") == "MACD"
+        assert _strip_stop_from_protein("MACD") == "MACD"
+        assert _strip_stop_from_protein("MA*CD*") == "MACD"
+
+    def test_strip_stop_from_protein_removes_trailing_x(self):
+        from phylofoundry.tasks.codon import _strip_stop_from_protein
+
+        assert _strip_stop_from_protein("MACDX") == "MACD"
+        assert _strip_stop_from_protein("MACDXX") == "MACD"
+        # Internal X is preserved (only trailing X/stop stripped)
+        assert _strip_stop_from_protein("MAXCD") == "MAXCD"
+        # Both internal and trailing X: internal preserved, trailing stripped
+        assert _strip_stop_from_protein("MAXCDX") == "MAXCD"
+
+    def test_clean_aa_alignment_strips_stop_and_x(self):
+        from phylofoundry.tasks.codon import _clean_aa_alignment
+
+        aln = {"seq1": "MACD*", "seq2": "MVXX", "seq3": "MA-CD"}
+        cleaned = _clean_aa_alignment(aln)
+        assert cleaned["seq1"] == "MACD"
+        assert cleaned["seq2"] == "MV"
+        assert cleaned["seq3"] == "MA-CD"
+
+    def test_read_tree_tips_basic(self, tmp_path):
+        from phylofoundry.tasks.codon import _read_tree_tips
+
+        # Standard Newick with branch lengths
+        treefile = tmp_path / "test.treefile"
+        treefile.write_text("(seqA:0.1,seqB:0.2,(seqC:0.3,seqD:0.4)98:0.5)Root;\n")
+        tips = _read_tree_tips(str(treefile))
+        assert "seqA" in tips
+        assert "seqB" in tips
+        assert "seqC" in tips
+        assert "seqD" in tips
+
+    def test_read_tree_tips_with_pipe_names(self, tmp_path):
+        from phylofoundry.tasks.codon import _read_tree_tips
+
+        treefile = tmp_path / "test.treefile"
+        treefile.write_text(
+            "(genome1|prot_A1:0.1,genome2|prot_B1:0.2,genome3|prot_C1:0.3);\n"
+        )
+        tips = _read_tree_tips(str(treefile))
+        assert "genome1|prot_A1" in tips
+        assert "genome2|prot_B1" in tips
+        assert "genome3|prot_C1" in tips
+
+
+# ──── prep.py ─────────────────────────────────────────────────────────────────
+
+class TestPrep:
+    def test_combined_faa_strips_stop_and_x(self, tmp_path):
+        """Sequences written to the combined FAA must not contain * or X."""
+        from phylofoundry.utils.bio import write_fasta, read_fasta
+        from phylofoundry.tasks.prep import run_prep
+
+        faa_dir = str(tmp_path / "faa")
+        os.makedirs(faa_dir)
+        # Write a genome with stop codon and ambiguous residue in protein
+        write_fasta(
+            os.path.join(faa_dir, "genomeX.faa"),
+            {"prot1": "MSKGEELFT*", "prot2": "MVSKXEELFT"},
+        )
+
+        outdir = str(tmp_path / "out")
+        os.makedirs(outdir)
+        combined_faa = os.path.join(outdir, "combined_proteomes.faa")
+        combined_hmm = os.path.join(outdir, "combined.hmm")
+        # Create dummy HMM index files so hmmpress is not called
+        with open(combined_hmm, "w") as f:
+            f.write("")
+        for ext in [".h3f", ".h3i", ".h3m", ".h3p"]:
+            with open(combined_hmm + ext, "w") as f:
+                f.write("")
+
+        cfg = {"hmmer": {"run_scan": True, "run_search": True}}
+        run_prep(
+            cfg,
+            genomes=["genomeX.faa"],
+            faa_dir=faa_dir,
+            hmm_input_mode="file",
+            hmm_dir=faa_dir,
+            hmm_files=["genomeX.faa"],  # dummy
+            combined_faa=combined_faa,
+            combined_hmm=combined_hmm,
+            force=True,
+        )
+
+        seqs = read_fasta(combined_faa)
+        for sid, seq in seqs.items():
+            assert "*" not in seq, f"Stop codon found in {sid}: {seq}"
+            assert "X" not in seq, f"Ambiguous X found in {sid}: {seq}"

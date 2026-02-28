@@ -15,7 +15,14 @@ def run_prep(cfg, genomes, faa_dir, hmm_input_mode, hmm_dir, hmm_files, combined
                 for g in genomes:
                     seqs = read_fasta(os.path.join(faa_dir, g))
                     for pid, s in seqs.items():
-                        out_faa.write(f">{g}~{pid}\n{s}\n")
+                        # Strip stop codons (*) and ambiguous residues (X/x) from
+                        # protein sequences before they enter the pipeline.  At this
+                        # early stage the sequences are *not yet aligned*, so removing
+                        # all occurrences (including internal) is safe and avoids
+                        # downstream failures in HMM scanning, MAFFT, IQ-TREE and
+                        # pal2nal that do not recognize these characters.
+                        s_clean = s.replace("*", "").replace("X", "").replace("x", "")
+                        out_faa.write(f">{g}~{pid}\n{s_clean}\n")
     else:
         print("[prep] Skipping combined_proteomes.faa (hmmsearch disabled).")
 
