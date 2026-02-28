@@ -15,7 +15,12 @@ def run_prep(cfg, genomes, faa_dir, hmm_input_mode, hmm_dir, hmm_files, combined
                 for g in genomes:
                     seqs = read_fasta(os.path.join(faa_dir, g))
                     for pid, s in seqs.items():
-                        out_faa.write(f">{g}~{pid}\n{s}\n")
+                        # Strip stop codons ('*') from protein sequences before
+                        # they enter the pipeline.  'X' and other ambiguous
+                        # residues are intentionally kept to preserve original
+                        # AA positions.
+                        s_clean = s.replace("*", "")
+                        out_faa.write(f">{g}~{pid}\n{s_clean}\n")
     else:
         print("[prep] Skipping combined_proteomes.faa (hmmsearch disabled).")
 
