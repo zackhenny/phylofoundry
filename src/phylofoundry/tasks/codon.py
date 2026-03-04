@@ -116,7 +116,7 @@ def run_codon(cfg, tree_dir, clipkit_dir, aln_dir, codon_dir, hmm_keep, force=Fa
         raise SystemExit("codon.build_codon_alignments requires inputs.cds_dir")
 
     hmm_names = sorted([
-        os.path.basename(x).split(".")[0]
+        os.path.basename(x).replace(".treefile", "")
         for x in glob.glob(os.path.join(tree_dir, "*.treefile"))
     ])
     if hmm_keep is not None:

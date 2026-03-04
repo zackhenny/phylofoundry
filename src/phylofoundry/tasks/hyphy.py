@@ -189,7 +189,7 @@ def run_hyphy(cfg, codon_dir, tree_dir, hyphy_dir, hmm_keep, force=False):
         clades = load_clades_tsv(detected_clades_fp)
         print(f"[hyphy] Loaded {len(clades)} detected clades from {detected_clades_fp}")
 
-    hmm_names = sorted([os.path.basename(x).split(".")[0] for x in glob.glob(os.path.join(codon_dir, "*.codon.fasta"))])
+    hmm_names = sorted([os.path.basename(x).replace(".codon.fasta", "") for x in glob.glob(os.path.join(codon_dir, "*.codon.fasta"))])
     if hmm_keep is not None:
         hmm_names = [h for h in hmm_names if h in hmm_keep]
 
@@ -231,8 +231,11 @@ def run_hyphy(cfg, codon_dir, tree_dir, hyphy_dir, hmm_keep, force=False):
         tree = tree_load(tree_fp)
         tip_names = _tree_tip_names(tree)
 
-        for clade_name in sorted(clades):
-            clade_tips = clades[clade_name]
+        # Only apply clades whose prefix (before |) matches this HMM
+        hmm_clades = {cn: tips for cn, tips in clades.items()
+                      if "|" not in cn or cn.split("|", 1)[0] == hmm}
+        for clade_name in sorted(hmm_clades):
+            clade_tips = hmm_clades[clade_name]
             tips_present = [t for t in clade_tips if t in tip_names]
             if len(tips_present) < min_clade_size:
                 for test in tests:

@@ -190,7 +190,7 @@ def _detect_treecluster_clades(tree_dir, threshold, method):
 
     clades = defaultdict(list)
     for tree_fp in sorted(glob.glob(os.path.join(tree_dir, "*.treefile"))):
-        hmm = os.path.basename(tree_fp).split(".")[0]
+        hmm = os.path.basename(tree_fp).replace(".treefile", "")
         with tempfile.NamedTemporaryFile(suffix=".tsv", delete=False) as tmp:
             out_fp = tmp.name
         try:
@@ -335,10 +335,10 @@ def _detect_tree_embed_clades(tree_dir, emb_dir, post_cfg, hmm_keep=None):
 
     tree_files = sorted(glob.glob(os.path.join(tree_dir, "*.treefile")))
     if hmm_keep is not None:
-        tree_files = [fp for fp in tree_files if os.path.basename(fp).split(".")[0] in hmm_keep]
+        tree_files = [fp for fp in tree_files if os.path.basename(fp).replace(".treefile", "") in hmm_keep]
 
     for tree_fp in tree_files:
-        hmm = os.path.basename(tree_fp).split(".")[0]
+        hmm = os.path.basename(tree_fp).replace(".treefile", "")
         coords = _load_embedding_coords(emb_dir, hmm, n_pcs=n_pcs)
         if not coords:
             continue
@@ -543,7 +543,7 @@ def run_post(cfg, tree_dir, clipkit_dir, aln_dir, post_dir, summary_dir, hmm_kee
     kl_rows = []
     mrca_rows = []
 
-    hmm_names = sorted([os.path.basename(x).split(".")[0] for x in glob.glob(os.path.join(tree_dir, "*.treefile"))])
+    hmm_names = sorted([os.path.basename(x).replace(".treefile", "") for x in glob.glob(os.path.join(tree_dir, "*.treefile"))])
     if hmm_keep is not None:
         hmm_names = [h for h in hmm_names if h in hmm_keep]
 
