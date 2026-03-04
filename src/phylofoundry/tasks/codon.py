@@ -120,13 +120,25 @@ def run_codon(cfg, tree_dir, clipkit_dir, aln_dir, codon_dir, hmm_keep, force=Fa
 
     for hmm in hmm_names:
         tree_fp = os.path.join(tree_dir, f"{hmm}.treefile")
+        # pal2nal needs full-length (untrimmed) protein sequences so that
+        # len(CDS) == len(ungapped_AA) * 3.  ClipKit-trimmed alignments have
+        # columns removed, which shrinks the ungapped AA count and causes
+        # length mismatches.  Prefer the untrimmed alignment; fall back to
+        # ClipKit only if no untrimmed version is available.
+        cand1 = os.path.join(aln_dir, f"{hmm}.afa")
+        cand2 = os.path.join(aln_dir, f"{hmm}.mafft.fasta")
         clip_aln = os.path.join(clipkit_dir, f"{hmm}.clipkit.faa")
-        if os.path.exists(clip_aln):
+        if os.path.exists(cand2):
+            aa_aln_fp = cand2
+        elif os.path.exists(cand1):
+            aa_aln_fp = cand1
+        elif os.path.exists(clip_aln):
             aa_aln_fp = clip_aln
+            print(f"[codon] Warning ({hmm}): Using ClipKit-trimmed alignment "
+                  f"(no untrimmed alignment found). Length mismatches may occur.",
+                  file=sys.stderr)
         else:
-            cand1 = os.path.join(aln_dir, f"{hmm}.afa")
-            cand2 = os.path.join(aln_dir, f"{hmm}.mafft.fasta")
-            aa_aln_fp = cand2 if os.path.exists(cand2) else cand1 if os.path.exists(cand1) else None
+            aa_aln_fp = None
         if not aa_aln_fp or not os.path.exists(tree_fp):
             continue
 
