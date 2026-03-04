@@ -15,7 +15,13 @@ STOP_CODONS = {"TAA", "TAG", "TGA", "taa", "tag", "tga"}
 
 
 def _strip_stop_from_protein(seq: str) -> str:
-    """Remove trailing '*' (stop) from a protein sequence, including gap-padded."""
+    """Remove '*' (stop codon) from a protein sequence.
+
+    Trailing stops are stripped first (including gap-padded ends), then any
+    remaining internal '*' are removed.  All other residues—including 'X'
+    (ambiguous) and 'C' (cysteine)—are preserved to avoid changing original
+    AA positions.
+    """
     seq = seq.rstrip("-").rstrip("*").rstrip("-")
     # Also remove any internal '*' that might exist (e.g. mid-sequence stops)
     return seq.replace("*", "")
@@ -45,6 +51,26 @@ def _clean_aa_alignment(aln_seqs: dict) -> dict:
 # ---------------------------------------------------------------------------
 # ID mapping
 # ---------------------------------------------------------------------------
+
+def _read_tree_tips(treefile: str) -> set:
+    """Return the set of leaf/tip labels from a Newick treefile.
+
+    IQ-TREE writes tip names as bare tokens before branch-length fields.
+    We extract every token that precedes a `:`/`,`/`)`, which includes both
+    tip labels and internal node labels (e.g. bootstrap support values).
+    Internal labels such as numeric bootstrap values (e.g. '98') are also
+    captured, but because real sequence IDs are never purely numeric, the
+    downstream ``k in tree_tips`` filter remains correct in practice.
+
+    Note: if sequence IDs happen to be purely numeric they may be confused
+    with bootstrap support values; avoid such IDs or use a full Newick
+    parser (e.g. ``Bio.Phylo``) if this is a concern.
+    """
+    with open(treefile) as f:
+        tree_str = f.read()
+    tips = set(re.findall(r'([^(),;:\s]+)(?=:|[,)])', tree_str))
+    return tips
+
 
 def map_aa_id_to_cds_id(aa_id, mode="after_last_pipe"):
     if mode == "same":
@@ -111,6 +137,18 @@ def run_codon(cfg, tree_dir, clipkit_dir, aln_dir, codon_dir, hmm_keep, force=Fa
         # ── Read and clean AA alignment (strip stop codons) ──────────────
         aln_seqs_raw = read_fasta(aa_aln_fp)
         aln_seqs = _clean_aa_alignment(aln_seqs_raw)
+
+        # ── Filter to sequences present in the tree ───────────────────────
+        # IQ-TREE may prune identical or problematic sequences; only retain
+        # sequences that actually appear as tips in the treefile so the
+        # resulting codon alignment is consistent with the tree.
+        tree_tips = _read_tree_tips(tree_fp)
+        n_before = len(aln_seqs)
+        aln_seqs = {k: v for k, v in aln_seqs.items() if k in tree_tips}
+        if len(aln_seqs) < n_before:
+            print(f"[codon] {hmm}: Filtered alignment from {n_before} to "
+                  f"{len(aln_seqs)} sequences to match tree tips.",
+                  file=sys.stderr)
 
         cleaned_aa_fp = os.path.join(codon_dir, f"{hmm}.cleaned_aa.faa")
 

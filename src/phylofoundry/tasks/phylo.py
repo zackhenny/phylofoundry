@@ -85,6 +85,7 @@ def worker_phylo(args_pack):
         iqtree_bin, "-s", tree_input, "-m", "MFP",
         "-B", str(phy_cfg["iq_boot"]),
         "-T", str(threads),
+        "--keep-ident",
         "-pre", tree_prefix, "-quiet"
     ]
     if not phy_cfg["no_asr"]:
@@ -182,6 +183,7 @@ def run_phylo(cfg, hmm_to_seqs, fasta_dir, aln_dir, clipkit_dir, tree_dir, name_
                         iqtree_bin, "-s", cmb_clip, "-m", "MFP",
                         "-B", str(phy_cfg.get("iq_boot", 1000)),
                         "-T", str(cpu),
+                        "--keep-ident",
                         "-pre", tree_prefix, "-quiet"
                     ]
                     if not phy_cfg.get("no_asr", False):

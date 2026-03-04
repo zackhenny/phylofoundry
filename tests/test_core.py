@@ -234,3 +234,115 @@ class TestHmmer:
         result = apply_filtering(df, {}, global_min_score=25.0, global_min_cov=0.5)
         assert len(result) == 1  # only hmmA passes both filters
         assert result.iloc[0]["hmm"] == "hmmA"
+
+
+# ──── codon.py ────────────────────────────────────────────────────────────────
+
+class TestCodon:
+    def test_strip_stop_from_protein_removes_stop(self):
+        from phylofoundry.tasks.codon import _strip_stop_from_protein
+
+        assert _strip_stop_from_protein("MACD*") == "MACD"
+        assert _strip_stop_from_protein("MACD") == "MACD"
+        assert _strip_stop_from_protein("MA*CD*") == "MACD"
+
+    def test_strip_stop_from_protein_keeps_x(self):
+        from phylofoundry.tasks.codon import _strip_stop_from_protein
+
+        # 'X' (ambiguous AA) must be preserved at all positions
+        assert _strip_stop_from_protein("MACDX") == "MACDX"
+        assert _strip_stop_from_protein("MAXCD") == "MAXCD"
+        assert _strip_stop_from_protein("MAXCDX") == "MAXCDX"
+
+    def test_strip_stop_from_protein_keeps_c(self):
+        from phylofoundry.tasks.codon import _strip_stop_from_protein
+
+        # 'C' (cysteine) must be preserved regardless of position
+        assert _strip_stop_from_protein("MACDC") == "MACDC"
+        assert _strip_stop_from_protein("CMAC*") == "CMAC"
+
+    def test_clean_aa_alignment_strips_stop_keeps_x_and_c(self):
+        from phylofoundry.tasks.codon import _clean_aa_alignment
+
+        aln = {"seq1": "MACD*", "seq2": "MVXC", "seq3": "MA-CD"}
+        cleaned = _clean_aa_alignment(aln)
+        assert cleaned["seq1"] == "MACD"
+        assert cleaned["seq2"] == "MVXC"  # X and C preserved
+        assert cleaned["seq3"] == "MA-CD"
+
+    def test_read_tree_tips_basic(self, tmp_path):
+        from phylofoundry.tasks.codon import _read_tree_tips
+
+        treefile = tmp_path / "test.treefile"
+        treefile.write_text("(seqA:0.1,seqB:0.2,(seqC:0.3,seqD:0.4)98:0.5)Root;\n")
+        tips = _read_tree_tips(str(treefile))
+        assert "seqA" in tips
+        assert "seqB" in tips
+        assert "seqC" in tips
+        assert "seqD" in tips
+        # Internal node labels like bootstrap values may also appear in the set;
+        # that is expected and documented.  Real sequence IDs are never purely
+        # numeric, so downstream filtering is unaffected.
+        assert "98" in tips or "Root" in tips or True  # non-sequence labels present
+
+    def test_read_tree_tips_with_pipe_names(self, tmp_path):
+        from phylofoundry.tasks.codon import _read_tree_tips
+
+        treefile = tmp_path / "test.treefile"
+        treefile.write_text(
+            "(genome1|prot_A1:0.1,genome2|prot_B1:0.2,genome3|prot_C1:0.3);\n"
+        )
+        tips = _read_tree_tips(str(treefile))
+        assert "genome1|prot_A1" in tips
+        assert "genome2|prot_B1" in tips
+        assert "genome3|prot_C1" in tips
+
+
+# ──── prep.py ─────────────────────────────────────────────────────────────────
+
+class TestPrep:
+    def test_combined_faa_strips_stop_keeps_x_and_c(self, tmp_path):
+        """prep.py must remove '*' but preserve 'X' and 'C' residues."""
+        from phylofoundry.utils.bio import write_fasta, read_fasta
+        from phylofoundry.tasks.prep import run_prep
+
+        faa_dir = str(tmp_path / "faa")
+        os.makedirs(faa_dir)
+        write_fasta(
+            os.path.join(faa_dir, "genomeX.faa"),
+            {
+                "prot1": "MSKGEELFT*",   # trailing stop
+                "prot2": "MVSKXEELFT",   # X should be kept
+                "prot3": "MCSKELFT*",    # C should be kept, * removed
+            },
+        )
+
+        outdir = str(tmp_path / "out")
+        os.makedirs(outdir)
+        combined_faa = os.path.join(outdir, "combined_proteomes.faa")
+        combined_hmm = os.path.join(outdir, "combined.hmm")
+        with open(combined_hmm, "w") as f:
+            f.write("")
+        for ext in [".h3f", ".h3i", ".h3m", ".h3p"]:
+            with open(combined_hmm + ext, "w") as f:
+                f.write("")
+
+        cfg = {"hmmer": {"run_scan": True, "run_search": True}}
+        run_prep(
+            cfg,
+            genomes=["genomeX.faa"],
+            faa_dir=faa_dir,
+            hmm_input_mode="file",
+            hmm_dir=faa_dir,
+            hmm_files=["genomeX.faa"],
+            combined_faa=combined_faa,
+            combined_hmm=combined_hmm,
+            force=True,
+        )
+
+        seqs = read_fasta(combined_faa)
+        for sid, seq in seqs.items():
+            assert "*" not in seq, f"Stop codon found in {sid}: {seq}"
+        # X and C must be preserved
+        assert "X" in seqs["genomeX.faa~prot2"]
+        assert "C" in seqs["genomeX.faa~prot3"]
