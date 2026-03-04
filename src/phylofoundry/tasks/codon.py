@@ -87,13 +87,17 @@ def map_aa_id_to_cds_id(aa_id, mode="after_last_pipe"):
 def build_codon_alignment_pal2nal(aa_aln_fp, cds_subset_fp, out_codon_fp,
                                    pal2nal_cmd="pal2nal.pl",
                                    codon_format="fasta"):
-    """Run pal2nal with -nogap -nomismatch to tolerate minor differences.
+    """Run pal2nal to thread CDS onto a protein alignment.
+
+    The protein alignment gaps drive codon placement; do NOT use -nogap
+    (which strips all gap-containing columns, destroying the alignment)
+    or -nomismatch (which silently drops mismatched codons).
 
     Stderr from pal2nal is captured and printed so the user can see diagnostic
     messages (e.g. "ERROR: CDS does not match protein sequence").
     """
     cmd = (f"{pal2nal_cmd} {aa_aln_fp} {cds_subset_fp} "
-           f"-output {codon_format} -nogap -nomismatch > {out_codon_fp}")
+           f"-output {codon_format} > {out_codon_fp}")
     result = subprocess.run(cmd, shell=True, stderr=subprocess.PIPE, text=True)
     if result.stderr:
         print(f"[codon] pal2nal stderr:\n{result.stderr}", file=sys.stderr)
