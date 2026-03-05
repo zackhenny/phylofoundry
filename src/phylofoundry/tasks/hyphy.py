@@ -199,6 +199,7 @@ def run_hyphy(cfg, codon_dir, tree_dir, hyphy_dir, hmm_keep, force=False, clade_
         hmm_names = [h for h in hmm_names if h in hmm_keep]
 
     qc_rows = []
+    label_rows = []
 
     for hmm in hmm_names:
         codon_aln_fp = os.path.join(codon_dir, f"{hmm}.codon.fasta")
@@ -329,6 +330,9 @@ def run_hyphy(cfg, codon_dir, tree_dir, hyphy_dir, hmm_keep, force=False, clade_
 
                 labeled_tree_fp = os.path.join(labeled_tree_root, hmm, f"{clade_name}.{test_upper}.nwk")
                 _serialize_tree(labeled_tree, labeled_tree_fp)
+                label_rows.append({"hmm_id": hmm, "test": test_upper, "clade_name": clade_name, "tree_path": labeled_tree_fp})
+                if test_upper == "RELAX" and not _tree_has_relax_labels(labeled_tree_fp):
+                    raise SystemExit(f"RELAX labels missing in emitted tree: {labeled_tree_fp}")
 
                 out_json = os.path.join(hyphy_dir, hmm, test_upper, f"{clade_name}.json")
                 out_log = os.path.join(hyphy_dir, hmm, test_upper, f"{clade_name}.log")
@@ -373,4 +377,15 @@ def run_hyphy(cfg, codon_dir, tree_dir, hyphy_dir, hmm_keep, force=False, clade_
                 )
 
     if qc_rows:
-        pd.DataFrame(qc_rows).to_csv(os.path.join(hyphy_dir, "clade_runs.tsv"), sep="\t", index=False)
+        runs = pd.DataFrame(qc_rows)
+        runs.to_csv(os.path.join(hyphy_dir, "clade_runs.tsv"), sep="\t", index=False)
+        runs.to_csv(os.path.join(os.path.dirname(hyphy_dir), "hyphy_results_summary.tsv"), sep="\t", index=False)
+    if label_rows:
+        ldf = pd.DataFrame(label_rows)
+        ldf.to_csv(os.path.join(os.path.dirname(hyphy_dir), "hyphy_label_map.tsv"), sep="\t", index=False)
+        with open(os.path.join(os.path.dirname(hyphy_dir), "hyphy_labels.nwk"), "w") as out:
+            for _, r in ldf.iterrows():
+                try:
+                    out.write(open(r["tree_path"]).read().strip() + "\n")
+                except FileNotFoundError:
+                    continue

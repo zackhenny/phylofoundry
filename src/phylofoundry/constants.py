@@ -9,8 +9,7 @@ AA_ALPHABET = set(list("ACDEFGHIKLMNPQRSTVWY"))
 GAP_CHARS = set(["-", ".", "X", "x", "?", "*"])
 
 # Workflow
-STEPS = ["prep", "hmmer", "extract", "embed", "phylo", "curate", "post",
-         "synteny", "codon", "hyphy", "score_motifs", "discover_motifs"]
+STEPS = ["prep", "hmmer", "extract", "embed", "phylo", "regime_shift", "ha_sites", "discover_motifs", "codon", "hyphy", "evidence_join", "qc_report", "curate", "post", "synteny", "score_motifs"]
 
 # Defaults
 DEFAULT_CONFIG = {
@@ -140,17 +139,36 @@ DEFAULT_CONFIG = {
             "RELAX": ["--test", "test", "--reference", "reference"]
         }
     },
+
+    "regime_shift": {
+        "enable": False,
+        "metric": "centroid",
+        "min_support": 0.0,
+        "min_size": 3,
+        "n_permutations": 200,
+        "alpha": 0.05,
+        "require_monophyly": True
+    },
     "ha": {
         "enabled": False,
-        "layer_mode": "middle",  # "middle"|"range"
-        "layer_start": None,
-        "layer_end": None,
-        "agg": "median",  # "median"|"mean"
-        "call_mode": "percentile",  # "percentile"|"topk"
-        "percentile": 0.05,
-        "topk": 20,
-        "min_sites": 8,
-        "max_sites": 60
+        "mode": "middle",
+        "layer_range": None,
+        "loc_params": {"loc_theta_target_deg": 90, "loc_break_adjust": -1},
+        "call_mode": "percentile",
+        "percentile": 0.95,
+        "topk": 20
+    },
+    "evidence_join": {
+        "enable": False,
+        "classification_thresholds": {"delta_ha": 0.2, "js": 0.15, "meme_p": 0.1},
+        "grading_thresholds": {"A": 0.8, "B": 0.5}
+    },
+    "qc": {
+        "enable": True,
+        "per_hmm": True,
+        "combined": True,
+        "max_hmms_to_plot": 100,
+        "dpi": 150
     },
     "motifs": {
         "enabled": False,

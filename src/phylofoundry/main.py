@@ -19,8 +19,10 @@ def _build_parser() -> argparse.ArgumentParser:
     sub = ap.add_subparsers(dest="subcommand")
     cfgp = sub.add_parser("config", help="Config utilities")
     cfgsub = cfgp.add_subparsers(dest="config_cmd")
-    cfgsub.add_parser("template", help="Print minimal YAML template")
-    cfgsub.add_parser("explain", help="Explain configuration sections")
+    t = cfgsub.add_parser("template", help="Print YAML template")
+    t.add_argument("--mode", choices=["minimal","full"], default="minimal")
+    e = cfgsub.add_parser("explain", help="Explain configuration sections")
+    e.add_argument("path", nargs="?", default=None)
     v = cfgsub.add_parser("validate", help="Validate config file")
     v.add_argument("file")
 
@@ -52,10 +54,10 @@ def main():
 
     if args.subcommand == "config":
         if args.config_cmd == "template":
-            print(config_template())
+            print(config_template(args.mode))
             return
         if args.config_cmd == "explain":
-            print(config_explain())
+            print(config_explain(args.path))
             return
         if args.config_cmd == "validate":
             cfg = load_config_file(args.file)

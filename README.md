@@ -535,3 +535,7 @@ See `docs/first_run_qc.md` for a complete checklist.
 3. Ensure enough profiles were computed (default min is 3).
 4. If all clusters are noise in embedding output, tune HDBSCAN parameters.
 5. For HA-heavy runs, verify `summary/*.ha_counts.tsv` is non-empty.
+
+## PLM-hypothesis workflow additions
+
+New modules support embedding-based regime-shift detection (`summary/regime_shifts.tsv`), HA residue calling (`summary/ha_sites.tsv`), and an integrated evidence join table (`summary/site_evidence.tsv`). See `docs/plm_phylo_integration.md` and `docs/first_run_qc.md`.
