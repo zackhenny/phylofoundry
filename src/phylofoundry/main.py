@@ -81,11 +81,12 @@ def main():
         clipkit_dir = os.path.join(outdir, "alignments_clipkit")
         run_ha_sites(
             cfg,
-            clipkit_dir if os.path.exists(clipkit_dir) else fasta_dir,
+            fasta_dir,
             os.path.join(outdir, "embeddings"),
             os.path.join(outdir, "summary"),
             os.path.join(outdir, "qc"),
             hmm_keep=None if args.all else {args.hmm},
+            alignment_dir=clipkit_dir if os.path.exists(clipkit_dir) else None,
         )
         return
 

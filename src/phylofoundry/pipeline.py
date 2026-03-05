@@ -215,7 +215,18 @@ def run_pipeline(cfg):
     if step_in_range("regime_shift", start_at, stop_after) and regime_cfg.get("enable", False):
         run_step("regime_shift", lambda: run_regime_shift(cfg, tree_dir, emb_dir, summary_dir, hmm_keep=hmm_keep))
     if step_in_range("ha_sites", start_at, stop_after) and ha_cfg.get("enabled", False):
-        run_step("ha_sites", lambda: run_ha_sites(cfg, clipkit_dir if os.path.exists(clipkit_dir) else fasta_dir, emb_dir, summary_dir, os.path.join(outdir, "qc"), hmm_keep=hmm_keep))
+        run_step(
+            "ha_sites",
+            lambda: run_ha_sites(
+                cfg,
+                fasta_dir,
+                emb_dir,
+                summary_dir,
+                os.path.join(outdir, "qc"),
+                hmm_keep=hmm_keep,
+                alignment_dir=clipkit_dir if os.path.exists(clipkit_dir) else None,
+            ),
+        )
 
     if step_in_range("discover_motifs", start_at, stop_after) and discover_cfg.get("enabled", False):
         from .tasks import discover
