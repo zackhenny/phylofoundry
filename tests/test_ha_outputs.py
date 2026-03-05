@@ -1,13 +1,38 @@
-import numpy as np
-from phylofoundry.utils.ha import write_ha_outputs
+import pytest
+from pathlib import Path
+
+import pandas as pd
+torch = pytest.importorskip("torch")
+
+from phylofoundry.methods.ha_sites import _build_combined_attention_tensor, compute_ha_sites_for_hmm
+from phylofoundry.tasks.discover import discover_motifs
 
 
-def test_ha_outputs_created(tmp_path):
-    seqs = {"a|p1": "ACDEFGHIK", "b|p2": "ACDEFGHIK"}
-    scores = {k: np.linspace(0.1, 1.0, len(v)) for k, v in seqs.items()}
-    masks = {k: (np.arange(len(v)) % 2).astype("uint8") for k, v in seqs.items()}
-    attention = tmp_path / "attention"
-    summary = tmp_path / "summary"
-    write_ha_outputs(str(attention), str(summary), "HMM1", seqs, scores, masks, 1, 3, {"call_mode": "percentile", "percentile": 0.2})
-    assert (attention / "HMM1.ha_sites.tsv").exists()
-    assert (summary / "HMM1.ha_counts.tsv").exists()
+def test_ha_stage_outputs_and_discover_consumption(tmp_path):
+    fasta = tmp_path / "HMM1.faa"
+    fasta.write_text(">s1\nACDE\n>s2\nACDF\n")
+
+    def artifacts(seq_id, seq):
+        del seq_id, seq
+        raw = torch.ones((1, 2, 2, 1 + 4 + 1, 1 + 4 + 1))
+        return _build_combined_attention_tensor(raw)
+
+    cfg = {
+        "ha": {"mode": "middle", "pooling_used": "mean", "call_mode": "topk", "topk": 2},
+        "embeddings": {"model": "mock", "device": "cpu"},
+        "workflow": {"max_failure_rate": 1.0},
+    }
+    out = tmp_path / "ha" / "HMM1"
+    res = compute_ha_sites_for_hmm("HMM1", fasta, out, cfg, artifacts)
+
+    assert res["ha_sites"].exists()
+    assert res["ha_counts"].exists()
+    assert res["loc_layers"].exists()
+
+    summary_dir = tmp_path / "summary"
+    summary_dir.mkdir()
+    pd.read_csv(res["ha_sites"], sep="\t").to_csv(summary_dir / "ha_sites.tsv", sep="\t", index=False)
+
+    disc_cfg = {"discover": {"enabled": True, "use_ha": True}}
+    out_df = discover_motifs(disc_cfg, str(tmp_path), str(summary_dir), hmm_keep=None, force=True)
+    assert not out_df.empty
