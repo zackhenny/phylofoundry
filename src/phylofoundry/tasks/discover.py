@@ -4,6 +4,7 @@ discover.py — Unsupervised motif discovery via comparative ESM-2 attention pro
 
 import os
 import sys
+import logging
 from collections import Counter
 import numpy as np
 import pandas as pd
@@ -180,8 +181,10 @@ def _compute_ha_enrichment_for_hmm(hmm, aln_seqs, clade_df_hmm, ha_cfg, disc_cfg
                     ]
                 )
                 _, pval = fisher_exact(table, alternative="greater")
-            except Exception:
-                pass
+            except Exception as e:
+                logging.getLogger("phylofoundry.discover").warning(
+                    "fisher_exact failed for hmm=%s clade=%s col=%s: %s", hmm, clade_id, col, e
+                )
 
             local_rows.append(
                 {
@@ -324,8 +327,10 @@ def _compute_candidate_residues_for_hmm(hmm, aln_seqs, clade_df_hmm, disc_cfg, a
                     [[clade_has, len(clade_ids) - clade_has], [rest_has, len(rest_ids) - rest_has]]
                 )
                 _, pval = fisher_exact(table, alternative="greater")
-            except Exception:
-                pass
+            except Exception as e:
+                logging.getLogger("phylofoundry.discover").warning(
+                    "fisher_exact failed for candidate calc hmm=%s clade=%s col=%s: %s", hmm, clade_id, col, e
+                )
 
             clade_chars = [aln_seqs[sid][col] for sid in clade_ids if col < len(aln_seqs[sid])]
             rest_chars = [aln_seqs[sid][col] for sid in rest_ids if col < len(aln_seqs[sid])]
@@ -529,16 +534,22 @@ def discover_motifs(cfg, fasta_dir, summary_dir, hmm_keep, force=False, clade_as
         print(f"[discover] Failed to load ESM model: {e}", file=sys.stderr)
         return None
 
-    print("[discover] Pre-computing attention profiles for all sequences...")
+    logger.info("[discover] Pre-computing attention profiles for all sequences")
     all_profiles = {}
     seq_ha_scores = {}
     seq_ha_mask = {}
     seq_layer_bounds = {}
     seq_loc_layer = {}
 
+    n_processed = 0
+    n_profile_ok = 0
+    n_profile_failed = 0
+    failures = []
+
     for seq_id, seq in all_seqs.items():
         if len(seq) < 10:
             continue
+        n_processed += 1
         try:
             batch_converter = alphabet.get_batch_converter()
             _, _, toks = batch_converter([("seq", seq)])
@@ -551,6 +562,7 @@ def discover_motifs(cfg, fasta_dir, summary_dir, hmm_keep, force=False, clade_as
             attn_avg = attentions[start_layer:, :, :, :].mean(dim=(0, 1))
             profile = attn_avg[1 : len(seq) + 1, 1 : len(seq) + 1].sum(dim=0).cpu().numpy()
             all_profiles[seq_id] = profile
+            n_profile_ok += 1
 
             if needs_ha:
                 layer_by_pos = _attention_received_by_layer(attentions, len(seq))
@@ -560,8 +572,24 @@ def discover_motifs(cfg, fasta_dir, summary_dir, hmm_keep, force=False, clade_as
                 seq_layer_bounds[seq_id] = (ls, le)
                 if loc_layer is not None:
                     seq_loc_layer[seq_id] = loc_layer
-        except Exception:
-            pass
+        except Exception as e:
+            n_profile_failed += 1
+            failures.append({"seq_id": seq_id, "error": repr(e)})
+            logger.exception("[discover] profile generation failed for seq_id=%s", seq_id)
+
+    logger.info(
+        "[discover] processed=%d profiles_ok=%d profiles_failed=%d",
+        n_processed,
+        n_profile_ok,
+        n_profile_failed,
+    )
+    if n_profile_ok < int(disc_cfg.get("min_profiles", 3)):
+        fail_fp = os.path.join(os.path.dirname(summary_dir), "discover", "discover_profile_failures.tsv")
+        os.makedirs(os.path.dirname(fail_fp), exist_ok=True)
+        pd.DataFrame(failures).to_csv(fail_fp, sep="\t", index=False)
+        raise RuntimeError(
+            "Too few attention profiles computed for discovery. Check ESM install/device memory/malformed sequences."
+        )
 
     # 1-vs-All clade comparison
     target_len = 500
@@ -763,3 +791,4 @@ def discover_motifs(cfg, fasta_dir, summary_dir, hmm_keep, force=False, clade_as
                 )
 
     return kmer_summary
+    logger = logging.getLogger("phylofoundry.discover")

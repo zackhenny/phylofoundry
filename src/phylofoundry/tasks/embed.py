@@ -204,18 +204,26 @@ def compute_embeddings_for_hmm(hmm_name: str, seqs: dict, emb_cfg: dict, outdir_
 
     model_dir = emb_cfg.get("model_dir", None)
 
-    try:
-        import sys
-        if backend == "esm":
-            ids, X = _embed_esm(seqs, model_name=model_name, device=device, batch_size=batch_size, repr_layer=repr_layer, model_dir=model_dir)
-        elif backend == "transformers":
-            ids, X = _embed_transformers(seqs, model_id_or_path=model_name, device=device, batch_size=batch_size, model_dir=model_dir)
-        else:
-            print(f"[embed] Error: Unknown backend '{backend}'", file=sys.stderr)
-            return []
-    except Exception as e:
-        print(f"[embed] FAILED {hmm_name}: {e}", file=sys.stderr)
-        return []
+    import sys
+    if device == "cpu" and len(seqs) > 1000:
+        print(f"[embed] Warning: {hmm_name} has {len(seqs)} sequences on CPU; expect long runtime.", file=sys.stderr)
+
+    while True:
+        try:
+            if backend == "esm":
+                ids, X = _embed_esm(seqs, model_name=model_name, device=device, batch_size=batch_size, repr_layer=repr_layer, model_dir=model_dir)
+            elif backend == "transformers":
+                ids, X = _embed_transformers(seqs, model_id_or_path=model_name, device=device, batch_size=batch_size, model_dir=model_dir)
+            else:
+                raise RuntimeError(f"Unknown backend '{backend}'")
+            break
+        except Exception as e:
+            msg = str(e).lower()
+            if "out of memory" in msg and batch_size > 1:
+                batch_size = max(1, batch_size // 2)
+                print(f"[embed] OOM for {hmm_name}; retrying with batch_size={batch_size}", file=sys.stderr)
+                continue
+            raise RuntimeError(f"Embedding failed for {hmm_name}. Check model/device settings. Error: {e}") from e
 
     X = X.astype(np.float32)
     np.save(out_npy, X)

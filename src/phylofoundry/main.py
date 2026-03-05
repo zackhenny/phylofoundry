@@ -1,47 +1,73 @@
 import argparse
 import sys
-from .config import resolve_config, validate_config, STEPS
+
+from .config import (
+    STEPS,
+    config_explain,
+    config_template,
+    load_config_file,
+    resolve_config,
+    validate_config,
+)
 from .pipeline import run_pipeline
 
 
-def main():
-    ap = argparse.ArgumentParser(
-        description="PhyloFoundry: Competitive HMM pipeline with JSON config + embeddings"
-    )
-    ap.add_argument("--config", default=None, help="JSON config file")
-    ap.add_argument("--dump_default_config", action="store_true",
-                    help="Print default config JSON and exit")
+def _build_parser() -> argparse.ArgumentParser:
+    ap = argparse.ArgumentParser(description="PhyloFoundry pipeline")
+    ap.add_argument("--version", action="store_true", help="Print version and exit")
 
-    # CLI overrides
+    sub = ap.add_subparsers(dest="subcommand")
+    cfgp = sub.add_parser("config", help="Config utilities")
+    cfgsub = cfgp.add_subparsers(dest="config_cmd")
+    cfgsub.add_parser("template", help="Print minimal YAML template")
+    cfgsub.add_parser("explain", help="Explain configuration sections")
+    v = cfgsub.add_parser("validate", help="Validate config file")
+    v.add_argument("file")
+
+    ap.add_argument("--config", default=None, help="JSON or YAML config file")
+    ap.add_argument("--dump_default_config", action="store_true", help="Print default config JSON and exit")
     ap.add_argument("--faa_dir", default=None, help="Override inputs.faa_dir")
-    ap.add_argument("--hmm_dir", default=None,
-                    help="Override inputs.hmm_input (dir or single .hmm)")
+    ap.add_argument("--hmm_dir", default=None, help="Override inputs.hmm_input")
     ap.add_argument("--outdir", default=None, help="Override output.outdir")
     ap.add_argument("--cpu", type=int, default=None, help="Override resources.cpu")
-    ap.add_argument("--start_at", choices=STEPS, default=None,
-                    help="Override workflow.start_at")
-    ap.add_argument("--stop_after", choices=STEPS, default=None,
-                    help="Override workflow.stop_after")
-    ap.add_argument("--force", action="store_true",
-                    help="Override workflow.force=True")
+    ap.add_argument("--start_at", choices=STEPS, default=None)
+    ap.add_argument("--stop_after", choices=STEPS, default=None)
+    ap.add_argument("--force", action="store_true")
+    ap.add_argument("--combined", action="store_true")
+    ap.add_argument("--motifs", default=None)
+    ap.add_argument("--set", dest="set_values", action="append", default=[], help="Override config key(s): section.key=value")
+    ap.add_argument("--log-level", default="INFO", choices=["DEBUG", "INFO", "WARNING", "ERROR"])
+    return ap
 
-    # Combined tree flag
-    ap.add_argument("--combined", action="store_true",
-                    help="Enable combined tree from all HMMs (phylo.combined_tree)")
 
-    # Motif scoring flags
-    ap.add_argument("--motifs", default=None,
-                    help="Comma-separated motif list for attention scoring "
-                         "(e.g., HPEVY,HPEVF)")
-
-    # Motif discovery flags
+def main():
+    ap = _build_parser()
     args = ap.parse_args()
 
+    if args.version:
+        from . import __version__
+
+        print(__version__)
+        return
+
+    if args.subcommand == "config":
+        if args.config_cmd == "template":
+            print(config_template())
+            return
+        if args.config_cmd == "explain":
+            print(config_explain())
+            return
+        if args.config_cmd == "validate":
+            cfg = load_config_file(args.file)
+            validate_config(cfg)
+            print("Config valid")
+            return
+        ap.error("Missing config subcommand")
+
     cfg = resolve_config(args)
-    if cfg is None:  # dump_default_config was handled
+    if cfg is None:
         sys.exit(0)
 
-    # Apply new CLI overrides to config
     if args.combined:
         cfg["phylo"]["combined_tree"] = True
 
@@ -51,35 +77,13 @@ def main():
             cfg.setdefault("motifs", {})["enabled"] = True
             cfg["motifs"]["motif_list"] = motif_list
 
-    validate_config(cfg)
+    cfg = validate_config(cfg)
+    cfg.setdefault("logging", {})["level"] = args.log_level
 
-    # Check dependencies
     from .utils.helpers import check_dependencies
 
     deps = ["hmmscan", "hmmsearch"]
-
-    if cfg["phylo"]:
-        deps.append(cfg["phylo"].get("iqtree_bin", "iqtree"))
-        deps.append("mafft")
-        deps.append("clipkit")
-
-    if cfg["codon"].get("enabled", False):
-        deps.append(cfg["codon"].get("pal2nal_cmd", "pal2nal.pl"))
-
-    if cfg["hyphy"].get("enabled", False):
-        deps.append(cfg["hyphy"].get("hyphy_bin", "hyphy"))
-
-    if cfg["synteny"].get("enabled", False):
-        sim_method = cfg["synteny"].get("similarity", {}).get("method", "diamond")
-        if sim_method == "diamond":
-            deps.append(cfg["synteny"].get("similarity", {}).get(
-                "diamond_bin", "diamond"))
-        elif sim_method == "mmseqs":
-            deps.append(cfg["synteny"].get("similarity", {}).get(
-                "mmseqs_bin", "mmseqs"))
-
     check_dependencies(deps)
-
     run_pipeline(cfg)
 
 
