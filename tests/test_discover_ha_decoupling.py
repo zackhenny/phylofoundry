@@ -6,7 +6,7 @@ from phylofoundry.tasks.discover import discover_motifs
 
 def test_discover_requires_ha_when_enabled(tmp_path):
     cfg = {"discover": {"enabled": True, "use_ha": True}}
-    with pytest.raises(SystemExit, match="HA artifacts missing"):
+    with pytest.raises(RuntimeError, match="no HMM FASTA inputs were found"):
         discover_motifs(cfg, str(tmp_path), str(tmp_path), hmm_keep=None, force=True)
 
 

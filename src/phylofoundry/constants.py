@@ -9,7 +9,24 @@ AA_ALPHABET = set(list("ACDEFGHIKLMNPQRSTVWY"))
 GAP_CHARS = set(["-", ".", "X", "x", "?", "*"])
 
 # Workflow
-STEPS = ["prep", "hmmer", "extract", "embed", "phylo", "regime_shift", "ha_sites", "discover_motifs", "codon", "hyphy", "evidence_join", "qc_report", "curate", "post", "synteny", "score_motifs"]
+STEPS = [
+    "prep",
+    "hmmer",
+    "extract",
+    "embed",
+    "phylo",
+    "curate",
+    "post",
+    "regime_shift",
+    "ha_sites",
+    "discover_motifs",
+    "codon",
+    "hyphy",
+    "synteny",
+    "score_motifs",
+    "evidence_join",
+    "qc_report",
+]
 
 # Defaults
 DEFAULT_CONFIG = {

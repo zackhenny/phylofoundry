@@ -12,6 +12,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
+from ..artifacts import ha_global_path, ha_hmm_path
 from ..utils.bio import read_fasta
 
 
@@ -202,9 +203,9 @@ def compute_ha_sites_for_hmm(hmm_id, fasta_path, outdir, config, embeddings_arti
     ha_cfg = config.get("ha", {})
     seqs = read_fasta(str(fasta_path))
     hmm_out = Path(outdir)
-    summary_dir = hmm_out / "summary"
-    attn_dir = hmm_out / "ha" / "attn"
-    heatmap_dir = hmm_out / "ha" / "heatmaps"
+    summary_dir = hmm_out
+    attn_dir = hmm_out / "attn"
+    heatmap_dir = hmm_out / "heatmaps"
     summary_dir.mkdir(parents=True, exist_ok=True)
     attn_dir.mkdir(parents=True, exist_ok=True)
     heatmap_dir.mkdir(parents=True, exist_ok=True)
@@ -280,14 +281,17 @@ def compute_ha_sites_for_hmm(hmm_id, fasta_path, outdir, config, embeddings_arti
     qc_df = pd.DataFrame([{"hmm_id": hmm_id, "n_total": n_total, "n_ok": n_ok, "n_fail": n_fail, "fail_frac": fail_frac}])
     qc_df.to_csv(summary_dir / "ha_run_qc.tsv", sep="\t", index=False)
 
-    pd.DataFrame(site_rows, columns=["hmm_id", "seq_id", "loc_layer_id", "loc_layer_idx", "msa_col", "ungapped_pos", "ha_score", "is_ha", "call_mode", "threshold", "pooling_used", "model", "device"]).to_csv(summary_dir / "ha_sites.tsv", sep="\t", index=False)
-    pd.DataFrame(count_rows, columns=["seq_id", "seq_len", "n_ha", "frac_ha"]).to_csv(summary_dir / "ha_counts.tsv", sep="\t", index=False)
-    pd.DataFrame(loc_rows, columns=["seq_id", "loc_layer_idx", "loc_layer_id", "theta_deg", "break_frac", "n_ha"]).to_csv(summary_dir / "loc_layers.tsv", sep="\t", index=False)
+    ha_sites_fp = summary_dir / "ha_sites.tsv"
+    ha_counts_fp = summary_dir / "ha_counts.tsv"
+    loc_layers_fp = summary_dir / "loc_layers.tsv"
+    pd.DataFrame(site_rows, columns=["hmm_id", "seq_id", "loc_layer_id", "loc_layer_idx", "msa_col", "ungapped_pos", "ha_score", "is_ha", "call_mode", "threshold", "pooling_used", "model", "device"]).to_csv(ha_sites_fp, sep="\t", index=False)
+    pd.DataFrame(count_rows, columns=["seq_id", "seq_len", "n_ha", "frac_ha"]).to_csv(ha_counts_fp, sep="\t", index=False)
+    pd.DataFrame(loc_rows, columns=["seq_id", "loc_layer_idx", "loc_layer_id", "theta_deg", "break_frac", "n_ha"]).to_csv(loc_layers_fp, sep="\t", index=False)
 
     return {
-        "ha_sites": summary_dir / "ha_sites.tsv",
-        "ha_counts": summary_dir / "ha_counts.tsv",
-        "loc_layers": summary_dir / "loc_layers.tsv",
+        "ha_sites": ha_sites_fp,
+        "ha_counts": ha_counts_fp,
+        "loc_layers": loc_layers_fp,
         "ha_run_qc": summary_dir / "ha_run_qc.tsv",
         "qc_rows": qc_rows,
     }
@@ -370,12 +374,22 @@ def run_ha_sites(cfg: dict, fasta_dir: str, emb_dir: str, summary_dir: str, qc_d
         hmm_id = Path(faa).stem
         if hmm_keep and hmm_id not in hmm_keep:
             continue
-        hmm_out = Path(summary_dir).parent / "ha" / hmm_id
+        hmm_out = ha_hmm_path(Path(summary_dir).parent, hmm_id).parent
         alignment_path = None
         if alignment_dir:
             candidate = Path(alignment_dir) / f"{hmm_id}.faa"
             alignment_path = candidate if candidate.exists() else candidate
         result = compute_ha_sites_for_hmm(hmm_id, faa, hmm_out, cfg, loader, alignment_path=alignment_path)
+
+        legacy_ha_fp = Path(summary_dir).parent / "attention" / f"{hmm_id}.ha_sites.tsv"
+        legacy_ha_fp.parent.mkdir(parents=True, exist_ok=True)
+        if legacy_ha_fp.exists() or legacy_ha_fp.is_symlink():
+            legacy_ha_fp.unlink()
+        try:
+            legacy_ha_fp.symlink_to(result["ha_sites"])
+        except OSError:
+            pd.read_csv(result["ha_sites"], sep="	").to_csv(legacy_ha_fp, sep="	", index=False)
+        logger.warning("Deprecated HA artifact path written for compatibility: %s", legacy_ha_fp)
 
         ha_sites = pd.read_csv(result["ha_sites"], sep="\t")
         ha_counts = pd.read_csv(result["ha_counts"], sep="\t")
@@ -389,7 +403,7 @@ def run_ha_sites(cfg: dict, fasta_dir: str, emb_dir: str, summary_dir: str, qc_d
         all_run_qc.append(run_qc)
 
     if all_sites:
-        pd.concat(all_sites, ignore_index=True).to_csv(Path(summary_dir) / "ha_sites.tsv", sep="\t", index=False)
+        pd.concat(all_sites, ignore_index=True).to_csv(ha_global_path(Path(summary_dir).parent), sep="\t", index=False)
         pd.concat(all_counts, ignore_index=True).to_csv(Path(summary_dir) / "ha_counts.tsv", sep="\t", index=False)
         pd.concat(all_loc, ignore_index=True).to_csv(Path(summary_dir) / "loc_layers.tsv", sep="\t", index=False)
         pd.concat(all_run_qc, ignore_index=True).to_csv(Path(summary_dir) / "ha_run_qc.tsv", sep="\t", index=False)

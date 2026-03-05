@@ -450,9 +450,11 @@ Post-processing metrics.
 - Two modes are supported:
   - `ha.method="middle"`: aggregate normalized received-attention vectors across middle/configured layers, then call HA by percentile/top-k.
   - `ha.method="loc"`: fit a piecewise linear model per layer, select a convergence layer (LoC), and call HA above the layer-specific breakpoint.
-- HA outputs:
-  - `attention/<HMM>.ha_sites.tsv` (`pos_ungapped` is 1-based; includes `loc_layer` when LoC mode is active)
-  - `summary/ha_summary.tsv` (includes `method`, and `loc_layer`/`norm_mode` for LoC)
+- HA artifact contract:
+  - Canonical per-HMM: `ha/<HMM>/ha_sites.tsv`
+  - Canonical global: `summary/ha_sites.tsv`
+  - Companion per-HMM files: `ha/<HMM>/ha_counts.tsv`, `ha/<HMM>/loc_layers.tsv`
+  - Legacy compatibility path: `attention/<HMM>.ha_sites.tsv` (deprecated shim)
 
 > ⚠️ Attention-driven analyses (HA / convergence layer / motif scoring / HA discovery / candidate residues) require `embeddings.write_full_vectors: true`.
 > If HA is enabled while `write_full_vectors` is false, the pipeline exits with a clear error.
@@ -554,10 +556,11 @@ phylofoundry ha --config config.yaml --hmm HMM_ID
 
 ### Discovery relationship
 
-- `discover.use_ha: true` => discovery consumes existing `summary/ha_sites.tsv`.
+- `discover.use_ha: true` => discovery requires HA to run first and consumes canonical HA artifacts from `ha/<HMM>/ha_sites.tsv` (or `summary/ha_sites.tsv` filtered by `hmm_id`).
 - Discovery does **not** recompute HA internally.
-- If HA artifacts are missing and `use_ha=true`, discovery exits with:
-  `HA artifacts missing; run \`phylofoundry ha\` or enable ha.enabled.`
+- If HA artifacts are missing/incomplete (`msa_col` absent), discovery fails fast with an actionable error.
+- If you start the pipeline at `discover_motifs` with `discover.use_ha=true`, start earlier (`ha_sites`) or run:
+  `phylofoundry ha --config config.yaml --all`
 
 ### Minimal HA-only config preset
 
