@@ -5,6 +5,7 @@ import time
 
 import pandas as pd
 
+from .artifacts import ha_global_path
 from .constants import STEPS
 from .qc import generate_qc_summary, write_run_manifest
 from .tasks import asr, codon, curate, embed, extract, hmmer, hyphy, phylo, post, prep, synteny
@@ -67,6 +68,17 @@ def run_pipeline(cfg):
     ha_cfg = cfg.get("ha", {})
     evidence_cfg = cfg.get("evidence_join", {})
 
+    if discover_cfg.get("enabled", False) and discover_cfg.get("use_ha", False):
+        ha_idx = STEPS.index("ha_sites")
+        discover_idx = STEPS.index("discover_motifs")
+        if cfg["workflow"]["start_at"] and STEPS.index(cfg["workflow"]["start_at"]) > ha_idx:
+            raise SystemExit(
+                "discover.use_ha=true requires HA artifacts. start_at is after ha_sites; "
+                "start at ha_sites (or earlier) or run `phylofoundry ha` before discovery."
+            )
+        if discover_idx < ha_idx:
+            raise SystemExit("Internal step ordering error: discover_motifs cannot run before ha_sites.")
+
     hmmscan_dir = os.path.join(outdir, "hmmscan_tbl")
     hmmsearch_dir = os.path.join(outdir, "hmmsearch_tbl")
     fasta_dir = os.path.join(outdir, "fasta_per_hmm")
@@ -124,7 +136,12 @@ def run_pipeline(cfg):
         try:
             with step_timer(logger, name):
                 res = fn()
-            step_status.append({"step": name, "status": "success", "message": "ok"})
+            msg = "ok"
+            if name == "ha_sites":
+                msg = f"ha_global={ha_global_path(outdir)}"
+            if name == "discover_motifs":
+                msg = f"use_ha={bool(discover_cfg.get('use_ha', False))}"
+            step_status.append({"step": name, "status": "success", "message": msg})
             _mark_done(outdir, name, ok=True)
             return res
         except Exception as e:
@@ -231,9 +248,12 @@ def run_pipeline(cfg):
     if step_in_range("discover_motifs", start_at, stop_after) and discover_cfg.get("enabled", False):
         from .tasks import discover
         if discover_cfg.get("use_ha", False):
-            ha_req = os.path.join(summary_dir, "ha_sites.tsv")
+            ha_req = ha_global_path(outdir)
             if not os.path.exists(ha_req):
-                raise SystemExit("HA artifacts missing; run `phylofoundry ha` or enable ha.enabled.")
+                raise SystemExit(
+                    "discover.use_ha=true but HA artifacts are missing. "
+                    f"Expected {ha_req}. Run `phylofoundry ha --all` or start the pipeline at/before ha_sites."
+                )
         run_step("discover_motifs", lambda: discover.discover_motifs(cfg, fasta_dir, summary_dir, hmm_keep, force, clade_assign_dir=clade_assign_dir))
 
     if step_in_range("evidence_join", start_at, stop_after) and evidence_cfg.get("enable", False):
