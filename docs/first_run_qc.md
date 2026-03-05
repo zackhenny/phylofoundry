@@ -1,11 +1,15 @@
-# First-run QC checklist
+# First full pipeline QC checklist
 
-After running the pipeline, inspect:
+Inspect these outputs first:
 
-1. `summary/step_status.tsv` for failed stages.
-2. `summary/qc_manifest.tsv` for per-HMM hit counts and basic metrics.
-3. `qc/combined/hits_bitscore.png` and `qc/combined/hits_qcov.png`.
-4. `summary/id_audit.tsv` for ID normalization consistency.
-5. `discover/discover_profile_failures.tsv` if discovery failed due to low profile count.
+- `qc/combined/hmmer_bitscore_pre.png`, `hmmer_bitscore_post.png`
+- `qc/combined/regime_shift_scores.png`, `regime_shift_pvalues.png`
+- `qc/<hmm>/ha_site_counts_per_sequence.png`, `ha_frequency_msa.png`
+- `summary/step_status.tsv`, `summary/qc_manifest.tsv`
 
-If motif discovery returns nothing, check logs in `logs/phylofoundry.log` and lower discovery thresholds or validate ESM runtime/device settings.
+## Common failure mode: discover finds nothing
+
+1. Verify `summary/ha_sites.tsv` exists and has non-zero `is_ha`.
+2. Relax HA thresholds (`ha.call_mode`, `ha.percentile`, or `ha.topk`).
+3. Confirm clades are available (`summary/clade_assignment.tsv` / detected clades).
+4. Check embedding quality and regime-shift significance.

@@ -8,6 +8,7 @@ import pandas as pd
 from .constants import STEPS
 from .qc import generate_qc_summary, write_run_manifest
 from .tasks import asr, codon, curate, embed, extract, hmmer, hyphy, phylo, post, prep, synteny
+from .methods import run_evidence_join, run_ha_sites, run_regime_shift
 from .utils.bio import read_fasta
 from .utils.helpers import safe_mkdir, write_json
 from .utils.logging_utils import setup_logging, step_timer
@@ -62,6 +63,9 @@ def run_pipeline(cfg):
     hyphy_cfg = cfg["hyphy"]
     motif_cfg = cfg.get("motifs", {})
     discover_cfg = cfg.get("discover", {})
+    regime_cfg = cfg.get("regime_shift", {})
+    ha_cfg = cfg.get("ha", {})
+    evidence_cfg = cfg.get("evidence_join", {})
 
     hmmscan_dir = os.path.join(outdir, "hmmscan_tbl")
     hmmsearch_dir = os.path.join(outdir, "hmmsearch_tbl")
@@ -208,10 +212,26 @@ def run_pipeline(cfg):
     if step_in_range("score_motifs", start_at, stop_after) and motif_cfg.get("enabled", False):
         from .tasks import motifs
         run_step("score_motifs", lambda: motifs.score_motifs(cfg, fasta_dir, summary_dir, hmm_keep, force))
+    if step_in_range("regime_shift", start_at, stop_after) and regime_cfg.get("enable", False):
+        run_step("regime_shift", lambda: run_regime_shift(cfg, tree_dir, emb_dir, summary_dir, hmm_keep=hmm_keep))
+    if step_in_range("ha_sites", start_at, stop_after) and ha_cfg.get("enabled", False):
+        run_step("ha_sites", lambda: run_ha_sites(cfg, clipkit_dir if os.path.exists(clipkit_dir) else fasta_dir, emb_dir, summary_dir, os.path.join(outdir, "qc"), hmm_keep=hmm_keep))
+
     if step_in_range("discover_motifs", start_at, stop_after) and discover_cfg.get("enabled", False):
         from .tasks import discover
+        ha_req = os.path.join(summary_dir, "ha_sites.tsv")
+        if not os.path.exists(ha_req):
+            raise SystemExit(f"DiscoverCandidates requires HA output: {ha_req}")
         run_step("discover_motifs", lambda: discover.discover_motifs(cfg, fasta_dir, summary_dir, hmm_keep, force, clade_assign_dir=clade_assign_dir))
 
-    generate_qc_summary(outdir, summary_dir)
+    if step_in_range("evidence_join", start_at, stop_after) and evidence_cfg.get("enable", False):
+        run_step("evidence_join", lambda: run_evidence_join(cfg, summary_dir))
+
+    if step_in_range("qc_report", start_at, stop_after) and cfg.get("qc", {}).get("enable", True):
+        generate_qc_summary(outdir, summary_dir, cfg=cfg)
+
+    if not os.path.exists(os.path.join(summary_dir, "qc_manifest.tsv")):
+        pd.DataFrame([]).to_csv(os.path.join(summary_dir, "qc_manifest.tsv"), sep="\t", index=False)
+
     write_run_manifest(outdir, summary_dir, step_status)
     logger.info("Pipeline complete")

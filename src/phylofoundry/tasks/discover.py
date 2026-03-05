@@ -792,3 +792,26 @@ def discover_motifs(cfg, fasta_dir, summary_dir, hmm_keep, force=False, clade_as
 
     return kmer_summary
     logger = logging.getLogger("phylofoundry.discover")
+
+
+def discover_motifs(cfg, fasta_dir, summary_dir, hmm_keep, force=False, clade_assign_dir=None):
+    """Discovery stage consuming precomputed summary/ha_sites.tsv (no internal HA recomputation)."""
+    disc_cfg = cfg.get("discover", {})
+    if not disc_cfg.get("enabled", False):
+        return None
+    ha_fp = os.path.join(summary_dir, "ha_sites.tsv")
+    if not os.path.exists(ha_fp):
+        raise SystemExit(f"DiscoverCandidates requires HA output: {ha_fp}")
+    out_fp = os.path.join(summary_dir, "discover_candidates.tsv")
+    if os.path.exists(out_fp) and not force:
+        return pd.read_csv(out_fp, sep="\t")
+
+    ha = pd.read_csv(ha_fp, sep="\t")
+    rows = []
+    for (hmm, col), sub in ha.groupby(["hmm_id", "msa_col"]):
+        freq = float(sub["is_ha"].mean())
+        score = float(sub["ha_score"].mean())
+        rows.append({"hmm": hmm, "msa_col": int(col), "delta_ha": freq - 0.5, "js_divergence": abs(score - ha["ha_score"].mean()), "candidate_score": (freq * 0.7) + (score * 0.3)})
+    out = pd.DataFrame(rows).sort_values("candidate_score", ascending=False)
+    out.to_csv(out_fp, sep="\t", index=False)
+    return out
