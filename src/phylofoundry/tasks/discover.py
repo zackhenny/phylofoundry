@@ -431,6 +431,7 @@ def discover_motifs(cfg, fasta_dir, summary_dir, hmm_keep, force=False):
     n_layers = disc_cfg.get("attention_layers", 4)
     standard_clade = disc_cfg.get("standard_clade")
     novel_clade = disc_cfg.get("novel_clade")
+    cross_hmm = bool(disc_cfg.get("cross_hmm_comparison", True))
 
     ha_cfg = cfg.get("ha", {})
     candidates_enabled = bool(disc_cfg.get("candidates", {}).get("enabled", True))
@@ -550,99 +551,136 @@ def discover_motifs(cfg, fasta_dir, summary_dir, hmm_keep, force=False):
     target_len = 500
     all_discovered_motifs = []
 
-    # Determine which clades to iterate over
-    if standard_clade is not None and novel_clade is not None:
-        print(f"[discover] Manual override: comparing novel_clade={novel_clade} "
-              f"vs standard_clade={standard_clade}.")
-        comparison_clades = [novel_clade]
-    else:
-        comparison_clades = all_clades
-
-    for focal_clade in comparison_clades:
-        if focal_clade not in clade_to_proteins:
+    def _run_comparison(focal_clade, available_clades, clade_map, label_ref):
+        """Compare one focal clade against others using attention delta peaks."""
+        if focal_clade not in clade_map:
             print(f"[discover] Clade '{focal_clade}' not found in clade assignments. "
                   f"Skipping.", file=sys.stderr)
-            continue
+            return None
 
-        nov_protein_ids = clade_to_proteins[focal_clade]
-
-        if standard_clade is not None and novel_clade is not None:
-            # Manual override: compare against specified standard_clade only
-            if standard_clade not in clade_to_proteins:
-                print(f"[discover] standard_clade '{standard_clade}' not found in "
-                      f"clade assignments. Skipping.", file=sys.stderr)
-                continue
-            std_protein_ids = clade_to_proteins[standard_clade]
-        else:
-            # 1-vs-All: compare focal clade against all other clades combined
-            std_protein_ids = set()
-            for other_clade, other_ids in clade_to_proteins.items():
-                if other_clade != focal_clade:
-                    std_protein_ids.update(other_ids)
+        nov_protein_ids = clade_map[focal_clade]
+        std_protein_ids = set()
+        for other_clade in available_clades:
+            if other_clade != focal_clade:
+                std_protein_ids.update(clade_map[other_clade])
 
         nov_ids = _resolve_seq_ids(nov_protein_ids, set(all_profiles.keys()))
         std_ids = _resolve_seq_ids(std_protein_ids, set(all_profiles.keys()))
 
-        nov_profiles = [all_profiles[s] for s in nov_ids if s in all_profiles]
-        std_profiles = [all_profiles[s] for s in std_ids if s in all_profiles]
+        nov_profiles_list = [all_profiles[s] for s in nov_ids if s in all_profiles]
+        std_profiles_list = [all_profiles[s] for s in std_ids if s in all_profiles]
 
-        if not nov_profiles or not std_profiles:
-            continue
+        if not nov_profiles_list or not std_profiles_list:
+            return None
 
-        nov_aligned = _align_profiles_to_fixed_length(nov_profiles, target_len)
-        std_aligned = _align_profiles_to_fixed_length(std_profiles, target_len)
+        nov_aligned = _align_profiles_to_fixed_length(nov_profiles_list, target_len)
+        std_aligned = _align_profiles_to_fixed_length(std_profiles_list, target_len)
 
-        nov_mean = nov_aligned.mean(axis=0)
-        std_mean = std_aligned.mean(axis=0)
-
-        attention_delta = nov_mean - std_mean
+        attention_delta = nov_aligned.mean(axis=0) - std_aligned.mean(axis=0)
         peaks = _find_peaks_in_delta(attention_delta, top_n=top_n)
 
         clade_rows = []
         for peak_pos_norm, delta_val in peaks:
-            if delta_val <= 0: continue
-
-            # Map peaks back to raw sequences of the active target clade
+            if delta_val <= 0:
+                continue
             for seq_id in nov_ids:
                 if seq_id not in all_seqs:
                     continue
                 seq = all_seqs[seq_id]
-                if len(seq) < 10: continue
-
+                if len(seq) < 10:
+                    continue
                 raw_pos = int(peak_pos_norm / target_len * len(seq))
                 raw_pos = min(raw_pos, len(seq) - 1)
                 kmer = _extract_kmer_at_position(seq, raw_pos, k=kmer_size)
-                clade_rows.append(
-                    {
-                        "kmer": kmer,
-                        "position": raw_pos,
-                        "normalized_position": peak_pos_norm,
-                        "attention_delta": delta_val,
-                        "source_clade": focal_clade,
-                        "representative_seq_id": seq_id,
-                    }
-                )
+                clade_rows.append({
+                    "kmer": kmer,
+                    "position": raw_pos,
+                    "normalized_position": peak_pos_norm,
+                    "attention_delta": delta_val,
+                    "source_clade": focal_clade,
+                    "representative_seq_id": seq_id,
+                })
 
-        if clade_rows:
-            df_clade = pd.DataFrame(clade_rows)
-            kmer_summary = (
-                df_clade.groupby("kmer")
-                .agg(
-                    n_sequences=("representative_seq_id", "nunique"),
-                    mean_attention_delta=("attention_delta", "mean"),
-                    median_position=("position", "median"),
-                    representative_seq_id=("representative_seq_id", "first"),
-                )
-                .reset_index()
-                .sort_values("mean_attention_delta", ascending=False)
-                .head(top_n)
+        if not clade_rows:
+            return None
+
+        df_clade = pd.DataFrame(clade_rows)
+        kmer_summ = (
+            df_clade.groupby("kmer")
+            .agg(
+                n_sequences=("representative_seq_id", "nunique"),
+                mean_attention_delta=("attention_delta", "mean"),
+                median_position=("position", "median"),
+                representative_seq_id=("representative_seq_id", "first"),
             )
-            kmer_summary["source_clade"] = focal_clade
-            if standard_clade is not None and novel_clade is not None:
-                kmer_summary["reference_clade"] = standard_clade
+            .reset_index()
+            .sort_values("mean_attention_delta", ascending=False)
+            .head(top_n)
+        )
+        kmer_summ["source_clade"] = focal_clade
+        kmer_summ["reference_clade"] = label_ref
+        return kmer_summ
+
+    # Manual override: specific clade pair
+    if standard_clade is not None and novel_clade is not None:
+        print(f"[discover] Manual override: comparing novel_clade={novel_clade} "
+              f"vs standard_clade={standard_clade}.")
+        if standard_clade not in clade_to_proteins:
+            print(f"[discover] standard_clade '{standard_clade}' not found.", file=sys.stderr)
+        else:
+            result = _run_comparison(novel_clade, [standard_clade, novel_clade],
+                                     clade_to_proteins, standard_clade)
+            if result is not None:
+                all_discovered_motifs.append(result)
+
+    elif cross_hmm:
+        # Cross-HMM mode: pool all clades, compare each against all others
+        print("[discover] cross_hmm_comparison=true: pooling clades across all HMMs.")
+        for focal_clade in all_clades:
+            result = _run_comparison(focal_clade, all_clades,
+                                     clade_to_proteins, "ALL_OTHERS")
+            if result is not None:
+                all_discovered_motifs.append(result)
+
+    else:
+        # Per-HMM mode: compare clades only within each HMM
+        print("[discover] cross_hmm_comparison=false: comparing clades within each HMM separately.")
+        hmm_clade_groups = {}
+        for cname, proteins in clade_to_proteins.items():
+            # Determine which HMM a clade belongs to by checking prefix or clade_df
+            if "|" in str(cname):
+                hmm_prefix = str(cname).split("|", 1)[0]
+            elif isinstance(cname, (int, float)):
+                # Numeric HDBSCAN cluster — assign to HMM via clade_df
+                hmm_prefix = "__hdbscan__"
             else:
-                kmer_summary["reference_clade"] = "ALL_OTHERS"
-            all_discovered_motifs.append(kmer_summary)
+                hmm_prefix = str(cname)
+            hmm_clade_groups.setdefault(hmm_prefix, []).append(cname)
+
+        # Also group HDBSCAN clusters per HMM from clade_df
+        if "hmm" in clade_df.columns:
+            for hmm_name, sub in clade_df.groupby("hmm"):
+                for cid in sub["cluster_id"].dropna().unique():
+                    if cid == -1:
+                        continue
+                    if cid in clade_to_proteins:
+                        hmm_clade_groups.setdefault(hmm_name, []).append(cid)
+            # Remove the catch-all hdbscan group since we've assigned properly
+            hmm_clade_groups.pop("__hdbscan__", None)
+
+        for hmm_prefix, hmm_clades in hmm_clade_groups.items():
+            hmm_clades_unique = list(dict.fromkeys(hmm_clades))  # deduplicate, preserve order
+            if len(hmm_clades_unique) < 2:
+                continue
+            print(f"[discover]   HMM '{hmm_prefix}': {len(hmm_clades_unique)} clades")
+            for focal_clade in hmm_clades_unique:
+                result = _run_comparison(
+                    focal_clade, hmm_clades_unique,
+                    clade_to_proteins, f"OTHERS_IN_{hmm_prefix}"
+                )
+                if result is not None:
+                    result["hmm"] = hmm_prefix
+                    all_discovered_motifs.append(result)
 
     if not all_discovered_motifs:
         print("[discover] No significant attention peaks found across all clades.", file=sys.stderr)

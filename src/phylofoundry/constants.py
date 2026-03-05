@@ -167,6 +167,7 @@ DEFAULT_CONFIG = {
         "use_ha": False,
         "ha_window": 9,
         "ha_delta_min": 0.2,
-        "ha_gap_frac_max": 0.6
+        "ha_gap_frac_max": 0.6,
+        "cross_hmm_comparison": True
     },
 }
