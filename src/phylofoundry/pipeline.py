@@ -195,7 +195,21 @@ def run_pipeline(cfg):
             })
         pd.DataFrame(rows).drop_duplicates().to_csv(os.path.join(summary_dir, "id_audit.tsv"), sep="\t", index=False)
 
-    hmm_to_seqs = run_step("extract", lambda: extract.run_extract(cfg, best_df, faa_dir, fasta_dir, hmm_keep, force, summary_dir=summary_dir))
+    scan_for_extract = scan_df if scan_df is not None else best_df
+    search_for_extract = search_df if search_df is not None else best_df
+    proteome_seqs = _load_proteomes_lazy(genomes, faa_dir)
+    hmm_to_seqs = run_step(
+        "extract",
+        lambda: extract.run_extract(
+            cfg,
+            scan_for_extract,
+            search_for_extract,
+            fasta_dir,
+            hmm_keep,
+            proteome_seqs,
+            force=force,
+        ),
+    )
     if stop_after == "extract":
         return
 
