@@ -6,6 +6,10 @@ channels:
   - smirarab
 dependencies:
   - python=3.10
+  - pip
+  - pyyaml
+  - pydantic>=2
+  - pytest
   - pandas
   - numpy
   - scikit-bio
@@ -24,7 +28,6 @@ dependencies:
   - hyphy
   - treecluster
   - clinker-py
-  - pip
   - pip:
     - fair-esm
     - transformers
@@ -33,4 +36,4 @@ dependencies:
     - bqplot
     - pygenomeviz
     - pwlf
-    - .  # Install the current package in editable mode
+    - -e .  # Install the current package in editable mode
