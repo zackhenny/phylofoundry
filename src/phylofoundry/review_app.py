@@ -64,7 +64,8 @@ def load_tax(gtdb_dir, tax_file):
             df = pd.read_csv(tax_file, sep="\t", header=None)
             for _, r in df.iterrows():
                 mapping[r[0]] = r[1]
-        except: pass
+        except Exception:
+            pass
     elif gtdb_dir and os.path.exists(gtdb_dir):
         for fp in glob.glob(os.path.join(gtdb_dir, "*.tsv")):
             try:
@@ -72,13 +73,14 @@ def load_tax(gtdb_dir, tax_file):
                 if "user_genome" in df.columns and "classification" in df.columns:
                     for _, r in df.iterrows():
                         mapping[r["user_genome"]] = r["classification"]
-            except: pass
+            except Exception:
+                pass
     return mapping
 
 tax_map = load_tax(gtdb_dir, tax_file)
 
 # Append taxonomy to tree terminals for display
-display_tree = Phylo.read(active_tree_fp, "newick")
+display_tree = Phylo.read(tree_fp, "newick")
 for term in display_tree.get_terminals():
     genome = term.name.split("|")[0] if "|" in term.name else term.name
     genome = genome.replace(".faa", "").replace(".fna", "")

@@ -135,11 +135,11 @@ def _load_taxonomy(gtdb_dir, tax_file):
         try:
             df = pd.read_csv(tax_file, sep="\t", dtype=str)
             if "genome" in df.columns and "lineage" in df.columns:
-                 for _, r in df.iterrows():
+                for _, r in df.iterrows():
                     key = normalize_genome_id(str(r["genome"]))
                     tax_map[key] = str(r["lineage"])
         except Exception as e:
-             print(f"[post] Warning: Failed to parse taxonomy file {tax_file}: {e}")
+            print(f"[post] Warning: Failed to parse taxonomy file {tax_file}: {e}")
              
     return tax_map
 

@@ -24,7 +24,7 @@ def run_cmd(cmd, quiet=False, shell=False):
             print(f"[run_cmd abort] Stderr output:\n{e.stderr}", file=sys.stderr)
         raise
 
-def normalize_genome_id(x: str) -> str:
+def normalize_genome_id(x: str | None) -> str | None:
     if x is None:
         return x
     x = str(x)
@@ -67,6 +67,8 @@ def load_json_config(path: str) -> dict:
 
 def write_json(obj: dict, out_fp: str):
     """Write dictionary to JSON file."""
-    os.makedirs(os.path.dirname(out_fp), exist_ok=True)
+    parent = os.path.dirname(out_fp)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
     with open(out_fp, "w") as f:
         json.dump(obj, f, indent=2, sort_keys=True)

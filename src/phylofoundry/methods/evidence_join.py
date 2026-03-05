@@ -60,8 +60,14 @@ def run_evidence_join(cfg: dict, summary_dir: str):
     hy = pd.read_csv(meme_fp, sep="\t") if os.path.exists(meme_fp) else pd.DataFrame(columns=["hmm_id", "msa_col", "MEME_p", "MEME_omega"])
 
     out = by_col.merge(cand, on=["hmm_id", "msa_col"], how="left").merge(hy, on=["hmm_id", "msa_col"], how="left")
-    out["delta_ha"] = out.get("delta_ha", 0.0).fillna(0.0)
-    out["js_divergence"] = out.get("js_divergence", 0.0).fillna(0.0)
+    if "delta_ha" not in out.columns:
+        out["delta_ha"] = 0.0
+    else:
+        out["delta_ha"] = out["delta_ha"].fillna(0.0)
+    if "js_divergence" not in out.columns:
+        out["js_divergence"] = 0.0
+    else:
+        out["js_divergence"] = out["js_divergence"].fillna(0.0)
 
     th = cfg.get("evidence_join", {}).get("classification_thresholds", {})
     out["classification"] = out.apply(lambda r: _classify(r, th), axis=1)

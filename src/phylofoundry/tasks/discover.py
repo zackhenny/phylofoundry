@@ -63,7 +63,7 @@ def discover_motifs(cfg, fasta_dir, summary_dir, hmm_keep, force=False, clade_as
         return pd.read_csv(out_fp, sep="\t")
 
     fasta_hmms = {Path(fp).stem for fp in Path(fasta_dir).glob("*.faa")}
-    target_hmms = sorted(hmm_keep if hmm_keep else fasta_hmms)
+    target_hmms = sorted(hmm_keep & fasta_hmms if hmm_keep else fasta_hmms)
 
     use_ha = bool(disc_cfg.get("use_ha", False))
     if use_ha:

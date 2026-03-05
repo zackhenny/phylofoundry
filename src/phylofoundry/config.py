@@ -19,6 +19,9 @@ class InputsConfig(BaseModel):
     faa_dir: str | None = Field(default=None, description="Directory or single .faa file")
     hmm_input: str | None = Field(default=None, description="Directory or single .hmm file")
     cds_dir: str | None = None
+    gtdb_dir: str | None = None
+    taxonomy_file: str | None = None
+    pfam_dir: str | None = None
 
 
 class OutputConfig(BaseModel):
