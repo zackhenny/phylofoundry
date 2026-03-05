@@ -501,3 +501,37 @@ Selection tests.
 -   `label_mode`: (Default: `"crown"`) Branch-label strategy for clade foreground (`"crown"` or `"stem"`).
 -   `relax_label_reference`: (Default: `true`) Add `{reference}` labels to non-foreground branches for RELAX.
 -   `hyphy_args`: Existing per-test args are still supported; in clade-aware mode, `aBSREL`/`BUSTED` branch labels are forced to `FG` and RELAX labels are synchronized to `test`/`reference`.
+
+## Quickstart
+
+```bash
+pip install -e .
+phylofoundry --config config.yaml --log-level INFO
+```
+
+## Config UX improvements
+
+- JSON and YAML configs are accepted.
+- Validate config: `phylofoundry config validate config.yaml`
+- Print template: `phylofoundry config template`
+- Explain sections: `phylofoundry config explain`
+- Override any key from CLI: `--set section.key=value` (repeatable)
+
+### Common workflows
+
+- Tree-only: disable embeddings/discovery/hyphy; run through `phylo`.
+- Discovery + HA: enable `discover.enabled=true`, `ha.enabled=true`, and `embeddings.write_full_vectors=true`.
+- Codon + HyPhy: enable `codon.enabled=true` and `hyphy.enabled=true`.
+- Synteny: enable `synteny.enabled=true` and provide feature/genome inputs.
+
+## First-run QC checklist
+
+See `docs/first_run_qc.md` for a complete checklist.
+
+## Troubleshooting: discover finds nothing
+
+1. Inspect `logs/phylofoundry.log` for profile generation errors.
+2. Check `discover/discover_profile_failures.tsv` for sequence-level failures.
+3. Ensure enough profiles were computed (default min is 3).
+4. If all clusters are noise in embedding output, tune HDBSCAN parameters.
+5. For HA-heavy runs, verify `summary/*.ha_counts.tsv` is non-empty.

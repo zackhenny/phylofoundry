@@ -290,6 +290,14 @@ def write_ha_outputs(
     ha_fp = os.path.join(attention_dir, f"{hmm}.ha_sites.tsv")
     pd.DataFrame(rows).to_csv(ha_fp, sep="\t", index=False)
 
+    # explicit summary outputs per HMM
+    hmm_summary_dir = os.path.join(summary_dir, "summary") if os.path.basename(summary_dir) != "summary" else summary_dir
+    os.makedirs(hmm_summary_dir, exist_ok=True)
+    per_site_fp = os.path.join(hmm_summary_dir, f"{hmm}.ha_sites.tsv")
+    per_count_fp = os.path.join(hmm_summary_dir, f"{hmm}.ha_counts.tsv")
+    pd.DataFrame(rows).to_csv(per_site_fp, sep="\t", index=False)
+    pd.DataFrame(summary_rows)[["hmm","seq_id","n_sites"]].rename(columns={"n_sites":"ha_sites"}).to_csv(per_count_fp, sep="\t", index=False)
+
     summary_fp = os.path.join(summary_dir, "ha_summary.tsv")
     new_df = pd.DataFrame(summary_rows)
     if os.path.exists(summary_fp):

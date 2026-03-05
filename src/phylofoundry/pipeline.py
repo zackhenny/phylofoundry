@@ -1,13 +1,19 @@
-import os
 import glob
+import logging
+import os
+import time
+
+import pandas as pd
+
 from .constants import STEPS
-from .utils.helpers import safe_mkdir, write_json
+from .qc import generate_qc_summary, write_run_manifest
+from .tasks import asr, codon, curate, embed, extract, hmmer, hyphy, phylo, post, prep, synteny
 from .utils.bio import read_fasta
-from .tasks import prep, hmmer, extract, embed, phylo, curate, post, synteny, codon, hyphy, asr
+from .utils.helpers import safe_mkdir, write_json
+from .utils.logging_utils import setup_logging, step_timer
 
 
 def step_in_range(step, start_at, stop_after):
-    """Check whether `step` falls within [start_at, stop_after]."""
     i = STEPS.index(step)
     i0 = STEPS.index(start_at) if start_at else 0
     i1 = STEPS.index(stop_after) if stop_after else len(STEPS) - 1
@@ -21,26 +27,29 @@ def load_manifest(hmm_manifest_fp):
     with open(hmm_manifest_fp) as f:
         for line in f:
             s = line.strip()
-            if not s or s.startswith("#"):
-                continue
-            keep.add(s)
+            if s and not s.startswith("#"):
+                keep.add(s)
     return keep
 
 
 def _load_proteomes_lazy(genomes, faa_dir):
-    """Load all proteomes into a dict keyed by genome filename."""
-    proteome_seqs = {}
-    for g in genomes:
-        proteome_seqs[g] = read_fasta(os.path.join(faa_dir, g))
-    return proteome_seqs
+    return {g: read_fasta(os.path.join(faa_dir, g)) for g in genomes}
+
+
+def _mark_done(outdir: str, step: str, ok: bool = True):
+    marker = os.path.join(outdir, "summary", f"{step}.{'done' if ok else 'failed'}")
+    with open(marker, "w") as f:
+        f.write(str(time.time()))
 
 
 def run_pipeline(cfg):
-    # ── Setup ──────────────────────────────────────────────────────────────
+    outdir = cfg["output"]["outdir"]
+    safe_mkdir(outdir)
+    logger = setup_logging(outdir, cfg.get("logging", {}).get("level", "INFO"))
+    logger.info("Starting phylofoundry run")
+
     faa_arg = cfg["inputs"]["faa_dir"]
     hmm_arg = cfg["inputs"]["hmm_input"]
-    outdir = cfg["output"]["outdir"]
-
     start_at = cfg["workflow"]["start_at"]
     stop_after = cfg["workflow"]["stop_after"]
     force = bool(cfg["workflow"]["force"])
@@ -54,9 +63,6 @@ def run_pipeline(cfg):
     motif_cfg = cfg.get("motifs", {})
     discover_cfg = cfg.get("discover", {})
 
-    safe_mkdir(outdir)
-
-    # ── Output structure ───────────────────────────────────────────────────
     hmmscan_dir = os.path.join(outdir, "hmmscan_tbl")
     hmmsearch_dir = os.path.join(outdir, "hmmsearch_tbl")
     fasta_dir = os.path.join(outdir, "fasta_per_hmm")
@@ -70,16 +76,12 @@ def run_pipeline(cfg):
     emb_dir = os.path.join(outdir, "embeddings")
     clade_assign_dir = os.path.join(outdir, "clade_assignments")
 
-    for d in [hmmscan_dir, hmmsearch_dir, fasta_dir, aln_dir,
-              clipkit_dir, tree_dir, summary_dir, post_dir,
-              codon_dir, hyphy_dir, emb_dir, clade_assign_dir]:
+    for d in [hmmscan_dir, hmmsearch_dir, fasta_dir, aln_dir, clipkit_dir, tree_dir, summary_dir, post_dir, codon_dir, hyphy_dir, emb_dir, clade_assign_dir]:
         safe_mkdir(d)
 
     write_json(cfg, os.path.join(summary_dir, "resolved_config.json"))
+    hmm_keep = load_manifest(cfg["workflow"].get("hmm_manifest"))
 
-    hmm_keep = load_manifest(cfg["workflow"]["hmm_manifest"])
-
-    # ── Input discovery ────────────────────────────────────────────────────
     faa_abs = os.path.abspath(faa_arg)
     if os.path.isfile(faa_abs):
         if not faa_abs.endswith(".faa"):
@@ -110,175 +112,106 @@ def run_pipeline(cfg):
     if not hmm_files:
         raise SystemExit("No .hmm files found.")
 
+    step_status = []
+
+    def run_step(name, fn):
+        if not step_in_range(name, start_at, stop_after):
+            return None
+        try:
+            with step_timer(logger, name):
+                res = fn()
+            step_status.append({"step": name, "status": "success", "message": "ok"})
+            _mark_done(outdir, name, ok=True)
+            return res
+        except Exception as e:
+            logger.exception("Step failed: %s", name)
+            step_status.append({"step": name, "status": "failed", "message": str(e)})
+            _mark_done(outdir, name, ok=False)
+            raise
+
     combined_faa = os.path.join(outdir, "combined_proteomes.faa")
     combined_hmm = os.path.join(outdir, "combined.hmm")
 
-    # ── STEP: prep ─────────────────────────────────────────────────────────
-    if step_in_range("prep", start_at, stop_after):
-        prep.run_prep(cfg, genomes, faa_dir, hmm_input_mode, hmm_dir,
-                      hmm_files, combined_faa, combined_hmm, force)
+    run_step("prep", lambda: prep.run_prep(cfg, genomes, faa_dir, hmm_input_mode, hmm_dir, hmm_files, combined_faa, combined_hmm, force))
     if stop_after == "prep":
         return
 
-    # ── STEP: hmmer ────────────────────────────────────────────────────────
-    scan_df = None
-    search_df = None
-    best_df = None
-    if step_in_range("hmmer", start_at, stop_after):
-        scan_df, search_df, best_df = hmmer.run_hmmer(
-            cfg, genomes, faa_dir, hmm_files, hmm_dir, combined_hmm,
-            combined_faa, outdir, summary_dir, hmmscan_dir, hmmsearch_dir,
-            hmm_keep, force
-        )
-        # Optional: clean up combined FAA to reclaim disk space
-        prep_cfg = cfg.get("prep", {})
-        if prep_cfg.get("cleanup_combined_faa", False) and os.path.exists(combined_faa):
+    scan_df = search_df = best_df = None
+
+    def _hmmer():
+        return hmmer.run_hmmer(cfg, genomes, faa_dir, hmm_files, hmm_dir, combined_hmm, combined_faa, outdir, summary_dir, hmmscan_dir, hmmsearch_dir, hmm_keep, force)
+
+    hmmer_res = run_step("hmmer", _hmmer)
+    if hmmer_res:
+        scan_df, search_df, best_df = hmmer_res
+        if cfg.get("prep", {}).get("cleanup_combined_faa", False) and os.path.exists(combined_faa):
             os.remove(combined_faa)
-            print("[pipeline] Removed combined_proteomes.faa (prep.cleanup_combined_faa=true).")
+
     if stop_after == "hmmer":
         return
 
-    # ── Name mapping for hmmalign ──────────────────────────────────────────
-    name_to_hmm_path = {}
-    for hf in hmm_files:
-        fp = os.path.join(hmm_dir, hf)
-        try:
-            with open(fp) as f:
-                for line in f:
-                    if line.startswith("NAME"):
-                        name_to_hmm_path[line.split()[1]] = fp
-                        break
-        except OSError:
-            continue
+    if best_df is None:
+        best_fp = os.path.join(summary_dir, "best_hits.tsv")
+        if os.path.exists(best_fp):
+            best_df = pd.read_csv(best_fp, sep="\t")
+        else:
+            raise SystemExit("Missing best_hits.tsv required for extract step")
 
-    # ── Helper: load hit DataFrames from disk if we skipped hmmer ──────────
-    def _ensure_hit_dfs():
-        nonlocal scan_df, search_df
-        if scan_df is not None and search_df is not None:
-            return
-        import pandas as pd
-        hits_scan_tsv = os.path.join(summary_dir, "hmmscan_hits.filtered.tsv")
-        hits_search_tsv = os.path.join(summary_dir, "hmmsearch_hits.filtered.tsv")
-        scan_df = pd.read_csv(hits_scan_tsv, sep="\t") if os.path.exists(hits_scan_tsv) else pd.DataFrame()
-        search_df = pd.read_csv(hits_search_tsv, sep="\t") if os.path.exists(hits_search_tsv) else pd.DataFrame()
+    # ID audit for mapping consistency
+    if best_df is not None and not best_df.empty and "protein" in best_df.columns:
+        from .utils.id_normalization import parse_sequence_id
 
-    # ── STEP: extract ──────────────────────────────────────────────────────
-    hmm_to_seqs = {}
-    if step_in_range("extract", start_at, stop_after):
-        _ensure_hit_dfs()
-        proteome_seqs = _load_proteomes_lazy(genomes, faa_dir)
-        hmm_to_seqs = extract.run_extract(
-            cfg, scan_df, search_df, fasta_dir, hmm_keep, proteome_seqs, force
-        )
-        del proteome_seqs  # free memory after extraction
+        rows = []
+        mode = cfg.get("codon", {}).get("cds_id_mode", "after_last_pipe")
+        for _, r in best_df.iterrows():
+            nid = parse_sequence_id(str(r.get("protein")), mode=mode)
+            rows.append({
+                "original_header": nid.original,
+                "normalized_id": nid.normalized,
+                "genome_id": nid.genome_id,
+                "protein_id": nid.protein_id,
+                "where_used": "faa,embedding,cds",
+            })
+        pd.DataFrame(rows).drop_duplicates().to_csv(os.path.join(summary_dir, "id_audit.tsv"), sep="\t", index=False)
+
+    hmm_to_seqs = run_step("extract", lambda: extract.run_extract(cfg, best_df, faa_dir, fasta_dir, hmm_keep, force, summary_dir=summary_dir))
     if stop_after == "extract":
         return
 
-    # ── Taxonomy map (used by embed + post) ──────────────────────────────
     tax_map = {}
     if cfg["inputs"].get("gtdb_dir") or cfg["inputs"].get("taxonomy_file"):
-        tax_map = post._load_taxonomy(
-            cfg["inputs"].get("gtdb_dir"),
-            cfg["inputs"].get("taxonomy_file"),
-        )
-        if tax_map:
-            print(f"[pipeline] Loaded taxonomy for {len(tax_map)} genomes.")
+        tax_map = post._load_taxonomy(cfg["inputs"].get("gtdb_dir"), cfg["inputs"].get("taxonomy_file"))
 
-    # ── STEP: embed ────────────────────────────────────────────────────────
     if step_in_range("embed", start_at, stop_after) and emb_cfg.get("enabled", False):
-        clades = None
-        if post_cfg.get("clades_tsv", None):
-            try:
-                clades = post.load_clades_tsv(post_cfg["clades_tsv"])
-            except Exception:
-                clades = None
-        embed.run_embed(cfg, hmm_to_seqs, clades, emb_dir, fasta_dir, hmm_keep,
-                        force, summary_dir=summary_dir, tax_map=tax_map)
+        run_step("embed", lambda: embed.run_embed(cfg, hmm_to_seqs, None, emb_dir, fasta_dir, hmm_keep, force, summary_dir=summary_dir, tax_map=tax_map))
     if stop_after == "embed":
         return
 
-    # ── STEP: phylo ────────────────────────────────────────────────────────
-    if step_in_range("phylo", start_at, stop_after):
-        phylo.run_phylo(cfg, hmm_to_seqs, fasta_dir, aln_dir, clipkit_dir,
-                        tree_dir, name_to_hmm_path, hmm_keep, force)
+    run_step("phylo", lambda: phylo.run_phylo(cfg, hmm_to_seqs, fasta_dir, aln_dir, clipkit_dir, tree_dir, {}, hmm_keep, force))
 
-        # ── ASR parsing (after phylo, if ASR was enabled) ─────────────────
-        if not phy_cfg.get("no_asr", False):
-            all_ancestral = asr.run_asr_parse(cfg, tree_dir, fasta_dir,
-                                               hmm_keep, force)
-
-            # Combined embedding with ancestors if available
-            if all_ancestral and emb_cfg.get("enabled", False):
-                # Merge all ancestral seqs across HMMs
-                merged_ancestral = {}
-                for hmm_name, anc_seqs in all_ancestral.items():
-                    for node_id, seq in anc_seqs.items():
-                        merged_ancestral[f"{hmm_name}_{node_id}"] = seq
-
-                if merged_ancestral:
-                    clades = None
-                    if post_cfg.get("clades_tsv", None):
-                        try:
-                            clades = post.load_clades_tsv(post_cfg["clades_tsv"])
-                        except Exception:
-                            clades = None
-                    embed.embed_combined_with_ancestors(
-                        cfg, hmm_to_seqs, merged_ancestral, clades,
-                        emb_dir, fasta_dir, hmm_keep,
-                        force=force, summary_dir=summary_dir, tax_map=tax_map
-                    )
+    if not phy_cfg.get("no_asr", False):
+        run_step("asr", lambda: asr.run_asr_parse(cfg, tree_dir, fasta_dir, hmm_keep, force))
 
     if stop_after == "phylo":
         return
 
-    # ── STEP: curate ───────────────────────────────────────────────────────
     if step_in_range("curate", start_at, stop_after):
-        curate.run_curate(cfg, tree_dir, fasta_dir, clipkit_dir, emb_dir, summary_dir, hmm_keep, force)
-    if stop_after == "curate":
-        return
-
-    # ── STEP: post ─────────────────────────────────────────────────────────
+        run_step("curate", lambda: curate.run_curate(cfg, tree_dir, fasta_dir, clipkit_dir, emb_dir, summary_dir, hmm_keep, force))
     if step_in_range("post", start_at, stop_after) and post_cfg.get("enabled", False):
-        post.run_post(cfg, tree_dir, clipkit_dir, aln_dir, post_dir, summary_dir, hmm_keep, force,
-                      clade_assign_dir=clade_assign_dir)
-    if stop_after == "post":
-        return
-
-    # ── STEP: synteny ──────────────────────────────────────────────────────
-    synteny_dir = os.path.join(outdir, "synteny")
-    safe_mkdir(synteny_dir)
-
+        run_step("post", lambda: post.run_post(cfg, tree_dir, clipkit_dir, aln_dir, post_dir, summary_dir, hmm_keep, force, clade_assign_dir=clade_assign_dir))
     if step_in_range("synteny", start_at, stop_after) and synteny_cfg.get("enabled", False):
-        _ensure_hit_dfs()
-        synteny.run_synteny(cfg, synteny_dir, tree_dir, scan_df, search_df, hmm_keep, force,
-                            clade_assign_dir=clade_assign_dir)
-    if stop_after == "synteny":
-        return
-
-    # ── STEP: codon ────────────────────────────────────────────────────────
+        run_step("synteny", lambda: synteny.run_synteny(cfg, os.path.join(outdir, "synteny"), tree_dir, scan_df, search_df, hmm_keep, force, clade_assign_dir=clade_assign_dir))
     if step_in_range("codon", start_at, stop_after) and codon_cfg.get("enabled", False):
-        codon.run_codon(cfg, tree_dir, clipkit_dir, aln_dir, codon_dir, hmm_keep, force)
-    if stop_after == "codon":
-        return
-
-    # ── STEP: hyphy ────────────────────────────────────────────────────────
+        run_step("codon", lambda: codon.run_codon(cfg, tree_dir, clipkit_dir, aln_dir, codon_dir, hmm_keep, force))
     if step_in_range("hyphy", start_at, stop_after) and hyphy_cfg.get("enabled", False):
-        hyphy.run_hyphy(cfg, codon_dir, tree_dir, hyphy_dir, hmm_keep, force,
-                        clade_assign_dir=clade_assign_dir)
-    if stop_after == "hyphy":
-        return
-
-    # ── STEP: score_motifs ─────────────────────────────────────────────────
+        run_step("hyphy", lambda: hyphy.run_hyphy(cfg, codon_dir, tree_dir, hyphy_dir, hmm_keep, force, clade_assign_dir=clade_assign_dir))
     if step_in_range("score_motifs", start_at, stop_after) and motif_cfg.get("enabled", False):
         from .tasks import motifs
-        motifs.score_motifs(cfg, fasta_dir, summary_dir, hmm_keep, force)
-    if stop_after == "score_motifs":
-        return
-
-    # ── STEP: discover_motifs ──────────────────────────────────────────────
+        run_step("score_motifs", lambda: motifs.score_motifs(cfg, fasta_dir, summary_dir, hmm_keep, force))
     if step_in_range("discover_motifs", start_at, stop_after) and discover_cfg.get("enabled", False):
         from .tasks import discover
-        discover.discover_motifs(cfg, fasta_dir, summary_dir, hmm_keep, force,
-                                 clade_assign_dir=clade_assign_dir)
+        run_step("discover_motifs", lambda: discover.discover_motifs(cfg, fasta_dir, summary_dir, hmm_keep, force, clade_assign_dir=clade_assign_dir))
 
-    print("\nPipeline complete.")
+    generate_qc_summary(outdir, summary_dir)
+    write_run_manifest(outdir, summary_dir, step_status)
+    logger.info("Pipeline complete")
