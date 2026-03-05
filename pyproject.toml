@@ -19,7 +19,8 @@ dependencies = [
 
 [project.optional-dependencies]
 qc = ["matplotlib>=3.7", "scipy>=1.10"]
-gpu = ["torch>=2.1", "fair-esm", "transformers"]
+ha = ["pwlf>=2.2"]
+gpu = ["fair-esm", "transformers"]
 dev = ["pytest", "ruff", "mypy"]
 all = [
   "scikit-bio",
@@ -30,7 +31,7 @@ all = [
   "pygenomeviz",
   "scipy",
   "rich",
-  "phylofoundry[qc,gpu,dev]",
+  "phylofoundry[qc,ha,gpu,dev]",
 ]
 
 [project.scripts]

@@ -219,9 +219,10 @@ def run_pipeline(cfg):
 
     if step_in_range("discover_motifs", start_at, stop_after) and discover_cfg.get("enabled", False):
         from .tasks import discover
-        ha_req = os.path.join(summary_dir, "ha_sites.tsv")
-        if not os.path.exists(ha_req):
-            raise SystemExit(f"DiscoverCandidates requires HA output: {ha_req}")
+        if discover_cfg.get("use_ha", False):
+            ha_req = os.path.join(summary_dir, "ha_sites.tsv")
+            if not os.path.exists(ha_req):
+                raise SystemExit("HA artifacts missing; run `phylofoundry ha` or enable ha.enabled.")
         run_step("discover_motifs", lambda: discover.discover_motifs(cfg, fasta_dir, summary_dir, hmm_keep, force, clade_assign_dir=clade_assign_dir))
 
     if step_in_range("evidence_join", start_at, stop_after) and evidence_cfg.get("enable", False):

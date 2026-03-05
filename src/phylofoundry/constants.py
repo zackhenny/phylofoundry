@@ -151,12 +151,15 @@ DEFAULT_CONFIG = {
     },
     "ha": {
         "enabled": False,
-        "mode": "middle",
-        "layer_range": None,
-        "loc_params": {"loc_theta_target_deg": 90, "loc_break_adjust": -1},
-        "call_mode": "percentile",
+        "mode": "loc",
+        "pooling_used": "mean",
+        "loc_theta_target_deg": 90,
+        "loc_break_adjust": -1,
+        "layers": None,
+        "call_mode": "loc_break",
         "percentile": 0.95,
-        "topk": 20
+        "topk": 20,
+        "max_logged_failures": 5
     },
     "evidence_join": {
         "enable": False,

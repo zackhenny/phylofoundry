@@ -539,3 +539,37 @@ See `docs/first_run_qc.md` for a complete checklist.
 ## PLM-hypothesis workflow additions
 
 New modules support embedding-based regime-shift detection (`summary/regime_shifts.tsv`), HA residue calling (`summary/ha_sites.tsv`), and an integrated evidence join table (`summary/site_evidence.tsv`). See `docs/plm_phylo_integration.md` and `docs/first_run_qc.md`.
+
+## HA-site analysis is independent from motif discovery
+
+`phylofoundry ha` runs HA analysis as a standalone module and writes reusable artifacts under `summary/`, `ha/`, and `qc/`.
+
+### Run HA only
+
+```bash
+phylofoundry ha --config config.yaml --all
+# or
+phylofoundry ha --config config.yaml --hmm HMM_ID
+```
+
+### Discovery relationship
+
+- `discover.use_ha: true` => discovery consumes existing `summary/ha_sites.tsv`.
+- Discovery does **not** recompute HA internally.
+- If HA artifacts are missing and `use_ha=true`, discovery exits with:
+  `HA artifacts missing; run \`phylofoundry ha\` or enable ha.enabled.`
+
+### Minimal HA-only config preset
+
+```yaml
+inputs:
+  faa_dir: data/proteomes
+  hmm_input: data/hmms
+output:
+  outdir: results
+ha:
+  enabled: true
+  mode: loc
+  pooling_used: mean
+  call_mode: loc_break
+```

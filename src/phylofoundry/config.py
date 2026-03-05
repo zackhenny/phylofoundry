@@ -59,12 +59,15 @@ class RegimeShiftConfig(BaseModel):
 
 class HAConfig(BaseModel):
     enabled: bool = False
-    mode: str = Field(default="middle", description="middle|loc")
-    layer_range: tuple[int, int] | None = None
-    loc_params: dict[str, Any] = Field(default_factory=dict)
-    call_mode: str = Field(default="percentile", description="paper|percentile|topk")
+    mode: str = Field(default="loc", description="loc|middle")
+    pooling_used: str = Field(default="mean", description="mean|max|both")
+    loc_theta_target_deg: float = 90.0
+    loc_break_adjust: int = -1
+    layers: list[int] | None = None
+    call_mode: str = Field(default="loc_break", description="loc_break|percentile|topk")
     percentile: float = Field(default=0.95, gt=0.0, lt=1.0)
     topk: int = Field(default=20, ge=1)
+    max_logged_failures: int = Field(default=5, ge=1)
 
 
 class EvidenceJoinConfig(BaseModel):

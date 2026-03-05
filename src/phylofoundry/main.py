@@ -1,4 +1,5 @@
 import argparse
+import os
 import sys
 
 from .config import (
@@ -9,6 +10,7 @@ from .config import (
     resolve_config,
     validate_config,
 )
+from .methods import run_ha_sites
 from .pipeline import run_pipeline
 
 
@@ -20,11 +22,17 @@ def _build_parser() -> argparse.ArgumentParser:
     cfgp = sub.add_parser("config", help="Config utilities")
     cfgsub = cfgp.add_subparsers(dest="config_cmd")
     t = cfgsub.add_parser("template", help="Print YAML template")
-    t.add_argument("--mode", choices=["minimal","full"], default="minimal")
+    t.add_argument("--mode", choices=["minimal", "full"], default="minimal")
     e = cfgsub.add_parser("explain", help="Explain configuration sections")
     e.add_argument("path", nargs="?", default=None)
     v = cfgsub.add_parser("validate", help="Validate config file")
     v.add_argument("file")
+
+    hap = sub.add_parser("ha", help="Run standalone HA-site analysis")
+    hap.add_argument("--config", required=True, help="JSON or YAML config file")
+    scope = hap.add_mutually_exclusive_group(required=True)
+    scope.add_argument("--hmm", help="Single HMM ID to process")
+    scope.add_argument("--all", action="store_true", help="Process all HMMs")
 
     ap.add_argument("--config", default=None, help="JSON or YAML config file")
     ap.add_argument("--dump_default_config", action="store_true", help="Print default config JSON and exit")
@@ -65,6 +73,21 @@ def main():
             print("Config valid")
             return
         ap.error("Missing config subcommand")
+
+    if args.subcommand == "ha":
+        cfg = validate_config(load_config_file(args.config))
+        outdir = cfg["output"]["outdir"]
+        fasta_dir = os.path.join(outdir, "fasta_per_hmm")
+        clipkit_dir = os.path.join(outdir, "alignments_clipkit")
+        run_ha_sites(
+            cfg,
+            clipkit_dir if os.path.exists(clipkit_dir) else fasta_dir,
+            os.path.join(outdir, "embeddings"),
+            os.path.join(outdir, "summary"),
+            os.path.join(outdir, "qc"),
+            hmm_keep=None if args.all else {args.hmm},
+        )
+        return
 
     cfg = resolve_config(args)
     if cfg is None:
