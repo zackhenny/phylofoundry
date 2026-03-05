@@ -173,7 +173,61 @@ def load_gff_neighborhood(gff_path, protein_id, window_genes, protein_id_fields,
 # Removed custom diamond functions - using pygenomeviz builtin
 
 
-def run_synteny(cfg, synteny_dir, tree_dir, scan_df, search_df, hmm_keep, force=False):
+def _annotate_neighborhood_proteins(proteins_faa, combined_hmm, annotation_evalue, cpu=1):
+    """Run hmmsearch on neighborhood proteins against the pipeline HMM set.
+
+    Returns dict {protein_uid: {hmm_hit, evalue, bitscore}} for best hits.
+    """
+    import tempfile
+    annotations = {}
+    if not os.path.exists(combined_hmm) or not os.path.exists(proteins_faa):
+        return annotations
+
+    with tempfile.NamedTemporaryFile(suffix=".tbl", delete=False) as tmp:
+        tbl_path = tmp.name
+
+    try:
+        cmd = [
+            "hmmsearch", "--cpu", str(cpu),
+            "--domtblout", tbl_path,
+            "-E", str(annotation_evalue),
+            "--domE", str(annotation_evalue),
+            combined_hmm, proteins_faa
+        ]
+        subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+        # Parse domtblout
+        if os.path.exists(tbl_path) and os.path.getsize(tbl_path) > 0:
+            with open(tbl_path) as f:
+                for line in f:
+                    if line.startswith("#"):
+                        continue
+                    parts = line.split()
+                    if len(parts) < 13:
+                        continue
+                    protein_id = parts[0]
+                    hmm_name = parts[3]
+                    evalue = float(parts[6])
+                    bitscore = float(parts[7])
+                    # Keep best hit per protein
+                    if protein_id not in annotations or bitscore > annotations[protein_id]["bitscore"]:
+                        annotations[protein_id] = {
+                            "hmm_annotation": hmm_name,
+                            "annotation_evalue": evalue,
+                            "annotation_bitscore": bitscore,
+                        }
+    except Exception as e:
+        import sys
+        print(f"[synteny] Warning: HMM annotation of neighborhood proteins failed: {e}", file=sys.stderr)
+    finally:
+        try:
+            os.remove(tbl_path)
+        except OSError:
+            pass
+
+    return annotations
+
+def run_synteny(cfg, synteny_dir, tree_dir, scan_df, search_df, hmm_keep, force=False, clade_assign_dir=None):
     print("\n[synteny] Extracting neighborhoods and plotting synteny...")
     
     syn_cfg = cfg.get("synteny", {})
@@ -196,6 +250,9 @@ def run_synteny(cfg, synteny_dir, tree_dir, scan_df, search_df, hmm_keep, force=
     gbk_dir = syn_cfg.get("gbk_dir")
     gff_dir = syn_cfg.get("gff_dir")
     pfam_dir = cfg["inputs"].get("pfam_dir")
+    annotation_evalue = float(syn_cfg.get("annotation_evalue", 1e-5))
+    cpu = int(cfg.get("resources", {}).get("cpu", 1))
+    combined_hmm = os.path.join(cfg["output"]["outdir"], "combined.hmm")
     
     if not gbk_dir and not gff_dir:
         print("WARNING: No gbk_dir or gff_dir provided for synteny. Skipping.")
@@ -222,6 +279,8 @@ def run_synteny(cfg, synteny_dir, tree_dir, scan_df, search_df, hmm_keep, force=
 
     if hmm_keep:
         hits = hits[hits["hmm"].isin(hmm_keep)]
+
+    all_cluster_rows = []  # aggregate across all HMMs
 
     for hmm, group in hits.groupby("hmm"):
         hmm_out_dir = os.path.join(synteny_dir, hmm)
@@ -316,6 +375,49 @@ def run_synteny(cfg, synteny_dir, tree_dir, scan_df, search_df, hmm_keep, force=
             seq_out = os.path.join(seqs_dir, "neighborhood_proteins.faa")
             write_fasta(seq_out, all_prots)
 
+        # ── HMM Annotation of neighborhood proteins ──────────────────────
+        hmm_annotations = {}
+        if all_prots and os.path.exists(combined_hmm):
+            seq_out = os.path.join(seqs_dir, "neighborhood_proteins.faa")
+            print(f"    Annotating neighborhood proteins (e-value={annotation_evalue})...")
+            hmm_annotations = _annotate_neighborhood_proteins(
+                seq_out, combined_hmm, annotation_evalue, cpu=cpu
+            )
+            if hmm_annotations:
+                print(f"    Annotated {len(hmm_annotations)} proteins with HMM hits.")
+
+        # ── Gene Cluster Annotations Table ────────────────────────────────
+        cluster_rows = []
+        for genome, protein, feats, contig_seq in neighborhoods:
+            for f in feats:
+                uid = f.get("uid", "")
+                anno = hmm_annotations.get(uid, {})
+                # Compute relative position to focal gene
+                focal_idx = next((i for i, feat in enumerate(feats) if feat.get("is_focal")), 0)
+                current_idx = feats.index(f)
+                position_relative = current_idx - focal_idx
+                cluster_rows.append({
+                    "hmm": hmm,
+                    "genome": genome,
+                    "focal_protein": protein,
+                    "cluster_size": len(feats),
+                    "protein_id": f.get("protein_id", "NA"),
+                    "position_relative": position_relative,
+                    "strand": f.get("strand", "NA"),
+                    "gene_label": f.get("label", "NA"),
+                    "hmm_annotation": anno.get("hmm_annotation", ""),
+                    "annotation_evalue": anno.get("annotation_evalue", ""),
+                    "annotation_bitscore": anno.get("annotation_bitscore", ""),
+                    "is_focal": f.get("is_focal", False),
+                })
+
+        if cluster_rows:
+            cluster_df = pd.DataFrame(cluster_rows)
+            cluster_fp = os.path.join(anno_dir, f"{hmm}_gene_clusters.tsv")
+            cluster_df.to_csv(cluster_fp, sep="\t", index=False)
+            print(f"    Wrote gene cluster table: {cluster_fp} ({len(cluster_rows)} entries)")
+            all_cluster_rows.extend(cluster_rows)
+
         # Build GenBank files for clinker
         from Bio.SeqRecord import SeqRecord
         from Bio.Seq import Seq
@@ -407,5 +509,13 @@ def run_synteny(cfg, synteny_dir, tree_dir, scan_df, search_df, hmm_keep, force=
             # Optionally clean up intermediate genbanks here, uncomment if preferred
             # for f in gbk_files:
             #     os.remove(f)
+
+    # Write aggregate gene cluster annotations table
+    if all_cluster_rows:
+        annotations_dir = os.path.join(synteny_dir, "annotations")
+        safe_mkdir(annotations_dir)
+        agg_fp = os.path.join(annotations_dir, "all_gene_clusters.tsv")
+        pd.DataFrame(all_cluster_rows).to_csv(agg_fp, sep="\t", index=False)
+        print(f"[synteny] Wrote aggregate gene cluster table: {agg_fp} ({len(all_cluster_rows)} entries)")
 
     return

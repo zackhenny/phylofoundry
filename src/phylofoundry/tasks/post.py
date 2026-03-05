@@ -220,7 +220,7 @@ def _detect_treecluster_clades(tree_dir, threshold, method):
     return dict(clades)
 
 
-def _write_detected_clades(summary_dir, clades):
+def _write_detected_clades(summary_dir, clades, clade_assign_dir=None):
     if not clades:
         return
     rows = []
@@ -229,6 +229,37 @@ def _write_detected_clades(summary_dir, clades):
             rows.append({"clade_name": cname, "tip": tip})
     if rows:
         pd.DataFrame(rows).to_csv(os.path.join(summary_dir, "detected_clades.tsv"), sep="\t", index=False)
+
+    # Write per-HMM clade files
+    if clade_assign_dir:
+        safe_mkdir(clade_assign_dir)
+        hmm_clades = defaultdict(list)  # hmm_name -> list of (clade_name, tip)
+        for cname, tips in clades.items():
+            # Convention: clade names are "HMM|suffix" for per-HMM clades
+            if "|" in cname:
+                hmm_name = cname.split("|", 1)[0]
+            else:
+                hmm_name = "combined"
+            for tip in tips:
+                hmm_clades[hmm_name].append({"clade_name": cname, "tip": tip})
+        for hmm_name, hmm_rows in hmm_clades.items():
+            out_fp = os.path.join(clade_assign_dir, f"{hmm_name}.clades.tsv")
+            pd.DataFrame(hmm_rows).to_csv(out_fp, sep="\t", index=False)
+        print(f"[post] Wrote per-HMM clade files for {len(hmm_clades)} HMMs to {clade_assign_dir}")
+
+
+def load_per_hmm_clades(clade_assign_dir, hmm_name):
+    """Load clades for a single HMM from per-HMM clade assignment files.
+
+    Returns dict {clade_name: [tip, ...]} or None if file not found.
+    """
+    fp = os.path.join(clade_assign_dir, f"{hmm_name}.clades.tsv")
+    if not os.path.exists(fp):
+        return None
+    try:
+        return load_clades_tsv(fp)
+    except Exception:
+        return None
 
 
 def _load_embedding_coords(emb_dir, hmm, n_pcs):
@@ -446,7 +477,7 @@ def _detect_tree_embed_clades(tree_dir, emb_dir, post_cfg, hmm_keep=None):
 
 
 
-def run_post(cfg, tree_dir, clipkit_dir, aln_dir, post_dir, summary_dir, hmm_keep, force=False):
+def run_post(cfg, tree_dir, clipkit_dir, aln_dir, post_dir, summary_dir, hmm_keep, force=False, clade_assign_dir=None):
     print("\n[post] scikit-bio post-processing...")
 
     # ── Taxonomy Integration ──────────────────────────────────────────────
@@ -504,7 +535,7 @@ def run_post(cfg, tree_dir, clipkit_dir, aln_dir, post_dir, summary_dir, hmm_kee
                 hmm_keep=hmm_keep,
             )
         if clades:
-            _write_detected_clades(summary_dir, clades)
+            _write_detected_clades(summary_dir, clades, clade_assign_dir=clade_assign_dir)
         if embed_node_scores:
             pd.DataFrame(embed_node_scores).to_csv(
                 os.path.join(summary_dir, "node_scores.embedtree.tsv"),

@@ -117,6 +117,7 @@ DEFAULT_CONFIG = {
         "gene_label_field": ["gene", "product", "Name", "locus_tag"],
         "plot_width": 14,
         "include_tree": True,
+        "annotation_evalue": 1e-5
     },
     "codon": {
         "enabled": False,

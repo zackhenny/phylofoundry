@@ -128,7 +128,7 @@ def test_run_hyphy_clade_aware_builds_commands_and_outputs(tmp_path, monkeypatch
         ]
     ).to_csv(summary_dir / "detected_clades.tsv", sep="\t", index=False)
 
-    monkeypatch.setattr(hyphy, "_import_post_helpers", lambda: (lambda fp: {"cladeA": ["t1", "t2", "t3", "missing"]}, lambda fp: _synthetic_tree()))
+    monkeypatch.setattr(hyphy, "_import_post_helpers", lambda: (lambda fp: {"cladeA": ["t1", "t2", "t3", "missing"]}, lambda fp: _synthetic_tree(), lambda d, h: None))
 
     calls = []
 

@@ -419,7 +419,7 @@ def _compute_candidate_residues_for_hmm(hmm, aln_seqs, clade_df_hmm, disc_cfg, a
     pd.DataFrame(region_rows).to_csv(os.path.join(discover_dir, f"{hmm}.candidate_regions.tsv"), sep="\t", index=False)
 
 
-def discover_motifs(cfg, fasta_dir, summary_dir, hmm_keep, force=False):
+def discover_motifs(cfg, fasta_dir, summary_dir, hmm_keep, force=False, clade_assign_dir=None):
     import glob
 
     disc_cfg = cfg.get("discover", {})
@@ -463,9 +463,25 @@ def discover_motifs(cfg, fasta_dir, summary_dir, hmm_keep, force=False):
             continue
         clade_to_proteins[cluster_id] = set(grp["protein"].values)
 
-    # Load detected clades from post step if available
+    # Load detected clades from per-HMM clade_assignments or global detected_clades.tsv
     detected_fp = os.path.join(summary_dir, "detected_clades.tsv")
-    if os.path.exists(detected_fp):
+    if clade_assign_dir and os.path.isdir(clade_assign_dir):
+        from .post import load_per_hmm_clades
+        clade_files = glob.glob(os.path.join(clade_assign_dir, "*.clades.tsv"))
+        n_detected_clades = 0
+        n_detected_proteins = 0
+        for cf in clade_files:
+            hmm_name = os.path.basename(cf).replace(".clades.tsv", "")
+            per_hmm = load_per_hmm_clades(clade_assign_dir, hmm_name)
+            if per_hmm:
+                for clade_name, tips in per_hmm.items():
+                    clade_to_proteins[clade_name] = set(tips)
+                    n_detected_proteins += len(tips)
+                    n_detected_clades += 1
+        if n_detected_clades:
+            print(f"[discover] Loaded {n_detected_clades} detected clades from "
+                  f"clade_assignments/ ({n_detected_proteins} total proteins).")
+    elif os.path.exists(detected_fp):
         detected_df = pd.read_csv(detected_fp, sep="\t")
         n_detected_proteins = 0
         for clade_name, grp in detected_df.groupby("clade_name"):

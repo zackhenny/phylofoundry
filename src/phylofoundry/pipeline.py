@@ -68,10 +68,11 @@ def run_pipeline(cfg):
     codon_dir = os.path.join(outdir, "codon_alignments")
     hyphy_dir = os.path.join(summary_dir, "hyphy")
     emb_dir = os.path.join(outdir, "embeddings")
+    clade_assign_dir = os.path.join(outdir, "clade_assignments")
 
     for d in [hmmscan_dir, hmmsearch_dir, fasta_dir, aln_dir,
               clipkit_dir, tree_dir, summary_dir, post_dir,
-              codon_dir, hyphy_dir, emb_dir]:
+              codon_dir, hyphy_dir, emb_dir, clade_assign_dir]:
         safe_mkdir(d)
 
     write_json(cfg, os.path.join(summary_dir, "resolved_config.json"))
@@ -238,7 +239,8 @@ def run_pipeline(cfg):
 
     # ── STEP: post ─────────────────────────────────────────────────────────
     if step_in_range("post", start_at, stop_after) and post_cfg.get("enabled", False):
-        post.run_post(cfg, tree_dir, clipkit_dir, aln_dir, post_dir, summary_dir, hmm_keep, force)
+        post.run_post(cfg, tree_dir, clipkit_dir, aln_dir, post_dir, summary_dir, hmm_keep, force,
+                      clade_assign_dir=clade_assign_dir)
     if stop_after == "post":
         return
 
@@ -248,7 +250,8 @@ def run_pipeline(cfg):
 
     if step_in_range("synteny", start_at, stop_after) and synteny_cfg.get("enabled", False):
         _ensure_hit_dfs()
-        synteny.run_synteny(cfg, synteny_dir, tree_dir, scan_df, search_df, hmm_keep, force)
+        synteny.run_synteny(cfg, synteny_dir, tree_dir, scan_df, search_df, hmm_keep, force,
+                            clade_assign_dir=clade_assign_dir)
     if stop_after == "synteny":
         return
 
@@ -260,7 +263,8 @@ def run_pipeline(cfg):
 
     # ── STEP: hyphy ────────────────────────────────────────────────────────
     if step_in_range("hyphy", start_at, stop_after) and hyphy_cfg.get("enabled", False):
-        hyphy.run_hyphy(cfg, codon_dir, tree_dir, hyphy_dir, hmm_keep, force)
+        hyphy.run_hyphy(cfg, codon_dir, tree_dir, hyphy_dir, hmm_keep, force,
+                        clade_assign_dir=clade_assign_dir)
     if stop_after == "hyphy":
         return
 
@@ -274,6 +278,7 @@ def run_pipeline(cfg):
     # ── STEP: discover_motifs ──────────────────────────────────────────────
     if step_in_range("discover_motifs", start_at, stop_after) and discover_cfg.get("enabled", False):
         from .tasks import discover
-        discover.discover_motifs(cfg, fasta_dir, summary_dir, hmm_keep, force)
+        discover.discover_motifs(cfg, fasta_dir, summary_dir, hmm_keep, force,
+                                 clade_assign_dir=clade_assign_dir)
 
     print("\nPipeline complete.")

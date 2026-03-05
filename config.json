@@ -107,7 +107,8 @@
             "locus_tag"
         ],
         "plot_width": 14,
-        "include_tree": true
+        "include_tree": true,
+        "annotation_evalue": 1e-5
     },
     "codon": {
         "enabled": false,

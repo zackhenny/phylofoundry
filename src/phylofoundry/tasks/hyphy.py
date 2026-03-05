@@ -7,9 +7,9 @@ import pandas as pd
 
 
 def _import_post_helpers():
-    from .post import load_clades_tsv, tree_load
+    from .post import load_clades_tsv, tree_load, load_per_hmm_clades
 
-    return load_clades_tsv, tree_load
+    return load_clades_tsv, tree_load, load_per_hmm_clades
 
 
 def _iter_nodes(root):
@@ -165,7 +165,7 @@ def run_hyphy_wrapper(hyphy_bin, test_name, codon_aln_fp, tree_fp, out_json, ext
         return False, cmd
 
 
-def run_hyphy(cfg, codon_dir, tree_dir, hyphy_dir, hmm_keep, force=False):
+def run_hyphy(cfg, codon_dir, tree_dir, hyphy_dir, hmm_keep, force=False, clade_assign_dir=None):
     print("\n[hyphy] Running HyPhy tests (generic wrapper)...")
 
     hyphy_cfg = cfg.get("hyphy", {})
@@ -184,10 +184,15 @@ def run_hyphy(cfg, codon_dir, tree_dir, hyphy_dir, hmm_keep, force=False):
 
     clades = None
     tree_load = None
-    if use_detected_clades and os.path.exists(detected_clades_fp):
-        load_clades_tsv, tree_load = _import_post_helpers()
-        clades = load_clades_tsv(detected_clades_fp)
-        print(f"[hyphy] Loaded {len(clades)} detected clades from {detected_clades_fp}")
+    load_per_hmm = None
+    global_clades = None
+    if use_detected_clades:
+        load_clades_tsv, tree_load, load_per_hmm = _import_post_helpers()
+        if os.path.exists(detected_clades_fp):
+            global_clades = load_clades_tsv(detected_clades_fp)
+            print(f"[hyphy] Loaded {len(global_clades)} detected clades from {detected_clades_fp}")
+        # Mark that we should attempt per-HMM loading
+        clades = global_clades
 
     hmm_names = sorted([os.path.basename(x).replace(".codon.fasta", "") for x in glob.glob(os.path.join(codon_dir, "*.codon.fasta"))])
     if hmm_keep is not None:
@@ -231,9 +236,23 @@ def run_hyphy(cfg, codon_dir, tree_dir, hyphy_dir, hmm_keep, force=False):
         tree = tree_load(tree_fp)
         tip_names = _tree_tip_names(tree)
 
-        # Only apply clades whose prefix (before |) matches this HMM
-        hmm_clades = {cn: tips for cn, tips in clades.items()
-                      if "|" not in cn or cn.split("|", 1)[0] == hmm}
+        # Load per-HMM clades if available, otherwise fall back to global with prefix filtering
+        hmm_clades = None
+        if use_detected_clades and load_per_hmm and clade_assign_dir:
+            # Check for combined mode
+            combined_tree = cfg.get("phylo", {}).get("combined_tree", False)
+            if combined_tree:
+                hmm_clades = load_per_hmm(clade_assign_dir, "combined")
+            else:
+                hmm_clades = load_per_hmm(clade_assign_dir, hmm)
+
+        if hmm_clades is None and clades:
+            # Fall back to global clades with prefix filtering (backward compat)
+            hmm_clades = {cn: tips for cn, tips in clades.items()
+                          if "|" not in cn or cn.split("|", 1)[0] == hmm}
+
+        if not hmm_clades:
+            continue
         for clade_name in sorted(hmm_clades):
             clade_tips = hmm_clades[clade_name]
             tips_present = [t for t in clade_tips if t in tip_names]
