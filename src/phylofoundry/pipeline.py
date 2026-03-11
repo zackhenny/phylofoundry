@@ -491,8 +491,8 @@ def run_pipeline(cfg):
             update_step_status(status_path, "score_motifs", "running")
             append_pipeline_log(logs_dir, "START: score_motifs")
             try:
-                from .tasks import motifs
-                motifs.score_motifs(cfg, fasta_dir, summary_dir, hmm_keep, force)
+                from .tasks import score_motifs
+                score_motifs.score_motifs(cfg, fasta_dir, summary_dir, hmm_keep, force)
                 update_step_status(status_path, "score_motifs", "success")
                 append_pipeline_log(logs_dir, "SUCCESS: score_motifs")
             except Exception as exc:
@@ -508,8 +508,8 @@ def run_pipeline(cfg):
             update_step_status(status_path, "discover_motifs", "running")
             append_pipeline_log(logs_dir, "START: discover_motifs")
             try:
-                from .tasks import discover
-                discover.discover_motifs(cfg, fasta_dir, summary_dir, hmm_keep, force,
+                from .tasks import discover_motifs
+                discover_motifs.discover_motifs(cfg, fasta_dir, summary_dir, hmm_keep, force,
                                          clade_assign_dir=clade_assign_dir)
                 update_step_status(status_path, "discover_motifs", "success")
                 append_pipeline_log(logs_dir, "SUCCESS: discover_motifs")
