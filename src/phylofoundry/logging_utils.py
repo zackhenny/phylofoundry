@@ -79,6 +79,23 @@ def initialize_step_status(plan: "ExecutionPlan", path: str) -> None:
             writer.writerow([step.name, step.state.value, step.log_path or ""])
 
 
+def append_pipeline_log(logs_dir: str, message: str) -> None:
+    """Append a timestamped *message* to ``logs/pipeline.log``.
+
+    The file is created if it does not exist.  Each message is written on its
+    own line, prefixed with an ISO-8601 timestamp.
+    """
+    import datetime
+
+    path = pipeline_log_path(logs_dir)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    timestamp = datetime.datetime.now(datetime.timezone.utc).strftime(
+        "%Y-%m-%dT%H:%M:%SZ"
+    )
+    with open(path, "a") as fh:
+        fh.write(f"[{timestamp}] {message}\n")
+
+
 def update_step_status(path: str, step_name: str, new_state: str) -> None:
     """Update the state for a single step in an existing ``step_status.tsv``.
 
