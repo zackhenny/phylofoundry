@@ -9,8 +9,12 @@ AA_ALPHABET = set(list("ACDEFGHIKLMNPQRSTVWY"))
 GAP_CHARS = set(["-", ".", "X", "x", "?", "*"])
 
 # Workflow
-STEPS = ["prep", "hmmer", "extract", "embed", "phylo", "curate", "post",
-         "synteny", "codon", "hyphy", "score_motifs", "discover_motifs"]
+STEPS = [
+    "prep", "hmmer", "extract", "embed", "phylo", "curate",
+    "taxonomy_integrate", "conservation_metrics", "detect_clades",
+    "post",  # backward-compatibility shim — new code should prefer the three steps above
+    "synteny", "codon", "hyphy", "score_motifs", "discover_motifs",
+]
 
 # Defaults
 DEFAULT_CONFIG = {
@@ -82,6 +86,34 @@ DEFAULT_CONFIG = {
         "enabled": False,
         "use_treeshrink": True,
         "use_esm_filter": True
+    },
+    "taxonomy_integrate": {
+        "enabled": False,
+    },
+    "conservation_metrics": {
+        "enabled": False,
+        "compute_conservation": False,
+        "conservation_metric": "inverse_shannon_uncertainty",
+        "compute_kl": False,
+        "kl_pairs": None,
+        "clades_tsv": None,
+    },
+    "detect_clades": {
+        "enabled": False,
+        "clades_tsv": None,
+        "detect_method": None,  # None|"taxonomy"|"treecluster"|"tree_embed"
+        "taxonomy_clade_level": "genus",
+        "treecluster_threshold": 0.045,
+        "treecluster_method": "max_clade",
+        "embedtree_support_min": 80,
+        "embedtree_min_size": 5,
+        "embedtree_max_size": 5000,
+        "embedtree_top_k": 10,
+        "embedtree_pcs": 10,
+        "embedtree_distance": "euclidean",  # "euclidean"|"cosine"
+        "embedtree_allow_nested": False,
+        "embedtree_require_monophyly": True,
+        "embedtree_emit_all": False,
     },
     "post": {
         "enabled": False,

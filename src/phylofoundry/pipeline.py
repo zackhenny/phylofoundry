@@ -4,6 +4,7 @@ from .constants import STEPS
 from .utils.helpers import safe_mkdir, write_json
 from .utils.bio import read_fasta
 from .tasks import prep, hmmer, extract, embed, phylo, curate, post, synteny, codon, hyphy, asr
+from .tasks import taxonomy_integrate, conservation_metrics, detect_clades
 from .execution_planner import build_execution_plan
 from .execution_schema import StepState
 from .failure_policy import apply_failure_policy, build_reverse_dependency_map
@@ -60,6 +61,9 @@ def run_pipeline(cfg):
     phy_cfg = cfg["phylo"]
     emb_cfg = cfg["embeddings"]
     post_cfg = cfg["post"]
+    tax_int_cfg = cfg.get("taxonomy_integrate", {})
+    cons_met_cfg = cfg.get("conservation_metrics", {})
+    det_cla_cfg = cfg.get("detect_clades", {})
     synteny_cfg = cfg["synteny"]
     codon_cfg = cfg["codon"]
     hyphy_cfg = cfg["hyphy"]
@@ -354,6 +358,58 @@ def run_pipeline(cfg):
             except Exception as exc:
                 _on_step_failure("curate", exc)
     if stop_after == "curate":
+        return
+
+    # ── STEP: taxonomy_integrate ───────────────────────────────────────────
+    if step_in_range("taxonomy_integrate", start_at, stop_after) and tax_int_cfg.get("enabled", False):
+        if _is_blocked("taxonomy_integrate"):
+            print("[pipeline] Skipping blocked step: taxonomy_integrate")
+        else:
+            update_step_status(status_path, "taxonomy_integrate", "running")
+            append_pipeline_log(logs_dir, "START: taxonomy_integrate")
+            try:
+                taxonomy_integrate.run_taxonomy_integrate(cfg, summary_dir)
+                update_step_status(status_path, "taxonomy_integrate", "success")
+                append_pipeline_log(logs_dir, "SUCCESS: taxonomy_integrate")
+            except Exception as exc:
+                _on_step_failure("taxonomy_integrate", exc)
+    if stop_after == "taxonomy_integrate":
+        return
+
+    # ── STEP: conservation_metrics ─────────────────────────────────────────
+    if step_in_range("conservation_metrics", start_at, stop_after) and cons_met_cfg.get("enabled", False):
+        if _is_blocked("conservation_metrics"):
+            print("[pipeline] Skipping blocked step: conservation_metrics")
+        else:
+            update_step_status(status_path, "conservation_metrics", "running")
+            append_pipeline_log(logs_dir, "START: conservation_metrics")
+            try:
+                conservation_metrics.run_conservation_metrics(
+                    cfg, tree_dir, clipkit_dir, aln_dir, post_dir, hmm_keep
+                )
+                update_step_status(status_path, "conservation_metrics", "success")
+                append_pipeline_log(logs_dir, "SUCCESS: conservation_metrics")
+            except Exception as exc:
+                _on_step_failure("conservation_metrics", exc)
+    if stop_after == "conservation_metrics":
+        return
+
+    # ── STEP: detect_clades ────────────────────────────────────────────────
+    if step_in_range("detect_clades", start_at, stop_after) and det_cla_cfg.get("enabled", False):
+        if _is_blocked("detect_clades"):
+            print("[pipeline] Skipping blocked step: detect_clades")
+        else:
+            update_step_status(status_path, "detect_clades", "running")
+            append_pipeline_log(logs_dir, "START: detect_clades")
+            try:
+                detect_clades.run_detect_clades(
+                    cfg, tree_dir, emb_dir, summary_dir, hmm_keep, clade_assign_dir
+                )
+                update_step_status(status_path, "detect_clades", "success")
+                append_pipeline_log(logs_dir, "SUCCESS: detect_clades")
+            except Exception as exc:
+                _on_step_failure("detect_clades", exc)
+    if stop_after == "detect_clades":
         return
 
     # ── STEP: post ─────────────────────────────────────────────────────────

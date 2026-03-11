@@ -6,14 +6,18 @@ caught early.
 
 Architecture notes
 ------------------
-Future targets (not yet implemented — preserved here as registry notes):
+The former monolithic ``post`` step has been split into three focused steps:
 
-- ``post`` will eventually be split into three steps:
-    * ``taxonomy_integrate``
-    * ``conservation_metrics``
-    * ``detect_clades``
-- ``tasks/motifs.py`` will be renamed to ``tasks/score_motifs.py``
-- ``tasks/discover.py`` will be renamed to ``tasks/discover_motifs.py``
+- ``taxonomy_integrate`` — load taxonomy and annotate best_hits
+- ``conservation_metrics`` — scikit-bio conservation / KL divergence metrics
+- ``detect_clades`` — clade detection (taxonomy / TreeCluster / tree+embedding)
+
+The legacy ``post`` step is preserved as a backward-compatibility shim.
+
+Other planned renames (not yet implemented):
+
+- ``tasks/motifs.py`` → ``tasks/score_motifs.py``
+- ``tasks/discover.py`` → ``tasks/discover_motifs.py``
 - ``curate`` will write only to a ``curated/`` overlay directory, never
   overwriting the raw ``trees_iqtree/`` outputs.
 """
@@ -175,11 +179,80 @@ REGISTRY.register(StepDefinition(
 ))
 
 REGISTRY.register(StepDefinition(
+    name="taxonomy_integrate",
+    description=(
+        "Load taxonomy from a GTDB-Tk summary directory (inputs.gtdb_dir) or "
+        "a custom genome→lineage TSV (inputs.taxonomy_file) and write "
+        "summary/genome_taxonomy.tsv and summary/best_hits.with_taxonomy.tsv."
+    ),
+    outputs=[
+        ArtifactSpec(
+            "genome_taxonomy",
+            ArtifactKind.TABLE,
+            "summary/genome_taxonomy.tsv",
+            optional=True,
+        ),
+        ArtifactSpec(
+            "best_hits_with_taxonomy",
+            ArtifactKind.TABLE,
+            "summary/best_hits.with_taxonomy.tsv",
+            optional=True,
+        ),
+    ],
+    dependencies=["phylo"],
+    optional=True,
+    enabled_config_key="taxonomy_integrate.enabled",
+))
+
+REGISTRY.register(StepDefinition(
+    name="conservation_metrics",
+    description=(
+        "Compute per-site conservation scores and KL divergence using "
+        "scikit-bio; write outputs under summary/post_scikitbio/."
+    ),
+    outputs=[
+        ArtifactSpec(
+            "conservation_metrics_dir",
+            ArtifactKind.DIRECTORY,
+            "summary/post_scikitbio/",
+        ),
+    ],
+    dependencies=["phylo"],
+    optional=True,
+    enabled_config_key="conservation_metrics.enabled",
+))
+
+REGISTRY.register(StepDefinition(
+    name="detect_clades",
+    description=(
+        "Detect clades via taxonomy, TreeCluster, or tree+embedding strategies; "
+        "write summary/detected_clades.tsv and per-HMM clade_assignments/."
+    ),
+    outputs=[
+        ArtifactSpec(
+            "detected_clades",
+            ArtifactKind.TABLE,
+            "summary/detected_clades.tsv",
+            optional=True,
+        ),
+        ArtifactSpec(
+            "clade_assignments",
+            ArtifactKind.DIRECTORY,
+            "clade_assignments/",
+        ),
+    ],
+    dependencies=["phylo"],
+    optional=True,
+    enabled_config_key="detect_clades.enabled",
+))
+
+REGISTRY.register(StepDefinition(
     name="post",
     description=(
-        "Post-processing: conservation metrics, KL divergence, and clade detection. "
-        "Future target: split into taxonomy_integrate, conservation_metrics, "
-        "and detect_clades."
+        "Backward-compatibility shim: conservation metrics, KL divergence, and "
+        "clade detection in a single step. Prefer the dedicated steps "
+        "taxonomy_integrate, conservation_metrics, and detect_clades for new "
+        "workflows."
     ),
     outputs=[
         ArtifactSpec(
@@ -197,9 +270,10 @@ REGISTRY.register(StepDefinition(
     optional=True,
     enabled_config_key="post.enabled",
     notes=(
-        "Future target: this step will be split into taxonomy_integrate, "
-        "conservation_metrics, and detect_clades. Each will have an independent "
-        "enabled flag so that failures in one do not block the others."
+        "Backward-compatibility shim. New workflows should use "
+        "taxonomy_integrate, conservation_metrics, and detect_clades instead. "
+        "Each of those steps has an independent enabled flag so that failures "
+        "in one do not block the others."
     ),
 ))
 
@@ -250,12 +324,13 @@ REGISTRY.register(StepDefinition(
     tool_requirements=[
         ToolRequirement("hyphy", config_key="hyphy.hyphy_bin"),
     ],
-    dependencies=["codon", "post"],
+    dependencies=["codon", "detect_clades"],
     optional=True,
     enabled_config_key="hyphy.enabled",
     notes=(
-        "Depends on post for clade assignments used in RELAX test labelling. "
-        "Future: when post is split, hyphy will depend on detect_clades instead."
+        "Depends on detect_clades for clade assignments used in RELAX test "
+        "labelling. Also accepts clade assignments written by the legacy post "
+        "step when detect_clades is not enabled."
     ),
 ))
 
@@ -301,7 +376,7 @@ REGISTRY.register(StepDefinition(
     tool_requirements=[
         ToolRequirement("torch", optional=True),
     ],
-    dependencies=["extract", "post"],
+    dependencies=["extract", "detect_clades"],
     optional=True,
     enabled_config_key="discover.enabled",
     notes="Future: tasks/discover.py will be renamed to tasks/discover_motifs.py.",
