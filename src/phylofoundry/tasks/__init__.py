@@ -15,7 +15,7 @@ __all__ = [
     "codon",
     "hyphy",
     "asr",
-    "motifs",
-    "discover",
+    "score_motifs",
+    "discover_motifs",
     "curate",
 ]

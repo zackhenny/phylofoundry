@@ -1,5 +1,5 @@
 """
-discover.py — Unsupervised motif discovery via comparative ESM-2 attention profiles.
+discover_motifs.py — Unsupervised motif discovery via comparative ESM-2 attention profiles.
 """
 
 import os

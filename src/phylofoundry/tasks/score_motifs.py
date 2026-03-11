@@ -1,5 +1,5 @@
 """
-motifs.py — ESM-2 attention-based targeted motif scoring.
+score_motifs.py — ESM-2 attention-based targeted motif scoring.
 
 For each protein sequence, extracts attention weights directed at
 user-specified motif positions (e.g., HPEVY, HPEVF) to quantify

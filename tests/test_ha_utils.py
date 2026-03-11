@@ -9,7 +9,7 @@ from phylofoundry.utils.ha import (
     select_layer_range,
     ungapped_to_msa_column,
 )
-from phylofoundry.tasks.discover import _attention_received_by_layer, _compute_candidate_residues_for_hmm, _compute_ha_enrichment_for_hmm
+from phylofoundry.tasks.discover_motifs import _attention_received_by_layer, _compute_candidate_residues_for_hmm, _compute_ha_enrichment_for_hmm
 
 
 def test_select_layer_range_middle_and_range():

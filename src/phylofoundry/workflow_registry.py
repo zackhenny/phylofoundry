@@ -16,8 +16,6 @@ The legacy ``post`` step is preserved as a backward-compatibility shim.
 
 Other planned renames (not yet implemented):
 
-- ``tasks/motifs.py`` → ``tasks/score_motifs.py``
-- ``tasks/discover.py`` → ``tasks/discover_motifs.py``
 - ``curate`` will write only to a ``curated/`` overlay directory, never
   overwriting the raw ``trees_iqtree/`` outputs.
 """
@@ -338,8 +336,7 @@ REGISTRY.register(StepDefinition(
     name="score_motifs",
     description=(
         "Score known motifs using ESM-2 attention weights. "
-        "Current module: tasks/motifs.py "
-        "(future rename target: tasks/score_motifs.py)."
+        "Module: tasks/score_motifs.py."
     ),
     outputs=[
         ArtifactSpec(
@@ -355,15 +352,14 @@ REGISTRY.register(StepDefinition(
     dependencies=["extract"],
     optional=True,
     enabled_config_key="motifs.enabled",
-    notes="Future: tasks/motifs.py will be renamed to tasks/score_motifs.py.",
+    notes="tasks/score_motifs.py",
 ))
 
 REGISTRY.register(StepDefinition(
     name="discover_motifs",
     description=(
         "Discover novel motifs using ESM-2 attention and k-mer analysis. "
-        "Current module: tasks/discover.py "
-        "(future rename target: tasks/discover_motifs.py)."
+        "Module: tasks/discover_motifs.py."
     ),
     outputs=[
         ArtifactSpec(
@@ -379,7 +375,7 @@ REGISTRY.register(StepDefinition(
     dependencies=["extract", "detect_clades"],
     optional=True,
     enabled_config_key="discover.enabled",
-    notes="Future: tasks/discover.py will be renamed to tasks/discover_motifs.py.",
+    notes="tasks/discover_motifs.py",
 ))
 
 # ---------------------------------------------------------------------------
