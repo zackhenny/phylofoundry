@@ -4,6 +4,15 @@ from .constants import STEPS
 from .utils.helpers import safe_mkdir, write_json
 from .utils.bio import read_fasta
 from .tasks import prep, hmmer, extract, embed, phylo, curate, post, synteny, codon, hyphy, asr
+from .execution_planner import build_execution_plan
+from .logging_utils import (
+    ensure_logs_dir,
+    execution_plan_path,
+    initialize_step_status,
+    step_status_path,
+    update_step_status,
+    write_execution_plan,
+)
 
 
 def step_in_range(step, start_at, stop_after):
@@ -55,6 +64,15 @@ def run_pipeline(cfg):
     discover_cfg = cfg.get("discover", {})
 
     safe_mkdir(outdir)
+
+    # ── Execution planning and logging scaffold ────────────────────────────
+    # Build the plan before any work begins so that the logs/ directory and
+    # status files are always present even if an early step fails.
+    exec_plan = build_execution_plan(cfg)
+    logs_dir = ensure_logs_dir(outdir)
+    write_execution_plan(exec_plan, execution_plan_path(logs_dir))
+    status_path = step_status_path(logs_dir)
+    initialize_step_status(exec_plan, status_path)
 
     # ── Output structure ───────────────────────────────────────────────────
     hmmscan_dir = os.path.join(outdir, "hmmscan_tbl")
@@ -115,8 +133,10 @@ def run_pipeline(cfg):
 
     # ── STEP: prep ─────────────────────────────────────────────────────────
     if step_in_range("prep", start_at, stop_after):
+        update_step_status(status_path, "prep", "running")
         prep.run_prep(cfg, genomes, faa_dir, hmm_input_mode, hmm_dir,
                       hmm_files, combined_faa, combined_hmm, force)
+        update_step_status(status_path, "prep", "success")
     if stop_after == "prep":
         return
 
@@ -125,6 +145,7 @@ def run_pipeline(cfg):
     search_df = None
     best_df = None
     if step_in_range("hmmer", start_at, stop_after):
+        update_step_status(status_path, "hmmer", "running")
         scan_df, search_df, best_df = hmmer.run_hmmer(
             cfg, genomes, faa_dir, hmm_files, hmm_dir, combined_hmm,
             combined_faa, outdir, summary_dir, hmmscan_dir, hmmsearch_dir,
@@ -135,6 +156,7 @@ def run_pipeline(cfg):
         if prep_cfg.get("cleanup_combined_faa", False) and os.path.exists(combined_faa):
             os.remove(combined_faa)
             print("[pipeline] Removed combined_proteomes.faa (prep.cleanup_combined_faa=true).")
+        update_step_status(status_path, "hmmer", "success")
     if stop_after == "hmmer":
         return
 
@@ -165,12 +187,14 @@ def run_pipeline(cfg):
     # ── STEP: extract ──────────────────────────────────────────────────────
     hmm_to_seqs = {}
     if step_in_range("extract", start_at, stop_after):
+        update_step_status(status_path, "extract", "running")
         _ensure_hit_dfs()
         proteome_seqs = _load_proteomes_lazy(genomes, faa_dir)
         hmm_to_seqs = extract.run_extract(
             cfg, scan_df, search_df, fasta_dir, hmm_keep, proteome_seqs, force
         )
         del proteome_seqs  # free memory after extraction
+        update_step_status(status_path, "extract", "success")
     if stop_after == "extract":
         return
 
@@ -186,6 +210,7 @@ def run_pipeline(cfg):
 
     # ── STEP: embed ────────────────────────────────────────────────────────
     if step_in_range("embed", start_at, stop_after) and emb_cfg.get("enabled", False):
+        update_step_status(status_path, "embed", "running")
         clades = None
         if post_cfg.get("clades_tsv", None):
             try:
@@ -194,11 +219,13 @@ def run_pipeline(cfg):
                 clades = None
         embed.run_embed(cfg, hmm_to_seqs, clades, emb_dir, fasta_dir, hmm_keep,
                         force, summary_dir=summary_dir, tax_map=tax_map)
+        update_step_status(status_path, "embed", "success")
     if stop_after == "embed":
         return
 
     # ── STEP: phylo ────────────────────────────────────────────────────────
     if step_in_range("phylo", start_at, stop_after):
+        update_step_status(status_path, "phylo", "running")
         phylo.run_phylo(cfg, hmm_to_seqs, fasta_dir, aln_dir, clipkit_dir,
                         tree_dir, name_to_hmm_path, hmm_keep, force)
 
@@ -228,19 +255,25 @@ def run_pipeline(cfg):
                         force=force, summary_dir=summary_dir, tax_map=tax_map
                     )
 
+        update_step_status(status_path, "phylo", "success")
+
     if stop_after == "phylo":
         return
 
     # ── STEP: curate ───────────────────────────────────────────────────────
     if step_in_range("curate", start_at, stop_after):
+        update_step_status(status_path, "curate", "running")
         curate.run_curate(cfg, tree_dir, fasta_dir, clipkit_dir, emb_dir, summary_dir, hmm_keep, force)
+        update_step_status(status_path, "curate", "success")
     if stop_after == "curate":
         return
 
     # ── STEP: post ─────────────────────────────────────────────────────────
     if step_in_range("post", start_at, stop_after) and post_cfg.get("enabled", False):
+        update_step_status(status_path, "post", "running")
         post.run_post(cfg, tree_dir, clipkit_dir, aln_dir, post_dir, summary_dir, hmm_keep, force,
                       clade_assign_dir=clade_assign_dir)
+        update_step_status(status_path, "post", "success")
     if stop_after == "post":
         return
 
@@ -249,36 +282,46 @@ def run_pipeline(cfg):
     safe_mkdir(synteny_dir)
 
     if step_in_range("synteny", start_at, stop_after) and synteny_cfg.get("enabled", False):
+        update_step_status(status_path, "synteny", "running")
         _ensure_hit_dfs()
         synteny.run_synteny(cfg, synteny_dir, tree_dir, scan_df, search_df, hmm_keep, force,
                             clade_assign_dir=clade_assign_dir)
+        update_step_status(status_path, "synteny", "success")
     if stop_after == "synteny":
         return
 
     # ── STEP: codon ────────────────────────────────────────────────────────
     if step_in_range("codon", start_at, stop_after) and codon_cfg.get("enabled", False):
+        update_step_status(status_path, "codon", "running")
         codon.run_codon(cfg, tree_dir, clipkit_dir, aln_dir, codon_dir, hmm_keep, force)
+        update_step_status(status_path, "codon", "success")
     if stop_after == "codon":
         return
 
     # ── STEP: hyphy ────────────────────────────────────────────────────────
     if step_in_range("hyphy", start_at, stop_after) and hyphy_cfg.get("enabled", False):
+        update_step_status(status_path, "hyphy", "running")
         hyphy.run_hyphy(cfg, codon_dir, tree_dir, hyphy_dir, hmm_keep, force,
                         clade_assign_dir=clade_assign_dir)
+        update_step_status(status_path, "hyphy", "success")
     if stop_after == "hyphy":
         return
 
     # ── STEP: score_motifs ─────────────────────────────────────────────────
     if step_in_range("score_motifs", start_at, stop_after) and motif_cfg.get("enabled", False):
+        update_step_status(status_path, "score_motifs", "running")
         from .tasks import motifs
         motifs.score_motifs(cfg, fasta_dir, summary_dir, hmm_keep, force)
+        update_step_status(status_path, "score_motifs", "success")
     if stop_after == "score_motifs":
         return
 
     # ── STEP: discover_motifs ──────────────────────────────────────────────
     if step_in_range("discover_motifs", start_at, stop_after) and discover_cfg.get("enabled", False):
+        update_step_status(status_path, "discover_motifs", "running")
         from .tasks import discover
         discover.discover_motifs(cfg, fasta_dir, summary_dir, hmm_keep, force,
                                  clade_assign_dir=clade_assign_dir)
+        update_step_status(status_path, "discover_motifs", "success")
 
     print("\nPipeline complete.")
