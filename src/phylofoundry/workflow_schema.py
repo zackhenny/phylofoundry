@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 
 class CheckpointStrategy(str, Enum):
@@ -87,7 +87,7 @@ class WorkflowRegistry:
     validated at construction time via :meth:`validate`.
     """
 
-    steps: dict = field(default_factory=dict)
+    steps: Dict[str, StepDefinition] = field(default_factory=dict)
     """Mapping of step name to :class:`StepDefinition`."""
 
     def register(self, step: StepDefinition) -> None:

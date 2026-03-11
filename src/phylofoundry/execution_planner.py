@@ -14,7 +14,7 @@ The plan captures:
 from __future__ import annotations
 
 import os
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Set
 
 from .constants import STEPS
 from .execution_schema import ExecutionPlan, PlannedStep, StepState
@@ -101,7 +101,7 @@ def _build_downstream_map(order: List[str]) -> Dict[str, List[str]]:
 def _collect_required_tools(enabled_steps: List[str]) -> List[str]:
     """Collect the deduplicated list of non-optional tools needed by *enabled_steps*."""
     tools: List[str] = []
-    seen: set = set()
+    seen: Set[str] = set()
     for name in enabled_steps:
         step_def = REGISTRY.get(name)
         if step_def is None:

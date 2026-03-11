@@ -9,7 +9,7 @@ from __future__ import annotations
 import csv
 import json
 import os
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, List
 
 if TYPE_CHECKING:
     from .execution_schema import ExecutionPlan
@@ -87,7 +87,7 @@ def update_step_status(path: str, step_name: str, new_state: str) -> None:
     """
     if not os.path.exists(path):
         return
-    rows: list = []
+    rows: List[List[str]] = []
     with open(path, newline="") as fh:
         reader = csv.reader(fh, delimiter="\t")
         rows = list(reader)
