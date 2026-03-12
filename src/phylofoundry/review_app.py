@@ -7,6 +7,7 @@ import pandas as pd
 import streamlit as st
 import matplotlib.pyplot as plt
 from Bio import Phylo, SeqIO
+from .artifact_paths import ArtifactPaths
 
 st.set_page_config(page_title="Phylofoundry Curation", layout="wide")
 st.title("Phylofoundry Interactive Curation")
@@ -26,18 +27,21 @@ if not outdir or not os.path.exists(outdir):
     st.error(f"Invalid outdir from config: {outdir}")
     st.stop()
 
+# ── Resolve canonical artifact paths ──────────────────────────────────────
+_paths = ArtifactPaths(outdir)
+
 # ── Raw (immutable) pipeline output directories ────────────────────────────
-raw_tree_dir    = os.path.join(outdir, "trees_iqtree")
-raw_fasta_dir   = os.path.join(outdir, "fasta_per_hmm")
-raw_clipkit_dir = os.path.join(outdir, "alignments_clipkit")
+raw_tree_dir    = _paths.trees_dir
+raw_fasta_dir   = _paths.fasta_dir
+raw_clipkit_dir = _paths.alignments_clipkit_dir
 
 # ── Curated overlay directories ────────────────────────────────────────────
-curated_dir         = os.path.join(outdir, "curated")
-cur_tree_dir        = os.path.join(curated_dir, "trees")
-cur_fasta_dir       = os.path.join(curated_dir, "fasta_per_hmm")
-cur_clipkit_dir     = os.path.join(curated_dir, "alignments_clipkit")
-cur_manifest_dir    = os.path.join(curated_dir, "manifests")
-cur_audit_dir       = os.path.join(curated_dir, "audit")
+curated_dir         = _paths.curated_dir
+cur_tree_dir        = _paths.curated_trees_dir
+cur_fasta_dir       = _paths.curated_fasta_dir
+cur_clipkit_dir     = _paths.curated_alignments_dir
+cur_manifest_dir    = _paths.curated_manifests_dir
+cur_audit_dir       = _paths.curated_audit_dir
 
 for _d in [cur_tree_dir, cur_fasta_dir, cur_clipkit_dir,
            cur_manifest_dir, cur_audit_dir]:
