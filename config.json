@@ -19,6 +19,9 @@
         "force": false,
         "hmm_manifest": null
     },
+    "prep": {
+        "cleanup_combined_faa": false
+    },
     "hmmer": {
         "run_scan": true,
         "run_search": true
@@ -64,6 +67,34 @@
         "enabled": false,
         "use_treeshrink": true,
         "use_esm_filter": true
+    },
+    "taxonomy_integrate": {
+        "enabled": false
+    },
+    "conservation_metrics": {
+        "enabled": false,
+        "compute_conservation": false,
+        "conservation_metric": "inverse_shannon_uncertainty",
+        "compute_kl": false,
+        "kl_pairs": null,
+        "clades_tsv": null
+    },
+    "detect_clades": {
+        "enabled": false,
+        "clades_tsv": null,
+        "detect_method": null,
+        "taxonomy_clade_level": "genus",
+        "treecluster_threshold": 0.045,
+        "treecluster_method": "max_clade",
+        "embedtree_support_min": 80,
+        "embedtree_min_size": 5,
+        "embedtree_max_size": 5000,
+        "embedtree_top_k": 10,
+        "embedtree_pcs": 10,
+        "embedtree_distance": "euclidean",
+        "embedtree_allow_nested": false,
+        "embedtree_require_monophyly": true,
+        "embedtree_emit_all": false
     },
     "post": {
         "enabled": false,
@@ -150,6 +181,8 @@
     },
     "discover": {
         "enabled": false,
+        "standard_clade": null,
+        "novel_clade": null,
         "kmer_size": 5,
         "top_n_peaks": 20,
         "attention_layers": 4,
@@ -171,6 +204,7 @@
     },
     "ha": {
         "enabled": false,
+        "method": "middle",
         "layer_mode": "middle",
         "layer_start": null,
         "layer_end": null,
@@ -180,7 +214,6 @@
         "topk": 20,
         "min_sites": 8,
         "max_sites": 60,
-        "method": "middle",
         "loc_norm_mode": "max",
         "loc_theta_target_deg": 90,
         "loc_break_adjust": -1
