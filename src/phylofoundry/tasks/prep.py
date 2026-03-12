@@ -43,3 +43,44 @@ def run_prep(cfg, genomes, faa_dir, hmm_input_mode, hmm_dir, hmm_files, combined
         run_cmd(["hmmpress", "-f", combined_hmm], quiet=True)
     else:
         print("[prep] HMM indices already exist, skipping hmmpress.")
+
+
+def run_prep_diamond_mode(cfg, genomes, faa_dir, combined_faa, force=False):
+    """Prep for DIAMOND mode: only build combined_proteomes.faa.
+
+    This is a lighter-weight alternative to :func:`run_prep` that skips HMM
+    concatenation and ``hmmpress`` — neither of which is needed when running
+    in DIAMOND search mode.
+
+    Parameters
+    ----------
+    cfg : dict
+        Resolved PhyloFoundry configuration dictionary (unused; kept for API
+        parity with ``run_prep``).
+    genomes : list[str]
+        List of genome filenames relative to *faa_dir*.
+    faa_dir : str
+        Directory containing per-genome ``.faa`` files.
+    combined_faa : str
+        Destination path for the combined proteomes FASTA.
+    force : bool
+        When ``True``, rebuild ``combined_proteomes.faa`` even if it already
+        exists.
+    """
+    print("\n[prep] Building combined proteomes FASTA (DIAMOND mode)...")
+
+    if os.path.exists(combined_faa) and not force:
+        print("[prep] combined_proteomes.faa already exists, skipping.")
+        return
+
+    with open(combined_faa, "w") as out_faa:
+        for g in genomes:
+            seqs = read_fasta(os.path.join(faa_dir, g))
+            for pid, s in seqs.items():
+                # Strip stop codons ('*') from protein sequences before
+                # they enter the pipeline.  'X' and other ambiguous
+                # residues are intentionally kept to preserve original
+                # AA positions.
+                s_clean = s.replace("*", "")
+                out_faa.write(f">{g}~{pid}\n{s_clean}\n")
+

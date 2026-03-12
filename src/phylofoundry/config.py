@@ -71,8 +71,17 @@ def resolve_config(args: argparse.Namespace) -> dict:
 def validate_config(cfg: dict):
     """Validate required configuration fields."""
     faa_arg = cfg["inputs"]["faa_dir"]
-    hmm_arg = cfg["inputs"]["hmm_input"]
+    hmm_arg = cfg["inputs"].get("hmm_input")
     outdir = cfg["output"]["outdir"]
-    
-    if not faa_arg or not hmm_arg or not outdir:
-        raise SystemExit("Config must specify inputs.faa_dir, inputs.hmm_input, output.outdir (or pass via CLI).")
+    use_diamond = cfg.get("diamond", {}).get("enabled", False)
+
+    if use_diamond:
+        diamond_query = cfg["inputs"].get("diamond_query")
+        if not faa_arg or not diamond_query or not outdir:
+            raise SystemExit(
+                "In DIAMOND mode, config must specify inputs.faa_dir, "
+                "inputs.diamond_query, and output.outdir."
+            )
+    else:
+        if not faa_arg or not hmm_arg or not outdir:
+            raise SystemExit("Config must specify inputs.faa_dir, inputs.hmm_input, output.outdir (or pass via CLI).")

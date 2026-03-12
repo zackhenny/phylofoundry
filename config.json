@@ -2,6 +2,7 @@
     "inputs": {
         "faa_dir": null,
         "hmm_input": null,
+        "diamond_query": null,
         "cds_dir": null,
         "gtdb_dir": null,
         "taxonomy_file": null,
@@ -25,6 +26,17 @@
     "hmmer": {
         "run_scan": true,
         "run_search": true
+    },
+    "diamond": {
+        "enabled": false,
+        "mode": "blastp",
+        "sensitivity": "sensitive",
+        "max_evalue": 1e-5,
+        "max_target_seqs": 500,
+        "min_identity": 30.0,
+        "min_coverage": 0.5,
+        "block_size": 2.0,
+        "index_chunks": 4
     },
     "filtering": {
         "scores_tsv": null,

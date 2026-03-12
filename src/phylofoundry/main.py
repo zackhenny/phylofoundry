@@ -15,6 +15,10 @@ def main():
     ap.add_argument("--faa_dir", default=None, help="Override inputs.faa_dir")
     ap.add_argument("--hmm_dir", default=None,
                     help="Override inputs.hmm_input (dir or single .hmm)")
+    ap.add_argument("--diamond_query", default=None,
+                    help="Override inputs.diamond_query (FASTA file/dir for DIAMOND blastp)")
+    ap.add_argument("--diamond_mode", action="store_true",
+                    help="Enable DIAMOND search mode (use protein FASTA queries instead of HMMs)")
     ap.add_argument("--outdir", default=None, help="Override output.outdir")
     ap.add_argument("--cpu", type=int, default=None, help="Override resources.cpu")
     ap.add_argument("--start_at", choices=STEPS, default=None,
@@ -66,6 +70,12 @@ def main():
             cfg.setdefault("motifs", {})["enabled"] = True
             cfg["motifs"]["motif_list"] = motif_list
 
+    if args.diamond_query is not None:
+        cfg["inputs"]["diamond_query"] = args.diamond_query
+
+    if args.diamond_mode:
+        cfg.setdefault("diamond", {})["enabled"] = True
+
     # ── Modes that require a resolved config but skip execution ───────────
     if args.plan:
         from .preflight import print_plan
@@ -89,6 +99,10 @@ def main():
     from .utils.helpers import check_dependencies
 
     deps = ["hmmscan", "hmmsearch"]
+
+    if cfg.get("diamond", {}).get("enabled", False):
+        # In diamond mode, hmmscan/hmmsearch are not needed; replace with diamond
+        deps = ["diamond"]
 
     if cfg["phylo"]:
         deps.append(cfg["phylo"].get("iqtree_bin", "iqtree"))

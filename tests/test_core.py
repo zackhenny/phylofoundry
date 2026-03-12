@@ -437,3 +437,185 @@ class TestPrep:
         # X and C must be preserved
         assert "X" in seqs["genomeX.faa~prot2"]
         assert "C" in seqs["genomeX.faa~prot3"]
+
+    def test_run_prep_diamond_mode_creates_combined_faa(self, tmp_path):
+        """run_prep_diamond_mode should build combined_proteomes.faa (no HMM step)."""
+        from phylofoundry.utils.bio import write_fasta, read_fasta
+        from phylofoundry.tasks.prep import run_prep_diamond_mode
+
+        faa_dir = str(tmp_path / "faa")
+        os.makedirs(faa_dir)
+        write_fasta(
+            os.path.join(faa_dir, "genomeY.faa"),
+            {"prot1": "MSKGEELFT*", "prot2": "MVSKXEELFT"},
+        )
+
+        outdir = str(tmp_path / "out")
+        os.makedirs(outdir)
+        combined_faa = os.path.join(outdir, "combined_proteomes.faa")
+
+        run_prep_diamond_mode(
+            cfg={},
+            genomes=["genomeY.faa"],
+            faa_dir=faa_dir,
+            combined_faa=combined_faa,
+            force=True,
+        )
+
+        assert os.path.exists(combined_faa)
+        seqs = read_fasta(combined_faa)
+        assert "genomeY.faa~prot1" in seqs
+        assert "*" not in seqs["genomeY.faa~prot1"]
+        assert "X" in seqs["genomeY.faa~prot2"]
+
+
+# ──── diamond.py ──────────────────────────────────────────────────────────────
+
+class TestDiamond:
+    def test_load_query_fastas_single_file(self, tmp_path):
+        from phylofoundry.tasks.diamond import load_query_fastas
+
+        faa = tmp_path / "myquery.faa"
+        faa.write_text(">prot1\nMSKGEELFT\n")
+        queries = load_query_fastas(str(faa))
+        assert list(queries.keys()) == ["myquery"]
+        assert queries["myquery"] == str(faa)
+
+    def test_load_query_fastas_directory(self, tmp_path):
+        from phylofoundry.tasks.diamond import load_query_fastas
+
+        qdir = tmp_path / "queries"
+        qdir.mkdir()
+        (qdir / "alpha.faa").write_text(">p1\nMSK\n")
+        (qdir / "beta.fasta").write_text(">p2\nMSK\n")
+        (qdir / "ignored.txt").write_text("not a fasta")
+
+        queries = load_query_fastas(str(qdir))
+        assert set(queries.keys()) == {"alpha", "beta"}
+
+    def test_load_query_fastas_various_extensions(self, tmp_path):
+        from phylofoundry.tasks.diamond import load_query_fastas
+
+        qdir = tmp_path / "queries"
+        qdir.mkdir()
+        # Use distinct base names so each resolves to a unique query
+        (qdir / "protA.faa").write_text(">p\nMSK\n")
+        (qdir / "protB.fasta").write_text(">p\nMSK\n")
+        (qdir / "protC.fa").write_text(">p\nMSK\n")
+        (qdir / "protD.fas").write_text(">p\nMSK\n")
+
+        queries = load_query_fastas(str(qdir))
+        assert len(queries) == 4
+
+    def test_load_query_fastas_empty_directory_raises(self, tmp_path):
+        from phylofoundry.tasks.diamond import load_query_fastas
+
+        empty_dir = tmp_path / "empty"
+        empty_dir.mkdir()
+        with pytest.raises(ValueError, match="No FASTA files"):
+            load_query_fastas(str(empty_dir))
+
+    def test_load_query_fastas_invalid_path_raises(self, tmp_path):
+        from phylofoundry.tasks.diamond import load_query_fastas
+
+        with pytest.raises(ValueError):
+            load_query_fastas(str(tmp_path / "nonexistent"))
+
+    def test_parse_diamond_tab_empty_file(self, tmp_path):
+        from phylofoundry.tasks.diamond import parse_diamond_tab
+
+        empty = tmp_path / "empty.tsv"
+        empty.write_text("")
+        df = parse_diamond_tab(str(empty))
+        assert df.empty
+
+    def test_parse_diamond_tab_missing_file(self, tmp_path):
+        from phylofoundry.tasks.diamond import parse_diamond_tab
+
+        df = parse_diamond_tab(str(tmp_path / "nonexistent.tsv"))
+        assert df.empty
+
+    def test_parse_diamond_tab_valid(self, tmp_path):
+        import pandas as pd
+        from phylofoundry.tasks.diamond import parse_diamond_tab
+
+        tab = tmp_path / "hits.tsv"
+        tab.write_text(
+            "query1\tgenomeA~prot1\t95.0\t100\t5\t0\t1\t100\t1\t100\t1e-50\t200.0\t100\t200\n"
+            "query1\tgenomeB~prot2\t80.0\t80\t16\t0\t1\t80\t1\t80\t1e-30\t150.0\t100\t150\n"
+        )
+        df = parse_diamond_tab(str(tab))
+        assert len(df) == 2
+        assert list(df.columns) == [
+            "qseqid", "sseqid", "pident", "length", "mismatch", "gapopen",
+            "qstart", "qend", "sstart", "send", "evalue", "bitscore", "qlen", "slen",
+        ]
+        assert df.iloc[0]["pident"] == 95.0
+
+    def test_apply_diamond_filtering_identity(self):
+        import pandas as pd
+        from phylofoundry.tasks.diamond import apply_diamond_filtering
+
+        df = pd.DataFrame({
+            "pident": [95.0, 20.0, 50.0],
+            "coverage": [0.9, 0.9, 0.9],
+            "evalue": [1e-10, 1e-10, 1e-10],
+        })
+        result = apply_diamond_filtering(df, {"min_identity": 30.0, "min_coverage": 0.5, "max_evalue": 1e-5})
+        assert len(result) == 2
+        assert 20.0 not in result["pident"].values
+
+    def test_apply_diamond_filtering_coverage(self):
+        import pandas as pd
+        from phylofoundry.tasks.diamond import apply_diamond_filtering
+
+        df = pd.DataFrame({
+            "pident": [95.0, 95.0, 95.0],
+            "coverage": [0.9, 0.2, 0.6],
+            "evalue": [1e-10, 1e-10, 1e-10],
+        })
+        result = apply_diamond_filtering(df, {"min_identity": 30.0, "min_coverage": 0.5, "max_evalue": 1e-5})
+        assert len(result) == 2
+        assert 0.2 not in result["coverage"].values
+
+    def test_apply_diamond_filtering_evalue(self):
+        import pandas as pd
+        from phylofoundry.tasks.diamond import apply_diamond_filtering
+
+        df = pd.DataFrame({
+            "pident": [95.0, 95.0],
+            "coverage": [0.9, 0.9],
+            "evalue": [1e-10, 1e-2],
+        })
+        result = apply_diamond_filtering(df, {"min_identity": 30.0, "min_coverage": 0.5, "max_evalue": 1e-5})
+        assert len(result) == 1
+
+    def test_apply_diamond_filtering_empty(self):
+        import pandas as pd
+        from phylofoundry.tasks.diamond import apply_diamond_filtering
+
+        result = apply_diamond_filtering(pd.DataFrame(), {"min_identity": 30.0})
+        assert result.empty
+
+    def test_diamond_hits_schema_matches_extract_expectations(self, tmp_path):
+        """Verify the DataFrame schema produced by diamond search matches what extract expects."""
+        from phylofoundry.tasks.diamond import parse_diamond_tab
+
+        tab = tmp_path / "hits.tsv"
+        tab.write_text(
+            "myquery\tgenomeA.faa~prot_A1\t95.0\t100\t5\t0\t1\t100\t1\t100\t1e-50\t200.0\t100\t200\n"
+        )
+        raw = parse_diamond_tab(str(tab))
+        raw["coverage"] = raw["length"] / raw["qlen"]
+        raw["genome"] = raw["sseqid"].apply(lambda x: x.split("~")[0] if "~" in x else "Unknown")
+        raw["protein"] = raw["sseqid"].apply(lambda x: x.split("~", 1)[1] if "~" in x else x)
+        raw["hmm"] = "myquery"
+        df = raw[["genome", "protein", "hmm", "bitscore", "evalue", "coverage", "pident"]]
+
+        for col in ["genome", "protein", "hmm", "bitscore", "evalue", "coverage"]:
+            assert col in df.columns, f"Missing column: {col}"
+
+        assert df.iloc[0]["genome"] == "genomeA.faa"
+        assert df.iloc[0]["protein"] == "prot_A1"
+        assert df.iloc[0]["hmm"] == "myquery"
+        assert df.iloc[0]["coverage"] == pytest.approx(1.0)
