@@ -150,13 +150,38 @@ REGISTRY.register(StepDefinition(
     name="curate",
     description=(
         "Curate sequences using TreeShrink outlier pruning and/or ESM-based "
-        "filtering."
+        "filtering.  Curated artifacts are written to an explicit overlay "
+        "directory (curated/) and raw pipeline outputs are never overwritten."
     ),
     outputs=[
         ArtifactSpec(
-            "curated",
+            "curated_trees",
             ArtifactKind.DIRECTORY,
-            "curated/",
+            "curated/trees/",
+            optional=True,
+        ),
+        ArtifactSpec(
+            "curated_fasta",
+            ArtifactKind.DIRECTORY,
+            "curated/fasta_per_hmm/",
+            optional=True,
+        ),
+        ArtifactSpec(
+            "curated_alignments",
+            ArtifactKind.DIRECTORY,
+            "curated/alignments_clipkit/",
+            optional=True,
+        ),
+        ArtifactSpec(
+            "curated_manifests",
+            ArtifactKind.DIRECTORY,
+            "curated/manifests/",
+            optional=True,
+        ),
+        ArtifactSpec(
+            "curated_audit",
+            ArtifactKind.DIRECTORY,
+            "curated/audit/",
             optional=True,
         ),
     ],
@@ -171,8 +196,9 @@ REGISTRY.register(StepDefinition(
     optional=True,
     enabled_config_key="curate.enabled",
     notes=(
-        "Future target: curate will write only to a curated/ overlay directory "
-        "and will never overwrite raw trees_iqtree/ outputs."
+        "Curate writes only to curated/ overlay subdirectories.  "
+        "Raw outputs in trees_iqtree/ and fasta_per_hmm/ are immutable.  "
+        "Downstream steps prefer curated/ when it is populated."
     ),
 ))
 

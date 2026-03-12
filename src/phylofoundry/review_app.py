@@ -1,6 +1,7 @@
 import os
 import glob
 import json
+import datetime
 import shutil
 import pandas as pd
 import streamlit as st
@@ -25,15 +26,28 @@ if not outdir or not os.path.exists(outdir):
     st.error(f"Invalid outdir from config: {outdir}")
     st.stop()
 
-tree_dir = os.path.join(outdir, "trees_iqtree")
-fasta_dir = os.path.join(outdir, "fasta_per_hmm")
-clipkit_dir = os.path.join(outdir, "alignments_clipkit")
+# ── Raw (immutable) pipeline output directories ────────────────────────────
+raw_tree_dir    = os.path.join(outdir, "trees_iqtree")
+raw_fasta_dir   = os.path.join(outdir, "fasta_per_hmm")
+raw_clipkit_dir = os.path.join(outdir, "alignments_clipkit")
 
-trees = sorted(glob.glob(os.path.join(tree_dir, "*.treefile")))
-# Filter out backups
-trees = [t for t in trees if not t.endswith(".raw.treefile")]
+# ── Curated overlay directories ────────────────────────────────────────────
+curated_dir         = os.path.join(outdir, "curated")
+cur_tree_dir        = os.path.join(curated_dir, "trees")
+cur_fasta_dir       = os.path.join(curated_dir, "fasta_per_hmm")
+cur_clipkit_dir     = os.path.join(curated_dir, "alignments_clipkit")
+cur_manifest_dir    = os.path.join(curated_dir, "manifests")
+cur_audit_dir       = os.path.join(curated_dir, "audit")
 
-hmms = [os.path.basename(t).replace(".treefile", "") for t in trees]
+for _d in [cur_tree_dir, cur_fasta_dir, cur_clipkit_dir,
+           cur_manifest_dir, cur_audit_dir]:
+    os.makedirs(_d, exist_ok=True)
+
+# ── Discover trees (curated overlay first, fall back to raw) ───────────────
+# A tree is listed if it exists in the raw directory.  Curated presence is
+# shown as a status indicator per HMM but does not filter the list.
+raw_trees = sorted(glob.glob(os.path.join(raw_tree_dir, "*.treefile")))
+hmms = [os.path.basename(t).replace(".treefile", "") for t in raw_trees]
 
 if not hmms:
     st.warning("No .treefile files found in outdir/trees_iqtree")
@@ -42,12 +56,15 @@ if not hmms:
 st.sidebar.markdown("---")
 selected_hmm = st.sidebar.selectbox("Select Gene Family (HMM):", hmms)
 
-tree_fp = os.path.join(tree_dir, f"{selected_hmm}.treefile")
-raw_tree_fp = os.path.join(tree_dir, f"{selected_hmm}.raw.treefile")
+raw_tree_fp      = os.path.join(raw_tree_dir,    f"{selected_hmm}.treefile")
+curated_tree_fp  = os.path.join(cur_tree_dir,    f"{selected_hmm}.treefile")
 
-# Read current tree (which might be already curated, or the raw one)
+# Prefer curated tree for display if it exists; otherwise show raw tree.
+active_tree_fp = curated_tree_fp if os.path.exists(curated_tree_fp) else raw_tree_fp
+
+# Read current tree (curated or raw)
 try:
-    tree = Phylo.read(tree_fp, "newick")
+    tree = Phylo.read(active_tree_fp, "newick")
 except Exception as e:
     st.error(f"Error reading tree: {e}")
     st.stop()
@@ -88,12 +105,14 @@ for term in display_tree.get_terminals():
         short_tax = tax.split(";")[-1]
         term.name = f"{term.name} [{short_tax}]"
 
-terminals = [t.name for t in tree.get_terminals()] # keep original names for the logic
+terminals = [t.name for t in tree.get_terminals()]  # keep original names for the logic
 display_terminals = [t.name for t in display_tree.get_terminals()]
 
 st.subheader(f"Curation: {selected_hmm}")
-if os.path.exists(raw_tree_fp):
-    st.info("This tree has been previously curated. The original backup exists.")
+if os.path.exists(curated_tree_fp):
+    st.info("This tree has a curated overlay. Raw source is preserved in trees_iqtree/.")
+else:
+    st.info("No curated overlay yet. Displaying raw tree from trees_iqtree/.")
 
 col1, col2 = st.columns([2, 1])
 
@@ -105,58 +124,72 @@ with col1:
 with col2:
     st.markdown("### Action Panel")
     st.write(f"Total taxa: **{len(terminals)}**")
-    
+
     to_drop = st.multiselect("Select Taxa to PRUNE (Drop from tree & downstream data):", options=terminals)
     to_test = st.multiselect("Select Taxa to mark as {Test} for HyPhy RELAX:", options=[t for t in terminals if t not in to_drop])
-    
+
     if st.button("Save Curated Files", type="primary"):
-        # Create backups if they don't exist
-        for d, ext in [(tree_dir, ".treefile"), (fasta_dir, ".fasta"), (clipkit_dir, ".clipkit.faa")]:
-            orig = os.path.join(d, f"{selected_hmm}{ext}")
-            backup = os.path.join(d, f"{selected_hmm}.raw{ext}")
-            if os.path.exists(orig) and not os.path.exists(backup):
-                shutil.copy2(orig, backup)
-                
-        # 1. Prune Tree
-        # Re-read raw tree to ensure idempotency if user drops/undrops taxa repeatedly
-        if os.path.exists(raw_tree_fp):
-            curated_tree = Phylo.read(raw_tree_fp, "newick")
-        else:
-            curated_tree = Phylo.read(tree_fp, "newick")
-            
+        # Always read from the raw source to ensure idempotency.
+        curated_tree = Phylo.read(raw_tree_fp, "newick")
+
         for drop_taxa in to_drop:
             try:
                 curated_tree.prune(drop_taxa)
             except ValueError:
                 pass
-                
-        # 2. Add {Test} labels
+
+        # Add {Test} labels
         for term in curated_tree.get_terminals():
-            # First remove any existing {Test} just in case
             term.name = term.name.replace("{Test}", "")
             if term.name in to_test:
                 term.name = term.name + "{Test}"
-                
-        Phylo.write(curated_tree, tree_fp, "newick")
-        
-        # 3. Prune fasta
-        ref_fasta = os.path.join(fasta_dir, f"{selected_hmm}.raw.fasta")
-        if not os.path.exists(ref_fasta): ref_fasta = os.path.join(fasta_dir, f"{selected_hmm}.fasta")
-        out_fasta = os.path.join(fasta_dir, f"{selected_hmm}.fasta")
-        if os.path.exists(ref_fasta):
-            recs = [r for r in SeqIO.parse(ref_fasta, "fasta") if r.id not in to_drop]
-            SeqIO.write(recs, out_fasta, "fasta")
-            
-        # 4. Prune alignment
-        ref_aln = os.path.join(clipkit_dir, f"{selected_hmm}.raw.clipkit.faa")
-        if not os.path.exists(ref_aln): ref_aln = os.path.join(clipkit_dir, f"{selected_hmm}.clipkit.faa")
-        out_aln = os.path.join(clipkit_dir, f"{selected_hmm}.clipkit.faa")
-        if os.path.exists(ref_aln):
-            recs = [r for r in SeqIO.parse(ref_aln, "fasta") if r.id not in to_drop]
-            SeqIO.write(recs, out_aln, "fasta")
-            
-        st.success("Successfully pruned tree and synced sequences. Ready for module B (start_at: codon)!")
-        
+
+        # Write curated tree to overlay directory (raw file untouched)
+        Phylo.write(curated_tree, curated_tree_fp, "newick")
+
+        # Pruned FASTA — read from raw, write to curated overlay
+        raw_fasta_fp = os.path.join(raw_fasta_dir, f"{selected_hmm}.fasta")
+        out_fasta_fp = os.path.join(cur_fasta_dir,  f"{selected_hmm}.fasta")
+        if os.path.exists(raw_fasta_fp):
+            recs = [r for r in SeqIO.parse(raw_fasta_fp, "fasta") if r.id not in to_drop]
+            SeqIO.write(recs, out_fasta_fp, "fasta")
+
+        # Pruned alignment — read from raw, write to curated overlay
+        raw_aln_fp = os.path.join(raw_clipkit_dir, f"{selected_hmm}.clipkit.faa")
+        out_aln_fp = os.path.join(cur_clipkit_dir,  f"{selected_hmm}.clipkit.faa")
+        if os.path.exists(raw_aln_fp):
+            recs = [r for r in SeqIO.parse(raw_aln_fp, "fasta") if r.id not in to_drop]
+            SeqIO.write(recs, out_aln_fp, "fasta")
+
+        # Write per-HMM manifest
+        retained = {t.name.replace("{Test}", "") for t in curated_tree.get_terminals()}
+        timestamp = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        manifest = {
+            "hmm": selected_hmm,
+            "timestamp": timestamp,
+            "source": "manual",
+            "raw_tree": raw_tree_fp,
+            "curated_tree": curated_tree_fp,
+            "filters_applied": ["manual_prune"],
+            "dropped_taxa": sorted(to_drop),
+            "test_taxa": sorted(to_test),
+            "retained_taxa_count": len(retained),
+            "was_modified": bool(to_drop or to_test),
+        }
+        manifest_fp = os.path.join(cur_manifest_dir, f"{selected_hmm}.json")
+        with open(manifest_fp, "w") as _mf:
+            json.dump(manifest, _mf, indent=2)
+
+        # Append to audit log
+        audit_fp = os.path.join(cur_audit_dir, "manual_curation.jsonl")
+        with open(audit_fp, "a") as _af:
+            _af.write(json.dumps(manifest) + "\n")
+
+        st.success(
+            f"Curated files saved to {curated_dir}. "
+            "Raw pipeline outputs are preserved. Ready for downstream steps!"
+        )
+
         try:
             st.rerun()
         except AttributeError:
@@ -164,10 +197,14 @@ with col2:
 
 st.markdown("---")
 st.subheader("Alignment Preview")
-# Show a snippet of the alignment
-ref_aln = os.path.join(clipkit_dir, f"{selected_hmm}.clipkit.faa")
-if os.path.exists(ref_aln):
-    seqs = list(SeqIO.parse(ref_aln, "fasta"))
+# Prefer curated alignment if available, otherwise raw
+active_aln_fp = (
+    os.path.join(cur_clipkit_dir, f"{selected_hmm}.clipkit.faa")
+    if os.path.exists(os.path.join(cur_clipkit_dir, f"{selected_hmm}.clipkit.faa"))
+    else os.path.join(raw_clipkit_dir, f"{selected_hmm}.clipkit.faa")
+)
+if os.path.exists(active_aln_fp):
+    seqs = list(SeqIO.parse(active_aln_fp, "fasta"))
     if seqs:
         df = pd.DataFrame([{"ID": s.id, "Seq (1-100)": str(s.seq)[:100] + "..."} for s in seqs])
         st.dataframe(df, use_container_width=True)
