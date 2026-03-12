@@ -102,6 +102,92 @@ class TestHelpers:
         assert loaded == data
 
 
+# ──── artifact_paths.py ──────────────────────────────────────────────────────
+
+class TestArtifactPaths:
+    def test_basic_properties(self, tmp_path):
+        from phylofoundry.artifact_paths import ArtifactPaths
+
+        paths = ArtifactPaths(str(tmp_path))
+
+        assert paths.combined_faa == str(tmp_path / "combined_proteomes.faa")
+        assert paths.combined_hmm == str(tmp_path / "combined.hmm")
+        assert paths.hmmscan_dir == str(tmp_path / "hmmscan_tbl")
+        assert paths.hmmsearch_dir == str(tmp_path / "hmmsearch_tbl")
+        assert paths.fasta_dir == str(tmp_path / "fasta_per_hmm")
+        assert paths.alignments_hmm_dir == str(tmp_path / "alignments_hmm")
+        assert paths.alignments_clipkit_dir == str(tmp_path / "alignments_clipkit")
+        assert paths.trees_dir == str(tmp_path / "trees_iqtree")
+        assert paths.embeddings_dir == str(tmp_path / "embeddings")
+        assert paths.codon_dir == str(tmp_path / "codon_alignments")
+        assert paths.clade_assign_dir == str(tmp_path / "clade_assignments")
+        assert paths.summary_dir == str(tmp_path / "summary")
+        assert paths.logs_dir == str(tmp_path / "logs")
+
+    def test_summary_artifact_paths(self, tmp_path):
+        from phylofoundry.artifact_paths import ArtifactPaths
+
+        paths = ArtifactPaths(str(tmp_path))
+
+        assert paths.best_hits_tsv == str(tmp_path / "summary" / "best_hits.competitive.tsv")
+        assert paths.best_hits_with_taxonomy_tsv == str(tmp_path / "summary" / "best_hits.with_taxonomy.tsv")
+        assert paths.detected_clades_tsv == str(tmp_path / "summary" / "detected_clades.tsv")
+        assert paths.conservation_metrics_dir == str(tmp_path / "summary" / "post_scikitbio")
+        assert paths.hyphy_dir == str(tmp_path / "summary" / "hyphy")
+        assert paths.resolved_config_json == str(tmp_path / "summary" / "resolved_config.json")
+
+    def test_curated_paths(self, tmp_path):
+        from phylofoundry.artifact_paths import ArtifactPaths
+
+        paths = ArtifactPaths(str(tmp_path))
+
+        assert paths.curated_dir == str(tmp_path / "curated")
+        assert paths.curated_trees_dir == str(tmp_path / "curated" / "trees")
+        assert paths.curated_fasta_dir == str(tmp_path / "curated" / "fasta_per_hmm")
+        assert paths.curated_alignments_dir == str(tmp_path / "curated" / "alignments_clipkit")
+        assert paths.curated_manifests_dir == str(tmp_path / "curated" / "manifests")
+        assert paths.curated_audit_dir == str(tmp_path / "curated" / "audit")
+
+    def test_per_hmm_helpers(self, tmp_path):
+        from phylofoundry.artifact_paths import ArtifactPaths
+
+        paths = ArtifactPaths(str(tmp_path))
+        hmm = "TestHMM"
+
+        assert paths.fasta_for_hmm(hmm) == str(tmp_path / "fasta_per_hmm" / "TestHMM.faa")
+        assert paths.treefile_for_hmm(hmm) == str(tmp_path / "trees_iqtree" / "TestHMM.treefile")
+        assert paths.alignment_hmm_for_hmm(hmm) == str(tmp_path / "alignments_hmm" / "TestHMM.afa")
+        assert paths.alignment_clipkit_for_hmm(hmm) == str(tmp_path / "alignments_clipkit" / "TestHMM.clipkit.faa")
+        assert paths.codon_alignment_for_hmm(hmm) == str(tmp_path / "codon_alignments" / "TestHMM.codon.fasta")
+        assert paths.hyphy_output_for_hmm(hmm, "relax", "clade1") == str(
+            tmp_path / "summary" / "hyphy" / "TestHMM" / "RELAX" / "clade1.json"
+        )
+
+    def test_all_output_dirs_contains_key_paths(self, tmp_path):
+        from phylofoundry.artifact_paths import ArtifactPaths
+
+        paths = ArtifactPaths(str(tmp_path))
+        dirs = paths.all_output_dirs()
+
+        assert paths.fasta_dir in dirs
+        assert paths.trees_dir in dirs
+        assert paths.summary_dir in dirs
+        assert paths.curated_dir in dirs
+        assert paths.hyphy_dir in dirs
+
+    def test_module_level_constants(self):
+        from phylofoundry import artifact_paths as ap
+
+        # Spot-check canonical path fragments are strings
+        assert ap.COMBINED_HMM == "combined.hmm"
+        assert ap.FASTA_PER_HMM_DIR == "fasta_per_hmm"
+        assert ap.TREES_IQTREE_DIR == "trees_iqtree"
+        assert ap.DETECTED_CLADES_TSV == "summary/detected_clades.tsv"
+        assert ap.BEST_HITS_TSV == "summary/best_hits.competitive.tsv"
+        assert ap.CURATED_DIR == "curated"
+        assert ap.LOGS_DIR == "logs"
+
+
 # ──── config.py ───────────────────────────────────────────────────────────────
 
 class TestConfig:

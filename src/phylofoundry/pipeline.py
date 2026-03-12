@@ -1,5 +1,6 @@
 import os
 import glob
+from .artifact_paths import ArtifactPaths
 from .constants import STEPS
 from .utils.helpers import safe_mkdir, write_json
 from .utils.bio import read_fasta
@@ -119,26 +120,26 @@ def run_pipeline(cfg):
                 append_pipeline_log(logs_dir, blocked_msg)
 
     # ── Output structure ───────────────────────────────────────────────────
-    hmmscan_dir = os.path.join(outdir, "hmmscan_tbl")
-    hmmsearch_dir = os.path.join(outdir, "hmmsearch_tbl")
-    fasta_dir = os.path.join(outdir, "fasta_per_hmm")
-    aln_dir = os.path.join(outdir, "alignments_hmm")
-    clipkit_dir = os.path.join(outdir, "alignments_clipkit")
-    tree_dir = os.path.join(outdir, "trees_iqtree")
-    summary_dir = os.path.join(outdir, "summary")
-    post_dir = os.path.join(summary_dir, "post_scikitbio")
-    codon_dir = os.path.join(outdir, "codon_alignments")
-    hyphy_dir = os.path.join(summary_dir, "hyphy")
-    emb_dir = os.path.join(outdir, "embeddings")
-    clade_assign_dir = os.path.join(outdir, "clade_assignments")
-    curated_dir = os.path.join(outdir, "curated")
+    paths = ArtifactPaths(outdir)
 
-    for d in [hmmscan_dir, hmmsearch_dir, fasta_dir, aln_dir,
-              clipkit_dir, tree_dir, summary_dir, post_dir,
-              codon_dir, hyphy_dir, emb_dir, clade_assign_dir, curated_dir]:
+    hmmscan_dir = paths.hmmscan_dir
+    hmmsearch_dir = paths.hmmsearch_dir
+    fasta_dir = paths.fasta_dir
+    aln_dir = paths.alignments_hmm_dir
+    clipkit_dir = paths.alignments_clipkit_dir
+    tree_dir = paths.trees_dir
+    summary_dir = paths.summary_dir
+    post_dir = paths.conservation_metrics_dir
+    codon_dir = paths.codon_dir
+    hyphy_dir = paths.hyphy_dir
+    emb_dir = paths.embeddings_dir
+    clade_assign_dir = paths.clade_assign_dir
+    curated_dir = paths.curated_dir
+
+    for d in paths.all_output_dirs():
         safe_mkdir(d)
 
-    write_json(cfg, os.path.join(summary_dir, "resolved_config.json"))
+    write_json(cfg, paths.resolved_config_json)
 
     hmm_keep = load_manifest(cfg["workflow"]["hmm_manifest"])
 
