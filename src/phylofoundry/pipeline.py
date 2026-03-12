@@ -52,12 +52,22 @@ def _load_proteomes_lazy(genomes, faa_dir):
 def run_pipeline(cfg):
     # ── Setup ──────────────────────────────────────────────────────────────
     faa_arg = cfg["inputs"]["faa_dir"]
-    hmm_arg = cfg["inputs"]["hmm_input"]
+    hmm_arg = cfg["inputs"].get("hmm_input")
     outdir = cfg["output"]["outdir"]
 
     start_at = cfg["workflow"]["start_at"]
     stop_after = cfg["workflow"]["stop_after"]
     force = bool(cfg["workflow"]["force"])
+
+    # ── Detect search mode ────────────────────────────────────────────────
+    use_diamond = cfg.get("diamond", {}).get("enabled", False)
+    if use_diamond:
+        diamond_query = cfg["inputs"].get("diamond_query")
+        if not diamond_query:
+            raise SystemExit(
+                "diamond.enabled=true but inputs.diamond_query is not set. "
+                "Provide a path to a FASTA file or directory of FASTA files."
+            )
 
     phy_cfg = cfg["phylo"]
     emb_cfg = cfg["embeddings"]
@@ -158,21 +168,28 @@ def run_pipeline(cfg):
     if not genomes:
         raise SystemExit("No .faa inputs found.")
 
-    hmm_abs = os.path.abspath(hmm_arg)
-    if os.path.isfile(hmm_abs):
-        if not hmm_abs.endswith(".hmm"):
-            raise SystemExit(f"inputs.hmm_input points to a file but not .hmm: {hmm_abs}")
-        hmm_dir = os.path.dirname(hmm_abs) or "."
-        hmm_files = [os.path.basename(hmm_abs)]
-        hmm_input_mode = "file"
-    else:
-        if not os.path.isdir(hmm_abs):
-            raise SystemExit(f"inputs.hmm_input must be a directory or .hmm file: {hmm_abs}")
-        hmm_dir = hmm_abs
-        hmm_files = sorted(f for f in os.listdir(hmm_dir) if f.endswith(".hmm"))
-        hmm_input_mode = "dir"
-    if not hmm_files:
-        raise SystemExit("No .hmm files found.")
+    # HMM input discovery — skipped when DIAMOND mode is active
+    hmm_dir = None
+    hmm_files = []
+    hmm_input_mode = None
+    if not use_diamond:
+        if not hmm_arg:
+            raise SystemExit("inputs.hmm_input is not set.")
+        hmm_abs = os.path.abspath(hmm_arg)
+        if os.path.isfile(hmm_abs):
+            if not hmm_abs.endswith(".hmm"):
+                raise SystemExit(f"inputs.hmm_input points to a file but not .hmm: {hmm_abs}")
+            hmm_dir = os.path.dirname(hmm_abs) or "."
+            hmm_files = [os.path.basename(hmm_abs)]
+            hmm_input_mode = "file"
+        else:
+            if not os.path.isdir(hmm_abs):
+                raise SystemExit(f"inputs.hmm_input must be a directory or .hmm file: {hmm_abs}")
+            hmm_dir = hmm_abs
+            hmm_files = sorted(f for f in os.listdir(hmm_dir) if f.endswith(".hmm"))
+            hmm_input_mode = "dir"
+        if not hmm_files:
+            raise SystemExit("No .hmm files found.")
 
     combined_faa = os.path.join(outdir, "combined_proteomes.faa")
     combined_hmm = os.path.join(outdir, "combined.hmm")
@@ -185,8 +202,11 @@ def run_pipeline(cfg):
             update_step_status(status_path, "prep", "running")
             append_pipeline_log(logs_dir, "START: prep")
             try:
-                prep.run_prep(cfg, genomes, faa_dir, hmm_input_mode, hmm_dir,
-                              hmm_files, combined_faa, combined_hmm, force)
+                if use_diamond:
+                    prep.run_prep_diamond_mode(cfg, genomes, faa_dir, combined_faa, force)
+                else:
+                    prep.run_prep(cfg, genomes, faa_dir, hmm_input_mode, hmm_dir,
+                                  hmm_files, combined_faa, combined_hmm, force)
                 update_step_status(status_path, "prep", "success")
                 append_pipeline_log(logs_dir, "SUCCESS: prep")
             except Exception as exc:
@@ -194,7 +214,7 @@ def run_pipeline(cfg):
     if stop_after == "prep":
         return
 
-    # ── STEP: hmmer ────────────────────────────────────────────────────────
+    # ── STEP: hmmer (or diamond) ───────────────────────────────────────────
     scan_df = None
     search_df = None
     best_df = None
@@ -205,11 +225,17 @@ def run_pipeline(cfg):
             update_step_status(status_path, "hmmer", "running")
             append_pipeline_log(logs_dir, "START: hmmer")
             try:
-                scan_df, search_df, best_df = hmmer.run_hmmer(
-                    cfg, genomes, faa_dir, hmm_files, hmm_dir, combined_hmm,
-                    combined_faa, outdir, summary_dir, hmmscan_dir, hmmsearch_dir,
-                    hmm_keep, force
-                )
+                if use_diamond:
+                    from .tasks import diamond as diamond_task
+                    scan_df, search_df, best_df = diamond_task.run_diamond(
+                        cfg, genomes, combined_faa, outdir, summary_dir, force
+                    )
+                else:
+                    scan_df, search_df, best_df = hmmer.run_hmmer(
+                        cfg, genomes, faa_dir, hmm_files, hmm_dir, combined_hmm,
+                        combined_faa, outdir, summary_dir, hmmscan_dir, hmmsearch_dir,
+                        hmm_keep, force
+                    )
                 # Optional: clean up combined FAA to reclaim disk space
                 prep_cfg = cfg.get("prep", {})
                 if prep_cfg.get("cleanup_combined_faa", False) and os.path.exists(combined_faa):
@@ -223,17 +249,20 @@ def run_pipeline(cfg):
         return
 
     # ── Name mapping for hmmalign ──────────────────────────────────────────
+    # In DIAMOND mode there are no HMM profiles, so this mapping is empty.
+    # The phylo step will use MAFFT alignment in that case.
     name_to_hmm_path = {}
-    for hf in hmm_files:
-        fp = os.path.join(hmm_dir, hf)
-        try:
-            with open(fp) as f:
-                for line in f:
-                    if line.startswith("NAME"):
-                        name_to_hmm_path[line.split()[1]] = fp
-                        break
-        except OSError:
-            continue
+    if not use_diamond:
+        for hf in hmm_files:
+            fp = os.path.join(hmm_dir, hf)
+            try:
+                with open(fp) as f:
+                    for line in f:
+                        if line.startswith("NAME"):
+                            name_to_hmm_path[line.split()[1]] = fp
+                            break
+            except OSError:
+                continue
 
     # ── Helper: load hit DataFrames from disk if we skipped hmmer ──────────
     def _ensure_hit_dfs():
@@ -241,6 +270,11 @@ def run_pipeline(cfg):
         if scan_df is not None and search_df is not None:
             return
         import pandas as pd
+        if use_diamond:
+            hits_diamond_tsv = os.path.join(summary_dir, "diamond_hits.filtered.tsv")
+            search_df = pd.read_csv(hits_diamond_tsv, sep="\t") if os.path.exists(hits_diamond_tsv) else pd.DataFrame()
+            scan_df = pd.DataFrame()
+            return
         hits_scan_tsv = os.path.join(summary_dir, "hmmscan_hits.filtered.tsv")
         hits_search_tsv = os.path.join(summary_dir, "hmmsearch_hits.filtered.tsv")
         scan_df = pd.read_csv(hits_scan_tsv, sep="\t") if os.path.exists(hits_scan_tsv) else pd.DataFrame()
@@ -302,6 +336,14 @@ def run_pipeline(cfg):
         return
 
     # ── STEP: phylo ────────────────────────────────────────────────────────
+    # In DIAMOND mode there are no HMM profiles for hmmalign, so MAFFT must be
+    # used for alignment.  Auto-enable it here so users don't need to set it.
+    if use_diamond:
+        phy_cfg = dict(phy_cfg)  # shallow copy to avoid mutating shared cfg
+        phy_cfg["mafft"] = True
+        cfg = dict(cfg)
+        cfg["phylo"] = phy_cfg
+
     if step_in_range("phylo", start_at, stop_after):
         if _is_blocked("phylo"):
             print("[pipeline] Skipping blocked step: phylo")

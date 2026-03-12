@@ -211,6 +211,8 @@ apptainer run \
 | `--config <path>` | JSON config file (merged with defaults and CLI overrides). |
 | `--faa_dir <path>` | Override `inputs.faa_dir`. |
 | `--hmm_dir <path>` | Override `inputs.hmm_input`. |
+| `--diamond_query <path>` | Override `inputs.diamond_query` (FASTA file or directory for DIAMOND mode). |
+| `--diamond_mode` | Enable DIAMOND search mode (use protein FASTA queries instead of HMMs). |
 | `--outdir <path>` | Override `output.outdir`. |
 | `--cpu <N>` | Override `resources.cpu`. |
 | `--start_at <step>` | Override `workflow.start_at`. |
@@ -373,7 +375,88 @@ phylofoundry --dump_default_config > config.json
 
 ---
 
-## 📂 Output Structure
+## 💎 DIAMOND BLAST Search Mode
+
+PhyloFoundry supports an alternative search mode using [DIAMOND](https://github.com/bbuchfink/diamond) blastp. Instead of HMM profiles, you supply protein FASTA query files and DIAMOND searches them against the combined genome proteome database.
+
+### When to Use DIAMOND Mode
+
+-   You have representative protein sequences but **not HMM profiles**.
+-   You want fast BLAST-based homology searches with identity/coverage thresholds.
+-   You are doing exploratory analysis and haven't built curated HMMs yet.
+
+> **Note**: In DIAMOND mode, the `phylo` step automatically uses **MAFFT** for multiple sequence alignment (since there are no HMM profiles available for `hmmalign`).
+
+### CLI Usage
+
+```bash
+phylofoundry \
+  --faa_dir /path/to/genomes/ \
+  --diamond_query /path/to/queries/ \
+  --diamond_mode \
+  --outdir /path/to/output/ \
+  --cpu 16
+```
+
+The `--diamond_query` argument accepts:
+-   A **single FASTA file** (`.faa`, `.fasta`, `.fa`, `.fas`) — one query group.
+-   A **directory of FASTA files** — one query group per file (basename without extension becomes the group name).
+
+### Config-Based Usage
+
+Add this to your `config.json`:
+
+```json
+{
+    "inputs": {
+        "faa_dir": "/path/to/genomes/",
+        "diamond_query": "/path/to/queries/",
+        "hmm_input": null
+    },
+    "diamond": {
+        "enabled": true,
+        "sensitivity": "sensitive",
+        "max_evalue": 1e-5,
+        "max_target_seqs": 500,
+        "min_identity": 30.0,
+        "min_coverage": 0.5,
+        "block_size": 2.0,
+        "index_chunks": 4
+    }
+}
+```
+
+Then run:
+
+```bash
+phylofoundry --config config.json --outdir /path/to/output/
+```
+
+### DIAMOND Configuration Options
+
+| Key | Default | Description |
+| :--- | :--- | :--- |
+| `diamond.enabled` | `false` | Enable DIAMOND mode (replaces HMMER). |
+| `diamond.sensitivity` | `"sensitive"` | Sensitivity flag: `fast`, `mid-sensitive`, `sensitive`, `more-sensitive`, `very-sensitive`, `ultra-sensitive`. |
+| `diamond.max_evalue` | `1e-5` | Maximum e-value threshold for hits. |
+| `diamond.max_target_seqs` | `500` | Maximum number of target sequences per query. |
+| `diamond.min_identity` | `30.0` | Minimum percent identity (post-search filter). |
+| `diamond.min_coverage` | `0.5` | Minimum query coverage (post-search filter). |
+| `diamond.block_size` | `2.0` | DIAMOND `-b` parameter (memory scaling). |
+| `diamond.index_chunks` | `4` | DIAMOND `-c` parameter. |
+
+### Pipeline Differences in DIAMOND Mode
+
+| Aspect | HMM Mode | DIAMOND Mode |
+| :--- | :--- | :--- |
+| Input | `.hmm` profiles | Protein FASTA(s) |
+| `prep` step | Builds `combined.hmm` + `combined_proteomes.faa` | Builds `combined_proteomes.faa` only |
+| `hmmer` step | Runs `hmmscan` + `hmmsearch` | Runs `diamond blastp` |
+| `phylo` alignment | `hmmalign` (default) or MAFFT | MAFFT (auto-enabled) |
+| `extract` and downstream | Unchanged | Unchanged |
+
+---
+
 
 ```text
 results/

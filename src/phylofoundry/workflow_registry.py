@@ -59,7 +59,8 @@ REGISTRY.register(StepDefinition(
 
 REGISTRY.register(StepDefinition(
     name="hmmer",
-    description="Run hmmscan and/or hmmsearch; filter and aggregate hits.",
+    description="Run hmmscan and/or hmmsearch; filter and aggregate hits. "
+                "In DIAMOND mode, runs diamond blastp instead.",
     outputs=[
         ArtifactSpec(
             "hmmscan_hits",
@@ -75,6 +76,11 @@ REGISTRY.register(StepDefinition(
     tool_requirements=[
         ToolRequirement("hmmscan", optional=True),
         ToolRequirement("hmmsearch", optional=True),
+        ToolRequirement(
+            "diamond",
+            optional=True,
+            description="Required when diamond.enabled=true for BLAST-based homology search.",
+        ),
     ],
     dependencies=["prep"],
     optional=False,

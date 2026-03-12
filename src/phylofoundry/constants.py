@@ -19,12 +19,13 @@ STEPS = [
 # Defaults
 DEFAULT_CONFIG = {
     "inputs": {
-        "faa_dir": None,     # directory of *.faa OR a single .faa
-        "hmm_input": None,   # directory of *.hmm OR a single .hmm
-        "cds_dir": None,      # optional directory of CDS nucleotide FASTAs (per genome)
-        "gtdb_dir": None,     # optional directory of GTA-Tk output
-        "taxonomy_file": None, # optional TSV with genome->lineage mapping
-        "pfam_dir": None      # optional directory of Pfam .dat and .hmm files
+        "faa_dir": None,        # directory of *.faa OR a single .faa
+        "hmm_input": None,      # directory of *.hmm OR a single .hmm
+        "diamond_query": None,  # path to .faa/.fasta, multi-FASTA, or directory of .faa query files
+        "cds_dir": None,        # optional directory of CDS nucleotide FASTAs (per genome)
+        "gtdb_dir": None,       # optional directory of GTA-Tk output
+        "taxonomy_file": None,  # optional TSV with genome->lineage mapping
+        "pfam_dir": None        # optional directory of Pfam .dat and .hmm files
     },
     "output": {
         "outdir": None
@@ -41,6 +42,17 @@ DEFAULT_CONFIG = {
     "hmmer": {
         "run_scan": True,
         "run_search": True
+    },
+    "diamond": {
+        "enabled": False,
+        "mode": "blastp",
+        "sensitivity": "sensitive",    # "fast"|"mid-sensitive"|"sensitive"|"more-sensitive"|"very-sensitive"|"ultra-sensitive"
+        "max_evalue": 1e-5,
+        "max_target_seqs": 500,
+        "min_identity": 30.0,
+        "min_coverage": 0.5,
+        "block_size": 2.0,
+        "index_chunks": 4,
     },
     "prep": {
         "cleanup_combined_faa": False

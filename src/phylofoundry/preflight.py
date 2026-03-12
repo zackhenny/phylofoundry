@@ -135,11 +135,24 @@ def validate_config_only(cfg: dict) -> bool:
     faa_arg = cfg.get("inputs", {}).get("faa_dir")
     hmm_arg = cfg.get("inputs", {}).get("hmm_input")
     outdir  = cfg.get("output", {}).get("outdir")
+    use_diamond = cfg.get("diamond", {}).get("enabled", False)
+    diamond_query = cfg.get("inputs", {}).get("diamond_query")
 
     if not faa_arg:
         errors.append("inputs.faa_dir is not set")
-    if not hmm_arg:
-        errors.append("inputs.hmm_input is not set")
+    if use_diamond:
+        if not diamond_query:
+            errors.append(
+                "diamond.enabled=true but inputs.diamond_query is not set"
+            )
+        # Check that diamond binary is available
+        if not shutil.which("diamond"):
+            errors.append(
+                "diamond binary not found on PATH (required when diamond.enabled=true)"
+            )
+    else:
+        if not hmm_arg:
+            errors.append("inputs.hmm_input is not set")
     if not outdir:
         errors.append("output.outdir is not set")
 

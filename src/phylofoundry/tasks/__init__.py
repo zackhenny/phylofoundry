@@ -7,6 +7,7 @@ where they are needed to avoid importing optional heavy dependencies at import t
 __all__ = [
     "prep",
     "hmmer",
+    "diamond",
     "extract",
     "embed",
     "phylo",
