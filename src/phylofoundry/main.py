@@ -1,7 +1,6 @@
 import argparse
 import sys
 from .config import resolve_config, validate_config, STEPS
-from .pipeline import run_pipeline
 
 
 def main():
@@ -34,8 +33,24 @@ def main():
                     help="Comma-separated motif list for attention scoring "
                          "(e.g., HPEVY,HPEVF)")
 
-    # Motif discovery flags
+    # Preflight / inspection modes
+    ap.add_argument("--list-steps", action="store_true",
+                    help="List all known workflow steps and exit")
+    ap.add_argument("--plan", action="store_true",
+                    help="Show the execution plan for the given config and exit "
+                         "(no pipeline steps are run)")
+    ap.add_argument("--validate-config", action="store_true",
+                    help="Validate the config without running the pipeline and exit")
+    ap.add_argument("--doctor", action="store_true",
+                    help="Check tool availability and environment health, then exit")
+
     args = ap.parse_args()
+
+    # ── Modes that do not require a full config ────────────────────────────
+    if args.list_steps:
+        from .preflight import print_list_steps
+        print_list_steps()
+        sys.exit(0)
 
     cfg = resolve_config(args)
     if cfg is None:  # dump_default_config was handled
@@ -51,6 +66,23 @@ def main():
             cfg.setdefault("motifs", {})["enabled"] = True
             cfg["motifs"]["motif_list"] = motif_list
 
+    # ── Modes that require a resolved config but skip execution ───────────
+    if args.plan:
+        from .preflight import print_plan
+        print_plan(cfg)
+        sys.exit(0)
+
+    if args.validate_config:
+        from .preflight import validate_config_only
+        ok = validate_config_only(cfg)
+        sys.exit(0 if ok else 1)
+
+    if args.doctor:
+        from .preflight import run_doctor
+        ok = run_doctor(cfg)
+        sys.exit(0 if ok else 1)
+
+    # ── Normal pipeline execution ─────────────────────────────────────────
     validate_config(cfg)
 
     # Check dependencies
@@ -80,6 +112,7 @@ def main():
 
     check_dependencies(deps)
 
+    from .pipeline import run_pipeline
     run_pipeline(cfg)
 
 
