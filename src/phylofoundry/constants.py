@@ -174,6 +174,7 @@ DEFAULT_CONFIG = {
     },
     "ha": {
         "enabled": False,
+        "method": "middle",      # "middle" (legacy layer-range aggregation) | "loc" (convergence layer)
         "layer_mode": "middle",  # "middle"|"range"
         "layer_start": None,
         "layer_end": None,
@@ -182,7 +183,10 @@ DEFAULT_CONFIG = {
         "percentile": 0.05,
         "topk": 20,
         "min_sites": 8,
-        "max_sites": 60
+        "max_sites": 60,
+        "loc_norm_mode": "max",       # per-layer normalization mode used in method="loc"
+        "loc_theta_target_deg": 90,   # target angle for convergence-layer selection
+        "loc_break_adjust": -1        # adjustment applied to the PWLF breakpoint-derived site count
     },
     "motifs": {
         "enabled": False,
@@ -201,6 +205,16 @@ DEFAULT_CONFIG = {
         "ha_window": 9,
         "ha_delta_min": 0.2,
         "ha_gap_frac_max": 0.6,
-        "cross_hmm_comparison": True
+        "cross_hmm_comparison": True,
+        "candidates": {
+            "enabled": True,
+            "min_delta_ha": 0.1,
+            "min_cons_frac": 0.6,
+            "max_gap_frac": 0.6,
+            "w_delta_ha": 1.0,
+            "w_aa_shift": 1.0,
+            "w_js": 0.5,
+            "top_n": 200
+        }
     },
 }

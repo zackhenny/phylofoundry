@@ -149,9 +149,15 @@ The pipeline creates a structured `results` directory:
 
 ```bash
 phylofoundry \
-  --inputs.faa_dir ./data/proteomes \
-  --inputs.hmm_input ./data/markers \
-  --output.outdir ./results_run1
+  --faa_dir ./data/proteomes \
+  --hmm_dir ./data/markers \
+  --outdir ./results_run1
+```
+
+Or using a config file:
+
+```bash
+phylofoundry --config config.json
 ```
 
 ### 2. Running with Docker
@@ -161,9 +167,9 @@ Mount your data directories so the container can see them.
 ```bash
 docker run --rm -v $(pwd)/data:/data -v $(pwd)/results:/results \
   phylofoundry:latest \
-  --inputs.faa_dir /data/proteomes \
-  --inputs.hmm_input /data/markers \
-  --output.outdir /results
+  --faa_dir /data/proteomes \
+  --hmm_dir /data/markers \
+  --outdir /results
 ```
 
 ### 3. Running with Apptainer (HPC)
@@ -193,10 +199,30 @@ apptainer run \
   --bind /path/to/my/data:/data \
   --bind /path/to/my/results:/results \
   phylofoundry.sif \
-  --inputs.faa_dir /data/proteomes \
-  --inputs.hmm_input /data/markers \
-  --output.outdir /results
+  --faa_dir /data/proteomes \
+  --hmm_dir /data/markers \
+  --outdir /results
 ```
+
+### 4. CLI Reference
+
+| Flag | Description |
+| :--- | :--- |
+| `--config <path>` | JSON config file (merged with defaults and CLI overrides). |
+| `--faa_dir <path>` | Override `inputs.faa_dir`. |
+| `--hmm_dir <path>` | Override `inputs.hmm_input`. |
+| `--outdir <path>` | Override `output.outdir`. |
+| `--cpu <N>` | Override `resources.cpu`. |
+| `--start_at <step>` | Override `workflow.start_at`. |
+| `--stop_after <step>` | Override `workflow.stop_after`. |
+| `--force` | Override `workflow.force=true` (re-run existing steps). |
+| `--combined` | Enable combined tree from all HMMs (`phylo.combined_tree`). |
+| `--motifs <list>` | Comma-separated motif list for attention scoring (e.g., `HPEVY,HPEVF`). |
+| `--dump_default_config` | Print the default config JSON and exit. |
+| `--list-steps` | List all known workflow steps and exit. |
+| `--plan` | Show the execution plan for the given config and exit (no steps run). |
+| `--validate-config` | Validate the config without running the pipeline and exit. |
+| `--doctor` | Check tool availability and environment health, then exit. |
 
 *Note*: Paths inside the container (`/data`) must match where you mounted them, or just map them 1:1 (e.g., `--bind /scratch/user/project:/scratch/user/project`).
 
@@ -238,28 +264,48 @@ The pipeline runs as a series of sequential **Steps**. You can control execution
     3.  **Tree**: Runs `iqtree` (ModelFinder + Tree search + Bootstrap).
 -   **Output**: `trees_iqtree/<hmm_name>.treefile`.
 
-### Step 6: `post` (Optional)
--   **Action**: Calculates conservation scores and Scikit-bio metrics.
+### Step 6: `curate` (Optional)
+-   **Action**: Prunes outlier branches using TreeShrink and/or ESM-based sequence filtering. Writes curated artifacts to a `curated/` overlay directory without overwriting raw pipeline outputs.
+-   **Output**: `curated/trees/`, `curated/fasta_per_hmm/`, `curated/alignments_clipkit/`.
+
+### Step 7: `taxonomy_integrate` (Optional)
+-   **Action**: Loads taxonomy from a GTDB-Tk summary directory (`inputs.gtdb_dir`) or a custom genome→lineage TSV (`inputs.taxonomy_file`) and annotates best-hit results.
+-   **Output**: `summary/genome_taxonomy.tsv`, `summary/best_hits.with_taxonomy.tsv`.
+
+### Step 8: `conservation_metrics` (Optional)
+-   **Action**: Calculates per-site conservation scores and KL divergence using scikit-bio.
 -   **Output**: `summary/post_scikitbio/`.
 
-### Step 7: `codon` (Optional)
+### Step 9: `detect_clades` (Optional)
+-   **Action**: Detects clades via taxonomy rank, TreeCluster, or tree+embedding strategies. Writes the clade table consumed by `hyphy` and `discover_motifs`.
+-   **Output**: `summary/detected_clades.tsv`, `clade_assignments/`.
+
+### Step 10: `post` (Optional, Legacy)
+-   **Action**: Backward-compatibility shim combining conservation metrics, KL divergence, and clade detection in a single step. New workflows should prefer the dedicated `taxonomy_integrate`, `conservation_metrics`, and `detect_clades` steps.
+-   **Output**: `summary/post_scikitbio/`, `clade_assignments/`.
+
+### Step 11: `synteny` (Optional)
+-   **Action**: Extracts gene neighborhoods (configurable window), computes similarity (DIAMOND/MMseqs2), and plots synteny tracks ordered by phylogeny.
+-   **Output**: `synteny/<hmm_name>/synteny.<hmm_name>.pdf`.
+
+### Step 12: `codon` (Optional)
 -   **Action**: 
     -   Matches protein sequences to their CDS (nucleotide) sequences.
     -   **Strips terminal stop codons** (`*` from AA, TAA/TAG/TGA from CDS) before running `pal2nal.pl`.
     -   Uses `pal2nal.pl` with `-nogap -nomismatch` flags for robust codon alignment.
 -   **Output**: `codon_alignments/<hmm_name>.codon.fasta`.
 
-### Step 8: `hyphy` (Optional)
+### Step 13: `hyphy` (Optional)
 -   **Action**: Runs selection tests (e.g., RELAX, aBSREL, MEME) on codon alignments and trees. If `summary/detected_clades.tsv` exists and `hyphy.use_detected_clades=true`, HyPhy automatically builds labeled trees and runs per-clade analyses (no manual RELAX labeling required).
 -   **Output**: Legacy `summary/hyphy/<hmm_name>.<test>.json` plus clade-aware outputs under `summary/hyphy/<hmm_name>/<TEST>/<clade_name>.json` and labeled trees under `trees_labeled/<hmm_name>/`.
 
-### Step 9: `score_motifs` (Optional)
+### Step 14: `score_motifs` (Optional)
 -   **Action**: Passes sequences through ESM-2 with `output_attentions=True`, extracts attention weights at user-specified motif positions.
 -   **CLI**: `--motifs HPEVY,HPEVF`
 -   **Output**: `summary/motif_attention_scores.tsv` — columns: `seq_id`, `motif`, `start_pos`, `end_pos`, `attention_score`, `clade_id`, `type`.
 -   **HA Output (optional)**: `attention/<HMM>.ha_sites.tsv` + `summary/ha_summary.tsv` when `ha.enabled=true` and `motifs.use_ha=true`.
 
-### Step 10: `discover_motifs` (Optional)
+### Step 15: `discover_motifs` (Optional)
 -   **Action**: Iterates over all HDBSCAN clades, comparing the 1D attention profiles of each clade against the combined average of all others. Finds peaks in the attention delta and extracts k-mers as candidate novel structural hubs for that specific clade.
 -   **CLI**: N/A, runs automatically if `discover.enabled` is `true`.
 -   **Output**: `summary/discovered_motifs.tsv` — columns: `kmer`, `n_sequences`, `mean_attention_delta`, `source_clade`, `reference_clade`.
@@ -372,6 +418,10 @@ Controls execution flow.
 -   `force`: (Default: `false`) Overwrite existing output files for the active steps.
 -   `hmm_manifest`: (Default: `null`) Path to a text file listing specific HMM names to process (one per line).
 
+### `prep`
+Input preparation.
+-   `cleanup_combined_faa`: (Default: `false`) Delete the merged `combined_proteomes.faa` after `hmmer` completes to save disk space.
+
 ### `filtering`
 -   `global_min_score`: (Default: `25.0`) Minimum bitscore for a hit.
 -   `min_coverage`: (Default: `0.5`) Minimum query coverage (0.0-1.0).
@@ -423,8 +473,41 @@ High-Attention (HA) site calling.
 -   `loc_theta_target_deg`: (Default: `90`) Target angle for convergence-layer selection.
 -   `loc_break_adjust`: (Default: `-1`) Optional adjustment applied to the PWLF breakpoint-derived site count.
 
+### `taxonomy_integrate`
+GTDB / custom taxonomy annotation.
+-   `enabled`: (Default: `false`) Set to `true` to run. Reads `inputs.gtdb_dir` or `inputs.taxonomy_file` and writes `summary/genome_taxonomy.tsv` and `summary/best_hits.with_taxonomy.tsv`.
+
+### `conservation_metrics`
+Per-site conservation and KL divergence.
+-   `enabled`: (Default: `false`) Set to `true` to run.
+-   `compute_conservation`: (Default: `false`) Calculate per-column conservation scores.
+-   `conservation_metric`: (Default: `"inverse_shannon_uncertainty"`) scikit-bio metric name.
+-   `compute_kl`: (Default: `false`) Compute KL divergence between clade pairs.
+-   `kl_pairs`: (Default: `null`) Explicit clade pairs (e.g. `"A:B,A:background"`). If `null` and `compute_kl=true`, computes each detected clade vs. all other tips.
+-   `clades_tsv`: (Optional) TSV mapping tips to groups; overrides auto-detected clades for dispersion / KL calculations.
+
+### `detect_clades`
+Automated clade detection.
+-   `enabled`: (Default: `false`) Set to `true` to run.
+-   `clades_tsv`: (Optional) Pre-existing clade TSV (columns: `clade_name`, `tip`) to load instead of auto-detecting.
+-   `detect_method`: (Default: `null`) `"taxonomy"`, `"treecluster"`, or `"tree_embed"` to auto-generate `summary/detected_clades.tsv`.
+-   `taxonomy_clade_level`: (Default: `"genus"`) Taxonomic rank used when `detect_method="taxonomy"`.
+-   `treecluster_threshold`: (Default: `0.045`) Distance threshold passed to TreeCluster.
+-   `treecluster_method`: (Default: `"max_clade"`) TreeCluster clustering method.
+-   `embedtree_support_min`: (Default: `80`) Minimum internal-node support for candidate splits when `detect_method="tree_embed"`.
+-   `embedtree_min_size`: (Default: `5`) Minimum tips in a candidate clade.
+-   `embedtree_max_size`: (Default: `5000`) Maximum tips in a candidate clade (`null` to disable).
+-   `embedtree_top_k`: (Default: `10`) Maximum non-overlapping embedding-shift clades emitted per HMM.
+-   `embedtree_pcs`: (Default: `10`) Number of embedding PCs used for split scoring.
+-   `embedtree_distance`: (Default: `"euclidean"`) Distance metric for centroid and dispersion calculations (`"euclidean"` or `"cosine"`).
+-   `embedtree_allow_nested`: (Default: `false`) If `true`, descendants of selected splits may also be emitted.
+-   `embedtree_require_monophyly`: (Default: `true`) Enforces clades to be internal tree nodes (monophyletic by construction).
+-   `embedtree_emit_all`: (Default: `false`) If `true`, emit all accepted nodes instead of truncating at `embedtree_top_k`.
+
 ### `post`
-Post-processing metrics.
+> ⚠️ **Legacy / backward-compatibility shim.** New workflows should use the dedicated `taxonomy_integrate`, `conservation_metrics`, and `detect_clades` steps instead.
+
+Post-processing metrics (combined legacy step).
 -   `enabled`: Set to `true` to run.
 -   `compute_conservation`: (Default: `false`) Calculate conservation scores.
 -   `clades_tsv`: (Optional) TSV mapping tips to groups for dispersion analysis.
@@ -482,6 +565,8 @@ Targeted motif scoring.
 
 ### `discover`
 Unsupervised motif discovery.
+-   `standard_clade`: (Default: `null`) Manually specify a reference clade ID/name for 1-vs-1 comparisons.
+-   `novel_clade`: (Default: `null`) Manually specify the focal clade ID/name for 1-vs-1 comparisons.
 -   `use_ha`: (Default: `false`) Enable alignment-aware HA enrichment/hub calling outputs.
 -   `ha_window`: (Default: `9`) Smoothing window for HA delta profiles.
 -   `ha_delta_min`: (Default: `0.2`) Minimum smoothed delta for HA hub calls.
