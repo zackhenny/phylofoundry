@@ -131,10 +131,11 @@ def run_pipeline(cfg):
     hyphy_dir = os.path.join(summary_dir, "hyphy")
     emb_dir = os.path.join(outdir, "embeddings")
     clade_assign_dir = os.path.join(outdir, "clade_assignments")
+    curated_dir = os.path.join(outdir, "curated")
 
     for d in [hmmscan_dir, hmmsearch_dir, fasta_dir, aln_dir,
               clipkit_dir, tree_dir, summary_dir, post_dir,
-              codon_dir, hyphy_dir, emb_dir, clade_assign_dir]:
+              codon_dir, hyphy_dir, emb_dir, clade_assign_dir, curated_dir]:
         safe_mkdir(d)
 
     write_json(cfg, os.path.join(summary_dir, "resolved_config.json"))
@@ -352,13 +353,27 @@ def run_pipeline(cfg):
             update_step_status(status_path, "curate", "running")
             append_pipeline_log(logs_dir, "START: curate")
             try:
-                curate.run_curate(cfg, tree_dir, fasta_dir, clipkit_dir, emb_dir, summary_dir, hmm_keep, force)
+                curate.run_curate(cfg, tree_dir, fasta_dir, clipkit_dir, emb_dir,
+                                  summary_dir, hmm_keep, force,
+                                  curated_dir=curated_dir)
                 update_step_status(status_path, "curate", "success")
                 append_pipeline_log(logs_dir, "SUCCESS: curate")
             except Exception as exc:
                 _on_step_failure("curate", exc)
     if stop_after == "curate":
         return
+
+    # ── Prefer curated overlay outputs for downstream steps ────────────────
+    # If the curate step produced overlay artifacts, redirect downstream
+    # directory pointers so that post, codon, hyphy, etc. consume the curated
+    # (and potentially pruned) versions rather than the raw pipeline outputs.
+    _cur_tree_dir    = os.path.join(curated_dir, "trees")
+    _cur_fasta_dir   = os.path.join(curated_dir, "fasta_per_hmm")
+    _cur_clipkit_dir = os.path.join(curated_dir, "alignments_clipkit")
+    if os.path.isdir(_cur_tree_dir) and glob.glob(os.path.join(_cur_tree_dir, "*.treefile")):
+        tree_dir    = _cur_tree_dir
+        fasta_dir   = _cur_fasta_dir
+        clipkit_dir = _cur_clipkit_dir
 
     # ── STEP: taxonomy_integrate ───────────────────────────────────────────
     if step_in_range("taxonomy_integrate", start_at, stop_after) and tax_int_cfg.get("enabled", False):
