@@ -91,7 +91,13 @@
             "recover_affiliates": true,
             "generate_sequence_logos": true,
             "logo_format": ["png", "svg"],
-            "compare_cluster_hmms": false
+            "compare_cluster_hmms": false,
+            "kl_divergence": {
+                "enabled": false,
+                "min_cluster_size": 5,
+                "pseudocount": 1e-6,
+                "top_n_sites": 20
+            }
         }
     },
     "curate": {
