@@ -1049,6 +1049,37 @@ def run_cluster_subworkflow(hmm_name, seqs, ids, Z, labels, emb_cfg,
                 jsd_top_df.to_csv(jsd_top_fp, sep="\t", index=False)
                 print(f"[embed/cluster] Wrote JSD top divergent sites: {jsd_top_fp}")
 
+    # ── 10. Cluster motif evolution heatmap ─────────────────────────────────
+    heatmap_cfg = sub_cfg.get("motif_heatmap", {})
+    if heatmap_cfg.get("enabled", False) and build_msas and len(unique_clusters) >= 2:
+        min_cl_size = int(heatmap_cfg.get("min_cluster_size", 5))
+        pseudocount = float(heatmap_cfg.get("pseudocount", 1e-6))
+        metric = str(heatmap_cfg.get("metric", "jsd_vs_global"))
+        fig_formats = heatmap_cfg.get("figure_format", ["png"])
+        colormap = str(heatmap_cfg.get("colormap", "YlOrRd"))
+
+        # Collect alignment paths for clusters that have a valid MSA
+        cluster_aln_paths = {}
+        for cl_id in unique_clusters:
+            aln_fp = os.path.join(aln_dir, f"cluster_{cl_id}.seed.aln.faa")
+            if os.path.exists(aln_fp):
+                cluster_aln_paths[cl_id] = aln_fp
+
+        if len(cluster_aln_paths) >= 2:
+            heatmap_dir = os.path.join(outdir, "cluster_heatmaps", hmm_name)
+            _generate_cluster_motif_heatmap(
+                hmm_name,
+                cluster_aln_paths,
+                out_dir=heatmap_dir,
+                summary_dir=summary_dir,
+                metric=metric,
+                min_cluster_size=min_cl_size,
+                pseudocount=pseudocount,
+                figure_format=fig_formats,
+                colormap=colormap,
+                force=force,
+            )
+
     print(f"[embed/cluster] Cluster subworkflow complete for {hmm_name}.")
 
 
@@ -1411,6 +1442,261 @@ def _compute_cluster_jsd_analysis(
     top_sites_df = pd.concat(top_rows, ignore_index=True) if top_rows else pd.DataFrame()
 
     return per_position_df, top_sites_df
+
+
+def _generate_cluster_motif_heatmap(
+    hmm_name,
+    cluster_aln_paths,
+    out_dir,
+    summary_dir,
+    metric="jsd_vs_global",
+    min_cluster_size=5,
+    pseudocount=1e-6,
+    figure_format=("png",),
+    colormap="YlOrRd",
+    force=False,
+):
+    """Generate a cluster motif evolution heatmap.
+
+    Produces a heatmap where:
+
+    * **rows** = embedding clusters
+    * **columns** = alignment positions
+    * **colour** = a per-cell divergence or entropy metric
+
+    The default metric is ``jsd_vs_global``: Jensen–Shannon divergence
+    between each cluster's residue distribution and the *global* distribution
+    obtained by pooling all clusters at that position.  High values highlight
+    positions where a cluster diverges from the overall motif — candidate
+    sites for functional divergence or evolutionary innovation.
+
+    Supported ``metric`` values:
+
+    ``"jsd_vs_global"``
+        JSD between the cluster distribution and the pooled global
+        distribution at every alignment position.  Range 0–1 bits.
+    ``"shannon_entropy"``
+        Shannon entropy (bits) of the cluster distribution at every
+        alignment position.  Higher values indicate more variable positions.
+
+    Parameters
+    ----------
+    hmm_name : str
+        HMM / hit-set identifier used for output labelling.
+    cluster_aln_paths : dict
+        Mapping ``{cluster_id: aligned_fasta_path}``.  All MSAs must share
+        the same alignment coordinate system (column count).
+    out_dir : str
+        Root output directory; the heatmap PNG/SVG is written here.
+    summary_dir : str
+        Directory for the TSV data-matrix export.
+    metric : str
+        Divergence / entropy metric to visualise (see above).
+    min_cluster_size : int
+        Clusters with fewer aligned sequences than this value are skipped.
+    pseudocount : float
+        Laplace-like pseudocount added to every residue count before
+        normalisation.  Prevents log(0) errors.
+    figure_format : sequence of str
+        Image formats to write (e.g. ``["png", "svg"]``).
+    colormap : str
+        Matplotlib colour-map name for the heatmap cells.
+    force : bool
+        Overwrite existing output files.
+
+    Returns
+    -------
+    matrix_df : pd.DataFrame
+        Data matrix (clusters × positions) that was plotted, or an empty
+        DataFrame if the heatmap could not be generated.
+    """
+    import sys
+    import math
+    from collections import Counter
+    import numpy as np
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from ..utils.bio import read_fasta
+
+    AA_ALPHABET = list("ACDEFGHIKLMNPQRSTVWY")
+    GAP_CHARS = set("-. X?*")
+
+    def _site_counts(aln_seqs):
+        """Return a list of Counter objects, one per alignment column."""
+        if not aln_seqs:
+            return []
+        seqs_list = list(aln_seqs.values())
+        n_cols = len(seqs_list[0])
+        counts = []
+        for col_idx in range(n_cols):
+            c = Counter()
+            for seq in seqs_list:
+                if col_idx < len(seq):
+                    aa = seq[col_idx].upper()
+                    if aa not in GAP_CHARS and aa in set(AA_ALPHABET):
+                        c[aa] += 1
+            counts.append(c)
+        return counts
+
+    def _to_prob_vector(counts, pc=pseudocount):
+        """Convert a Counter to a normalised probability vector."""
+        raw = np.array([counts.get(a, 0) + pc for a in AA_ALPHABET], dtype=float)
+        return raw / raw.sum()
+
+    def _jsd_two(p_vec, q_vec):
+        """Symmetric JSD in bits (range 0–1)."""
+        m_vec = 0.5 * (p_vec + q_vec)
+        def _kl_safe(a, b):
+            val = 0.0
+            for ai, bi in zip(a, b):
+                if ai > 0 and bi > 0:
+                    val += ai * math.log2(ai / bi)
+            return val
+        return 0.5 * _kl_safe(p_vec, m_vec) + 0.5 * _kl_safe(q_vec, m_vec)
+
+    def _shannon_entropy(p_vec):
+        """Shannon entropy in bits."""
+        h = 0.0
+        for p in p_vec:
+            if p > 0:
+                h -= p * math.log2(p)
+        return h
+
+    # ── Load cluster MSAs ────────────────────────────────────────────────────
+    cluster_counts = {}   # cl_id -> list[Counter]
+    cluster_n_seqs = {}   # cl_id -> int
+
+    for cl_id, aln_fp in cluster_aln_paths.items():
+        try:
+            aln_seqs = read_fasta(aln_fp)
+        except Exception as exc:
+            print(
+                f"[embed/cluster/heatmap] Could not read {aln_fp}: {exc}",
+                file=sys.stderr,
+            )
+            continue
+        n_seqs = len(aln_seqs)
+        if n_seqs < min_cluster_size:
+            print(
+                f"[embed/cluster/heatmap] Cluster {cl_id} ({n_seqs} seqs) is below "
+                f"min_cluster_size={min_cluster_size} — skipping.",
+                file=sys.stderr,
+            )
+            continue
+        cluster_counts[cl_id] = _site_counts(aln_seqs)
+        cluster_n_seqs[cl_id] = n_seqs
+
+    eligible = sorted(cluster_counts.keys())
+    if len(eligible) < 2:
+        print(
+            f"[embed/cluster/heatmap] Fewer than 2 eligible clusters for {hmm_name} "
+            "— skipping heatmap.",
+            file=sys.stderr,
+        )
+        return pd.DataFrame()
+
+    # All MSAs must share the same alignment length; use the minimum
+    aln_len = min(len(cluster_counts[cl]) for cl in eligible)
+    if aln_len == 0:
+        return pd.DataFrame()
+
+    # ── Compute global (pooled) residue distribution per position ────────────
+    # Always compute global distribution - used as a fallback for unknown metrics
+    global_counts = []
+    for pos in range(aln_len):
+        g = Counter()
+        for cl in eligible:
+            for aa, cnt in cluster_counts[cl][pos].items():
+                g[aa] += cnt
+        global_counts.append(g)
+
+    # ── Build heatmap matrix ─────────────────────────────────────────────────
+    matrix = np.zeros((len(eligible), aln_len), dtype=float)
+
+    for row_idx, cl_id in enumerate(eligible):
+        for pos in range(aln_len):
+            cl_vec = _to_prob_vector(cluster_counts[cl_id][pos])
+            if metric == "jsd_vs_global":
+                g_vec = _to_prob_vector(global_counts[pos])
+                matrix[row_idx, pos] = _jsd_two(cl_vec, g_vec)
+            elif metric == "shannon_entropy":
+                matrix[row_idx, pos] = _shannon_entropy(cl_vec)
+            else:
+                # Fallback: JSD vs global
+                g_vec = _to_prob_vector(global_counts[pos])
+                matrix[row_idx, pos] = _jsd_two(cl_vec, g_vec)
+
+    # ── Export data matrix ───────────────────────────────────────────────────
+    col_labels = [f"pos_{p + 1}" for p in range(aln_len)]
+    row_labels = [f"cluster_{cl}" for cl in eligible]
+    matrix_df = pd.DataFrame(matrix, index=row_labels, columns=col_labels)
+    matrix_df.index.name = "cluster"
+
+    if summary_dir:
+        safe_mkdir(summary_dir)
+        matrix_fp = os.path.join(
+            summary_dir, f"{hmm_name}.cluster_motif_heatmap_matrix.tsv"
+        )
+        if force or not os.path.exists(matrix_fp):
+            matrix_df.to_csv(matrix_fp, sep="\t")
+            print(f"[embed/cluster] Wrote heatmap matrix: {matrix_fp}")
+
+    # ── Generate figure ──────────────────────────────────────────────────────
+    n_rows = len(eligible)
+    n_cols = aln_len
+
+    # Dynamic figure sizing: cap width at 40 inches to keep plots readable
+    fig_width = min(max(8, n_cols * 0.15), 40)
+    fig_height = max(3, n_rows * 0.6 + 1.5)
+
+    fig, ax = plt.subplots(figsize=(fig_width, fig_height))
+
+    im = ax.imshow(
+        matrix,
+        aspect="auto",
+        cmap=colormap,
+        interpolation="nearest",
+        vmin=0.0,
+    )
+
+    # Axes labels
+    ax.set_yticks(range(n_rows))
+    ax.set_yticklabels(row_labels, fontsize=8)
+
+    # X-tick density: show every Nth position to avoid overcrowding
+    tick_step = max(1, n_cols // 40)
+    xtick_positions = list(range(0, n_cols, tick_step))
+    ax.set_xticks(xtick_positions)
+    ax.set_xticklabels([str(p + 1) for p in xtick_positions], fontsize=7, rotation=90)
+
+    metric_label = {
+        "jsd_vs_global": "JSD vs. global distribution (bits)",
+        "shannon_entropy": "Shannon entropy (bits)",
+    }.get(metric, metric)
+
+    ax.set_xlabel("Alignment position", fontsize=9)
+    ax.set_ylabel("Cluster", fontsize=9)
+    ax.set_title(
+        f"{hmm_name} — Cluster Motif Evolution Heatmap\n"
+        f"Metric: {metric_label}",
+        fontsize=10,
+    )
+
+    cbar = fig.colorbar(im, ax=ax, fraction=0.02, pad=0.02)
+    cbar.set_label(metric_label, fontsize=8)
+
+    plt.tight_layout()
+
+    safe_mkdir(out_dir)
+    for fmt in figure_format:
+        fig_fp = os.path.join(out_dir, f"{hmm_name}.cluster_motif_heatmap.{fmt}")
+        if force or not os.path.exists(fig_fp):
+            fig.savefig(fig_fp, dpi=150, bbox_inches="tight")
+            print(f"[embed/cluster] Wrote heatmap figure: {fig_fp}")
+
+    plt.close(fig)
+    return matrix_df
 
 
 def _score_noise_against_hmms(ids, labels, seqs, hmm_dir, hmm_name,

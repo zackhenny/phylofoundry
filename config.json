@@ -103,6 +103,14 @@
                 "min_cluster_size": 5,
                 "pseudocount": 1e-6,
                 "top_n_sites": 20
+            },
+            "motif_heatmap": {
+                "enabled": false,
+                "metric": "jsd_vs_global",
+                "min_cluster_size": 5,
+                "pseudocount": 1e-6,
+                "figure_format": ["png"],
+                "colormap": "YlOrRd"
             }
         }
     },

@@ -341,6 +341,10 @@ embeddings → PCA → kNN graph → HDBSCAN/Leiden clusters
                 (peripheral_homolog / bridge_sequence / partial_homolog /
                  fusion_or_extension / outlier)
               + optional HMM scoring via hmmscan
+    └── cross-cluster analysis (optional):
+          ├── KL divergence between cluster MSA pairs
+          ├── Jensen–Shannon divergence between cluster MSA pairs
+          └── cluster motif evolution heatmap (JSD vs. global or Shannon entropy)
 ```
 
 ### Membership tiers
@@ -404,15 +408,19 @@ cluster_logos/<HMM>/
 cluster_hmms/<HMM>/
     cluster_<id>.hmm               # Profile HMM (hmmbuild)
 
+cluster_heatmaps/<HMM>/
+    <HMM>.cluster_motif_heatmap.png   # (optional) Cluster motif evolution heatmap
+
 summary/
-    <HMM>.cluster_membership.tsv         # Per-sequence kNN metrics + tier
+    <HMM>.cluster_membership.tsv              # Per-sequence kNN metrics + tier
     <HMM>.cluster_logo_manifest.tsv
     <HMM>.noise_classification.tsv
-    <HMM>.cluster_recruitment.tsv        # (optional, when HMM scoring runs)
-    <HMM>.cluster_kl_divergence.tsv      # (optional) Per-position KL/JSD divergence
-    <HMM>.cluster_kl_top_sites.tsv       # (optional) Top divergent positions per pair
-    <HMM>.cluster_jsd_analysis.tsv       # (optional) Per-position Jensen-Shannon divergence
-    <HMM>.cluster_jsd_top_sites.tsv      # (optional) Top JSD positions per cluster pair
+    <HMM>.cluster_recruitment.tsv             # (optional, when HMM scoring runs)
+    <HMM>.cluster_kl_divergence.tsv           # (optional) Per-position KL/JSD divergence
+    <HMM>.cluster_kl_top_sites.tsv            # (optional) Top divergent positions per pair
+    <HMM>.cluster_jsd_analysis.tsv            # (optional) Per-position Jensen-Shannon divergence
+    <HMM>.cluster_jsd_top_sites.tsv           # (optional) Top JSD positions per cluster pair
+    <HMM>.cluster_motif_heatmap_matrix.tsv    # (optional) Heatmap data matrix (clusters × positions)
 ```
 
 ### KL-divergence differential motif analysis
@@ -512,6 +520,65 @@ The companion file `<HMM>.cluster_jsd_top_sites.tsv` contains the same columns b
 | `pseudocount` | `1e-6` | Pseudocount added to residue counts before normalisation. |
 | `top_n_sites` | `20` | Number of top-divergent sites to report in the summary table. |
 
+---
+
+### Cluster motif evolution heatmap
+
+When `cluster_subworkflow.motif_heatmap.enabled = true`, PhyloFoundry generates a **cluster motif evolution heatmap** that provides a **global view of residue divergence across all embedding clusters simultaneously**.
+
+Unlike pairwise divergence tables or per-cluster sequence logos, the heatmap displays **all clusters and all alignment positions in a single figure**, making it easy to immediately spot:
+
+- Which residues are **conserved across all clusters**
+- Which residues are **cluster-specific**
+- Where **motif shifts** or functional divergence occur between subfamilies
+- Whether differences are **localised** to a few sites or distributed across the alignment
+
+#### Visualization structure
+
+```
+             Alignment position →
+             1   2   3   4   5  ...  L
+cluster_0  [ ░   ▒   ░   ▓   ░ ... ░ ]
+cluster_1  [ ░   ░   ▓   ▒   ░ ... ▓ ]
+cluster_2  [ ▒   ░   ░   ░   ▓ ... ░ ]
+  ...
+```
+
+**Rows** = embedding clusters  
+**Columns** = alignment positions  
+**Colour intensity** = divergence or entropy metric at that position
+
+#### Supported metrics
+
+| Metric | Description |
+|---|---|
+| `jsd_vs_global` (default) | Jensen–Shannon divergence between the cluster's residue distribution and the pooled global distribution at each position.  High values = cluster diverges from the overall motif. |
+| `shannon_entropy` | Shannon entropy (bits) of the cluster's residue distribution at each position.  High values = more variable / less conserved. |
+
+The default `jsd_vs_global` metric highlights positions where individual clusters diverge from the **consensus motif** shared by all clusters — the most informative view for detecting evolutionary innovation or motif loss.
+
+#### Outputs
+
+| File | Description |
+|---|---|
+| `cluster_heatmaps/<HMM>/<HMM>.cluster_motif_heatmap.png` | Heatmap figure (raster). Also `.svg` if `figure_format` includes `"svg"`. |
+| `summary/<HMM>.cluster_motif_heatmap_matrix.tsv` | Underlying data matrix (clusters × positions) for downstream analysis. |
+
+The data matrix uses `cluster_<id>` as row index and `pos_<N>` (1-based) as column headers, matching the alignment coordinates used by the KL and JSD divergence tables.
+
+#### Heatmap config options
+
+| Key | Default | Description |
+|---|---|---|
+| `enabled` | `false` | Enable cluster motif evolution heatmap generation. |
+| `metric` | `"jsd_vs_global"` | Divergence metric to visualise: `"jsd_vs_global"` or `"shannon_entropy"`. |
+| `min_cluster_size` | `5` | Skip clusters with fewer than this many aligned sequences. |
+| `pseudocount` | `1e-6` | Pseudocount added to residue counts before normalisation. |
+| `figure_format` | `["png"]` | Image formats to write (e.g. `["png", "svg"]`). |
+| `colormap` | `"YlOrRd"` | Matplotlib colour-map name for the heatmap cells. |
+
+---
+
 ### Sequence logos
 
 Logos are generated from per-cluster seed MSAs using matplotlib (no extra dependencies required).  Each bar position corresponds to an alignment column; bar height reflects information content (bits); colours reflect amino-acid chemical class.
@@ -558,13 +625,21 @@ Colour scheme:
         "min_cluster_size": 5,
         "pseudocount": 1e-6,
         "top_n_sites": 20
+      },
+      "motif_heatmap": {
+        "enabled": true,
+        "metric": "jsd_vs_global",
+        "min_cluster_size": 5,
+        "pseudocount": 1e-6,
+        "figure_format": ["png", "svg"],
+        "colormap": "YlOrRd"
       }
     }
   }
 }
 ```
 
-> **Note**: This subworkflow requires MAFFT (for MSAs) and optionally HMMER (`hmmbuild`, `hmmscan`) for profile HMM construction and noise scoring.  Both are already listed as core pipeline dependencies.  Sequence logos require only matplotlib, KL divergence analysis requires only the Python standard library, and JSD analysis requires `scipy` — already included in the conda environment.
+> **Note**: This subworkflow requires MAFFT (for MSAs) and optionally HMMER (`hmmbuild`, `hmmscan`) for profile HMM construction and noise scoring.  Both are already listed as core pipeline dependencies.  Sequence logos require only matplotlib, KL divergence analysis requires only the Python standard library, JSD analysis requires `scipy`, and the cluster motif evolution heatmap requires only `matplotlib` — all already included in the conda environment.
 
 ---
 
@@ -864,6 +939,14 @@ An optional sub-section nested under `embeddings` that activates the **cluster-a
         "min_cluster_size": 5,
         "pseudocount": 1e-6,
         "top_n_sites": 20
+    },
+    "motif_heatmap": {
+        "enabled": false,
+        "metric": "jsd_vs_global",
+        "min_cluster_size": 5,
+        "pseudocount": 1e-6,
+        "figure_format": ["png"],
+        "colormap": "YlOrRd"
     }
 }
 ```
@@ -887,6 +970,12 @@ An optional sub-section nested under `embeddings` that activates the **cluster-a
 | `jsd_analysis.min_cluster_size` | `5` | Minimum number of aligned sequences required to include a cluster in JSD analysis. |
 | `jsd_analysis.pseudocount` | `1e-6` | Pseudocount added to residue counts before normalisation (avoids log(0)). |
 | `jsd_analysis.top_n_sites` | `20` | Number of highest-JSD positions to include in the `cluster_jsd_top_sites.tsv` summary. |
+| `motif_heatmap.enabled` | `false` | Enable cluster motif evolution heatmap generation. |
+| `motif_heatmap.metric` | `"jsd_vs_global"` | Divergence metric: `"jsd_vs_global"` (cluster vs. global distribution) or `"shannon_entropy"`. |
+| `motif_heatmap.min_cluster_size` | `5` | Minimum number of aligned sequences required to include a cluster in the heatmap. |
+| `motif_heatmap.pseudocount` | `1e-6` | Pseudocount added to residue counts before normalisation (avoids log(0)). |
+| `motif_heatmap.figure_format` | `["png"]` | Image formats to write (e.g. `["png", "svg"]`). |
+| `motif_heatmap.colormap` | `"YlOrRd"` | Matplotlib colour-map name for the heatmap cells. |
 
 
 ### `ha`
