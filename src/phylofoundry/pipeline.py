@@ -55,6 +55,12 @@ def run_pipeline(cfg):
     hmm_arg = cfg["inputs"].get("hmm_input")
     outdir = cfg["output"]["outdir"]
 
+    # Optional working directory for large intermediate files.
+    # When set, combined_proteomes.faa, combined.hmm, DIAMOND databases, and
+    # embedding vectors are written here instead of outdir.
+    workdir_cfg = cfg["output"].get("workdir")
+    work_base = os.path.abspath(workdir_cfg) if workdir_cfg else outdir
+
     start_at = cfg["workflow"]["start_at"]
     stop_after = cfg["workflow"]["stop_after"]
     force = bool(cfg["workflow"]["force"])
@@ -82,6 +88,9 @@ def run_pipeline(cfg):
     discover_cfg = cfg.get("discover", {})
 
     safe_mkdir(outdir)
+    if work_base != outdir:
+        safe_mkdir(work_base)
+        print(f"[pipeline] Working directory: {work_base}")
 
     # ── Execution planning and logging scaffold ────────────────────────────
     # Build the plan before any work begins so that the logs/ directory and
@@ -142,12 +151,16 @@ def run_pipeline(cfg):
     post_dir = paths.conservation_metrics_dir
     codon_dir = paths.codon_dir
     hyphy_dir = paths.hyphy_dir
-    emb_dir = paths.embeddings_dir
+    # Embedding vectors can be large; place them in work_base when a separate
+    # working directory is configured.
+    emb_dir = os.path.join(work_base, "embeddings")
     clade_assign_dir = paths.clade_assign_dir
     curated_dir = paths.curated_dir
 
     for d in paths.all_output_dirs():
         safe_mkdir(d)
+    # Ensure emb_dir exists even when it lives outside outdir
+    safe_mkdir(emb_dir)
 
     write_json(cfg, paths.resolved_config_json)
 
@@ -191,8 +204,10 @@ def run_pipeline(cfg):
         if not hmm_files:
             raise SystemExit("No .hmm files found.")
 
-    combined_faa = os.path.join(outdir, "combined_proteomes.faa")
-    combined_hmm = os.path.join(outdir, "combined.hmm")
+    # Large intermediate files go to work_base (may equal outdir when no
+    # separate working directory is configured).
+    combined_faa = os.path.join(work_base, "combined_proteomes.faa")
+    combined_hmm = os.path.join(work_base, "combined.hmm")
 
     # ── STEP: prep ─────────────────────────────────────────────────────────
     if step_in_range("prep", start_at, stop_after):
@@ -228,7 +243,7 @@ def run_pipeline(cfg):
                 if use_diamond:
                     from .tasks import diamond as diamond_task
                     scan_df, search_df, best_df = diamond_task.run_diamond(
-                        cfg, genomes, combined_faa, outdir, summary_dir, force
+                        cfg, genomes, combined_faa, work_base, summary_dir, force
                     )
                 else:
                     scan_df, search_df, best_df = hmmer.run_hmmer(

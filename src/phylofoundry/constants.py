@@ -19,16 +19,20 @@ STEPS = [
 # Defaults
 DEFAULT_CONFIG = {
     "inputs": {
-        "faa_dir": None,        # directory of *.faa OR a single .faa
-        "hmm_input": None,      # directory of *.hmm OR a single .hmm
-        "diamond_query": None,  # path to .faa/.fasta, multi-FASTA, or directory of .faa query files
-        "cds_dir": None,        # optional directory of CDS nucleotide FASTAs (per genome)
-        "gtdb_dir": None,       # optional directory of GTA-Tk output
-        "taxonomy_file": None,  # optional TSV with genome->lineage mapping
-        "pfam_dir": None        # optional directory of Pfam .dat and .hmm files
+        "faa_dir": None,               # directory of *.faa OR a single .faa
+        "hmm_input": None,             # directory of *.hmm OR a single .hmm
+        "diamond_query": None,         # path to .faa/.fasta, multi-FASTA, or directory of .faa query files
+        "cds_dir": None,               # optional directory of CDS nucleotide FASTAs (per genome)
+        "gtdb_dir": None,              # optional directory of GTDB-Tk output
+        "taxonomy_file": None,         # optional TSV with genome->lineage mapping (columns: genome, lineage)
+        "globdb_taxonomy_file": None,  # optional GlobDB taxonomy TSV (headerless: col1=genome_id, col2=GTDB taxonomy)
+        "pfam_dir": None               # optional directory of Pfam .dat and .hmm files
     },
     "output": {
-        "outdir": None
+        "outdir": None,
+        "workdir": None  # optional separate working directory for large intermediate files
+                         # (combined_proteomes.faa, combined.hmm, DIAMOND databases, embeddings)
+                         # If unset, intermediate files are written to outdir.
     },
     "resources": {
         "cpu": 8
