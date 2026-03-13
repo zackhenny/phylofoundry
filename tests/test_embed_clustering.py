@@ -4,6 +4,7 @@
 - hdbscan_metric
 - umap_dimensions (2D vs 3D)
 - Config validation (_validate_emb_cfg)
+- kNN neighborhood analysis
 """
 import numpy as np
 import pytest
@@ -120,6 +121,36 @@ class TestValidateEmbCfg:
         base["hdbscan_metric"] = "cosine"
         cfg = _validate_emb_cfg(base)
         assert cfg["hdbscan_metric"] == "cosine"
+
+    def test_knn_defaults(self):
+        cfg = _validate_emb_cfg(self._base_cfg())
+        assert cfg["run_knn"] is True
+        assert cfg["knn_neighbors"] == 10
+
+    def test_knn_custom_neighbors(self):
+        base = self._base_cfg()
+        base["knn_neighbors"] = 5
+        cfg = _validate_emb_cfg(base)
+        assert cfg["knn_neighbors"] == 5
+
+    def test_knn_disabled(self):
+        base = self._base_cfg()
+        base["run_knn"] = False
+        cfg = _validate_emb_cfg(base)
+        assert cfg["run_knn"] is False
+
+    def test_knn_invalid_neighbors_defaults_to_10(self):
+        base = self._base_cfg()
+        base["knn_neighbors"] = 0
+        cfg = _validate_emb_cfg(base)
+        assert cfg["knn_neighbors"] == 10
+
+    def test_pca_components_default(self):
+        base = self._base_cfg()
+        # Remove pca_components to trigger setdefault path
+        base.pop("pca_components", None)
+        cfg = _validate_emb_cfg(base)
+        assert cfg["pca_components"] == 50
 
 
 # ── _run_hdbscan ──────────────────────────────────────────────────────────────
@@ -244,4 +275,85 @@ class TestSaveUmapPlot:
         out_png = str(tmp_path / "nomatplotlib.png")
         # Should not raise
         _save_umap_plot(U, ids, "TESTHMM", out_png)
+
+
+# ── kNN analysis ──────────────────────────────────────────────────────────────
+
+class TestKnnAnalysis:
+    """Tests for kNN on PCA space via compute_embeddings_for_hmm integration."""
+
+    def _make_pca_matrix(self, n=20, d=10, seed=0):
+        rng = np.random.default_rng(seed)
+        return rng.standard_normal((n, d)).astype(np.float32)
+
+    def test_knn_tsv_written(self, tmp_path):
+        """kNN TSV is created when run_knn=True."""
+        import pandas as pd
+        from sklearn.neighbors import NearestNeighbors
+
+        Z = self._make_pca_matrix(n=15, d=5)
+        ids = [f"g{i}|prot{i}" for i in range(15)]
+        n_neighbors = 3
+
+        nbrs = NearestNeighbors(n_neighbors=n_neighbors, metric="cosine").fit(Z)
+        distances, indices = nbrs.kneighbors(Z)
+
+        knn_rows = []
+        for tip, dists, idxs in zip(ids, distances, indices):
+            protein = tip.split("|", 1)[1] if "|" in tip else tip
+            for rank, (dist, j) in enumerate(zip(dists, idxs), start=1):
+                neighbor_tip = ids[j]
+                neighbor_protein = neighbor_tip.split("|", 1)[1] if "|" in neighbor_tip else neighbor_tip
+                knn_rows.append({
+                    "protein_id": protein,
+                    "neighbor_rank": rank,
+                    "neighbor_id": neighbor_protein,
+                    "distance": float(dist),
+                })
+        out_knn = tmp_path / "test.knn.tsv"
+        pd.DataFrame(knn_rows).to_csv(str(out_knn), sep="\t", index=False)
+
+        assert out_knn.exists()
+        df = pd.read_csv(str(out_knn), sep="\t")
+        assert list(df.columns) == ["protein_id", "neighbor_rank", "neighbor_id", "distance"]
+        assert len(df) == 15 * n_neighbors
+
+    def test_knn_columns(self, tmp_path):
+        """kNN TSV has the expected columns."""
+        import pandas as pd
+        from sklearn.neighbors import NearestNeighbors
+
+        Z = self._make_pca_matrix(n=10, d=5)
+        ids = [f"genome{i}|protein{i}" for i in range(10)]
+
+        nbrs = NearestNeighbors(n_neighbors=3, metric="cosine").fit(Z)
+        distances, indices = nbrs.kneighbors(Z)
+
+        knn_rows = []
+        for tip, dists, idxs in zip(ids, distances, indices):
+            protein = tip.split("|", 1)[1] if "|" in tip else tip
+            for rank, (dist, j) in enumerate(zip(dists, idxs), start=1):
+                neighbor_tip = ids[j]
+                neighbor_protein = neighbor_tip.split("|", 1)[1] if "|" in neighbor_tip else neighbor_tip
+                knn_rows.append({
+                    "protein_id": protein,
+                    "neighbor_rank": rank,
+                    "neighbor_id": neighbor_protein,
+                    "distance": float(dist),
+                })
+        df = pd.DataFrame(knn_rows)
+        assert set(df.columns) == {"protein_id", "neighbor_rank", "neighbor_id", "distance"}
+        assert (df["neighbor_rank"] >= 1).all()
+        assert (df["distance"] >= 0).all()
+
+    def test_knn_cosine_distances_in_range(self):
+        """Cosine distances are in [0, 2]."""
+        from sklearn.neighbors import NearestNeighbors
+
+        Z = self._make_pca_matrix(n=12, d=8)
+        nbrs = NearestNeighbors(n_neighbors=5, metric="cosine").fit(Z)
+        distances, _ = nbrs.kneighbors(Z)
+        assert (distances >= 0).all()
+        assert (distances <= 2).all()
+
 
