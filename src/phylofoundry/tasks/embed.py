@@ -1012,6 +1012,43 @@ def run_cluster_subworkflow(hmm_name, seqs, ids, Z, labels, emb_cfg,
                 top_df.to_csv(top_fp, sep="\t", index=False)
                 print(f"[embed/cluster] Wrote top divergent sites: {top_fp}")
 
+    # ── 9. Jensen–Shannon divergence analysis ────────────────────────────────
+    jsd_cfg = sub_cfg.get("jsd_analysis", {})
+    if jsd_cfg.get("enabled", False) and build_msas and len(unique_clusters) >= 2:
+        min_cl_size = int(jsd_cfg.get("min_cluster_size", 5))
+        pseudocount = float(jsd_cfg.get("pseudocount", 1e-6))
+        top_n_sites = int(jsd_cfg.get("top_n_sites", 20))
+
+        # Collect alignment paths for clusters that have a valid MSA
+        cluster_aln_paths = {}
+        for cl_id in unique_clusters:
+            aln_fp = os.path.join(aln_dir, f"cluster_{cl_id}.seed.aln.faa")
+            if os.path.exists(aln_fp):
+                cluster_aln_paths[cl_id] = aln_fp
+
+        if len(cluster_aln_paths) >= 2:
+            jsd_df, jsd_top_df = _compute_cluster_jsd_analysis(
+                hmm_name,
+                cluster_aln_paths,
+                min_cluster_size=min_cl_size,
+                pseudocount=pseudocount,
+                top_n_sites=top_n_sites,
+            )
+            if not jsd_df.empty and summary_dir:
+                safe_mkdir(summary_dir)
+                jsd_fp = os.path.join(
+                    summary_dir, f"{hmm_name}.cluster_jsd_analysis.tsv"
+                )
+                jsd_df.to_csv(jsd_fp, sep="\t", index=False)
+                print(f"[embed/cluster] Wrote JSD analysis table: {jsd_fp}")
+            if not jsd_top_df.empty and summary_dir:
+                safe_mkdir(summary_dir)
+                jsd_top_fp = os.path.join(
+                    summary_dir, f"{hmm_name}.cluster_jsd_top_sites.tsv"
+                )
+                jsd_top_df.to_csv(jsd_top_fp, sep="\t", index=False)
+                print(f"[embed/cluster] Wrote JSD top divergent sites: {jsd_top_fp}")
+
     print(f"[embed/cluster] Cluster subworkflow complete for {hmm_name}.")
 
 
@@ -1196,6 +1233,178 @@ def _compute_cluster_kl_divergence(
     # ── Build top-sites summary ───────────────────────────────────────────────
     top_rows = []
     for pair_label, grp in per_position_df.groupby("pair"):
+        top = grp.nlargest(top_n_sites, "js_divergence")
+        top_rows.append(top)
+
+    top_sites_df = pd.concat(top_rows, ignore_index=True) if top_rows else pd.DataFrame()
+
+    return per_position_df, top_sites_df
+
+
+def _compute_cluster_jsd_analysis(
+    hmm_name,
+    cluster_aln_paths,
+    min_cluster_size=5,
+    pseudocount=1e-6,
+    top_n_sites=20,
+):
+    """Compute per-position Jensen–Shannon divergence between all cluster MSA pairs.
+
+    For each pair of clusters whose MSAs share a common alignment coordinate
+    system, this function:
+
+    1. Reads each cluster MSA and tallies amino-acid counts at every column.
+    2. Adds a pseudocount to avoid zero probabilities.
+    3. Computes the **symmetric Jensen–Shannon divergence (JSD)** (range 0–1
+       bits) at every alignment position using
+       :func:`scipy.spatial.distance.jensenshannon`.
+    4. Returns two DataFrames:
+
+       * **per_position** – one row per (cluster_pair, alignment_position).
+       * **top_sites** – the ``top_n_sites`` highest-JSD positions per pair.
+
+    Unlike :func:`_compute_cluster_kl_divergence`, this function focuses
+    exclusively on the symmetric JSD metric, which is bounded, stable with
+    small probabilities, and easier to interpret when comparing multiple
+    distributions.
+
+    Parameters
+    ----------
+    hmm_name : str
+        HMM / hit-set identifier used for output labelling.
+    cluster_aln_paths : dict
+        Mapping of ``{cluster_id: aligned_fasta_path}``.  All MSAs must have
+        the same number of alignment columns.
+    min_cluster_size : int
+        Clusters with fewer aligned sequences than this value are skipped.
+    pseudocount : float
+        Laplace-like pseudocount added to every residue count before
+        normalisation.  Prevents log(0) errors.
+    top_n_sites : int
+        Number of top-divergent sites to include in the summary table.
+
+    Returns
+    -------
+    per_position_df : pd.DataFrame
+        Columns: ``hmm_name``, ``cluster_A``, ``cluster_B``, ``pair``,
+        ``aln_position``, ``js_divergence``, ``top_aa_A``, ``top_aa_B``,
+        ``n_seqs_A``, ``n_seqs_B``.
+    top_sites_df : pd.DataFrame
+        Same schema as *per_position_df*, restricted to the highest-JSD
+        positions per cluster pair.
+    """
+    import sys
+    from itertools import combinations
+
+    import numpy as np
+    from scipy.spatial.distance import jensenshannon as scipy_jsd
+
+    from ..utils.bio import read_fasta
+
+    AA_ALPHABET = list("ACDEFGHIKLMNPQRSTVWY")
+    GAP_CHARS = set("-. X?*")
+
+    def _site_counts(aln_seqs):
+        """Return a list of Counter objects, one per alignment column."""
+        from collections import Counter
+        if not aln_seqs:
+            return []
+        seqs_list = list(aln_seqs.values())
+        n_cols = len(seqs_list[0])
+        counts = []
+        for col_idx in range(n_cols):
+            c = Counter()
+            for seq in seqs_list:
+                if col_idx < len(seq):
+                    aa = seq[col_idx].upper()
+                    if aa not in GAP_CHARS and aa in set(AA_ALPHABET):
+                        c[aa] += 1
+            counts.append(c)
+        return counts
+
+    def _to_prob_vector(counts, pc=pseudocount):
+        """Convert a Counter to a normalised probability vector over AA_ALPHABET."""
+        raw = np.array([counts.get(a, 0) + pc for a in AA_ALPHABET], dtype=float)
+        return raw / raw.sum()
+
+    def _top_aa(counts):
+        """Return the most common amino acid at a position, or '-' if all gaps."""
+        if not counts:
+            return "-"
+        return max(counts, key=counts.get)
+
+    # ── Load cluster MSAs and compute per-column counts ───────────────────────
+    cluster_counts = {}   # cl_id -> list[Counter]
+    cluster_n_seqs = {}   # cl_id -> int
+
+    for cl_id, aln_fp in cluster_aln_paths.items():
+        try:
+            aln_seqs = read_fasta(aln_fp)
+        except Exception as exc:
+            print(
+                f"[embed/cluster/jsd] Could not read {aln_fp}: {exc}",
+                file=sys.stderr,
+            )
+            continue
+        n_seqs = len(aln_seqs)
+        if n_seqs < min_cluster_size:
+            print(
+                f"[embed/cluster/jsd] Cluster {cl_id} ({n_seqs} seqs) is below "
+                f"min_cluster_size={min_cluster_size} — skipping.",
+                file=sys.stderr,
+            )
+            continue
+        cluster_counts[cl_id] = _site_counts(aln_seqs)
+        cluster_n_seqs[cl_id] = n_seqs
+
+    eligible = sorted(cluster_counts.keys())
+    if len(eligible) < 2:
+        return pd.DataFrame(), pd.DataFrame()
+
+    # ── Compute pairwise JSD ──────────────────────────────────────────────────
+    per_position_rows = []
+
+    for cl_a, cl_b in combinations(eligible, 2):
+        counts_a = cluster_counts[cl_a]
+        counts_b = cluster_counts[cl_b]
+
+        # Alignment lengths must match; take the shorter to be safe
+        L = min(len(counts_a), len(counts_b))
+        if L == 0:
+            continue
+
+        n_a = cluster_n_seqs[cl_a]
+        n_b = cluster_n_seqs[cl_b]
+        pair_label = f"cluster_{cl_a}:cluster_{cl_b}"
+
+        for pos in range(L):
+            p_vec = _to_prob_vector(counts_a[pos])
+            q_vec = _to_prob_vector(counts_b[pos])
+            # scipy_jsd returns the square-root form; square to get [0,1] bits
+            jsd_val = float(scipy_jsd(p_vec, q_vec, base=2) ** 2)
+            per_position_rows.append(
+                {
+                    "hmm_name": hmm_name,
+                    "cluster_A": cl_a,
+                    "cluster_B": cl_b,
+                    "pair": pair_label,
+                    "aln_position": pos + 1,
+                    "js_divergence": round(jsd_val, 6),
+                    "top_aa_A": _top_aa(counts_a[pos]),
+                    "top_aa_B": _top_aa(counts_b[pos]),
+                    "n_seqs_A": n_a,
+                    "n_seqs_B": n_b,
+                }
+            )
+
+    if not per_position_rows:
+        return pd.DataFrame(), pd.DataFrame()
+
+    per_position_df = pd.DataFrame(per_position_rows)
+
+    # ── Build top-sites summary ───────────────────────────────────────────────
+    top_rows = []
+    for _, grp in per_position_df.groupby("pair"):
         top = grp.nlargest(top_n_sites, "js_divergence")
         top_rows.append(top)
 
