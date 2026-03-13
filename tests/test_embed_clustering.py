@@ -1152,3 +1152,260 @@ class TestComputeClusterJsdAnalysis:
         assert (df["js_divergence"] <= 1).all()
 
 
+
+
+# ── _generate_cluster_motif_heatmap ───────────────────────────────────────────
+
+from phylofoundry.tasks.embed import _generate_cluster_motif_heatmap
+
+
+def _write_aligned_fasta_hm(path, seqs):
+    """Write an aligned FASTA to *path* (dict {id: seq})."""
+    with open(path, "w") as fh:
+        for sid, seq in seqs.items():
+            fh.write(f">{sid}\n{seq}\n")
+
+
+@requires_matplotlib
+class TestGenerateClusterMotifHeatmap:
+    """Unit tests for _generate_cluster_motif_heatmap()."""
+
+    def _make_aln_dir(self, tmp_path, clusters):
+        """Write per-cluster aligned FASTAs and return {cl_id: path} dict."""
+        paths = {}
+        for cl_id, seqs in clusters.items():
+            fp = str(tmp_path / f"cluster_{cl_id}.seed.aln.faa")
+            _write_aligned_fasta_hm(fp, seqs)
+            paths[cl_id] = fp
+        return paths
+
+    # ── smoke tests ───────────────────────────────────────────────────────────
+
+    def test_returns_dataframe(self, tmp_path):
+        """Should return a DataFrame (the data matrix)."""
+        clusters = {
+            0: {f"s{i}": "ACDEF" for i in range(6)},
+            1: {f"t{i}": "GHIKL" for i in range(6)},
+        }
+        paths = self._make_aln_dir(tmp_path, clusters)
+        result = _generate_cluster_motif_heatmap(
+            "HMM1", paths,
+            out_dir=str(tmp_path / "heatmaps"),
+            summary_dir=str(tmp_path / "summary"),
+        )
+        import pandas as pd
+        assert isinstance(result, pd.DataFrame)
+
+    def test_matrix_shape(self, tmp_path):
+        """Matrix should have rows=n_clusters, cols=aln_length."""
+        aln_len = 8
+        clusters = {
+            0: {f"s{i}": "A" * aln_len for i in range(6)},
+            1: {f"t{i}": "C" * aln_len for i in range(6)},
+            2: {f"u{i}": "G" * aln_len for i in range(6)},
+        }
+        paths = self._make_aln_dir(tmp_path, clusters)
+        result = _generate_cluster_motif_heatmap(
+            "HMM1", paths,
+            out_dir=str(tmp_path / "heatmaps"),
+            summary_dir=str(tmp_path / "summary"),
+        )
+        assert result.shape == (3, aln_len)
+
+    def test_matrix_values_in_range_jsd(self, tmp_path):
+        """JSD vs global values must lie in [0, 1]."""
+        clusters = {
+            0: {f"s{i}": "AAAA" for i in range(6)},
+            1: {f"t{i}": "CCCC" for i in range(6)},
+        }
+        paths = self._make_aln_dir(tmp_path, clusters)
+        import numpy as np
+        result = _generate_cluster_motif_heatmap(
+            "HMM1", paths,
+            out_dir=str(tmp_path / "heatmaps"),
+            summary_dir=str(tmp_path / "summary"),
+            metric="jsd_vs_global",
+        )
+        assert (result.values >= 0).all()
+        assert (result.values <= 1.0 + 1e-10).all()
+
+    def test_matrix_values_nonneg_entropy(self, tmp_path):
+        """Shannon entropy values must be non-negative."""
+        clusters = {
+            0: {f"s{i}": "ACDE" for i in range(6)},
+            1: {f"t{i}": "FGHI" for i in range(6)},
+        }
+        paths = self._make_aln_dir(tmp_path, clusters)
+        result = _generate_cluster_motif_heatmap(
+            "HMM1", paths,
+            out_dir=str(tmp_path / "heatmaps"),
+            summary_dir=str(tmp_path / "summary"),
+            metric="shannon_entropy",
+        )
+        assert (result.values >= 0).all()
+
+    def test_row_labels(self, tmp_path):
+        """Row labels should be 'cluster_<id>' for each cluster."""
+        clusters = {
+            0: {f"s{i}": "ACDEF" for i in range(6)},
+            1: {f"t{i}": "GHIKL" for i in range(6)},
+        }
+        paths = self._make_aln_dir(tmp_path, clusters)
+        result = _generate_cluster_motif_heatmap(
+            "HMM1", paths,
+            out_dir=str(tmp_path / "heatmaps"),
+            summary_dir=str(tmp_path / "summary"),
+        )
+        assert list(result.index) == ["cluster_0", "cluster_1"]
+
+    def test_column_labels(self, tmp_path):
+        """Column labels should be 'pos_<N>' (1-based)."""
+        aln_len = 5
+        clusters = {
+            0: {f"s{i}": "A" * aln_len for i in range(6)},
+            1: {f"t{i}": "C" * aln_len for i in range(6)},
+        }
+        paths = self._make_aln_dir(tmp_path, clusters)
+        result = _generate_cluster_motif_heatmap(
+            "HMM1", paths,
+            out_dir=str(tmp_path / "heatmaps"),
+            summary_dir=str(tmp_path / "summary"),
+        )
+        assert list(result.columns) == [f"pos_{p}" for p in range(1, aln_len + 1)]
+
+    def test_figure_file_written(self, tmp_path):
+        """PNG figure should be written to out_dir."""
+        import os
+        clusters = {
+            0: {f"s{i}": "ACDEF" for i in range(6)},
+            1: {f"t{i}": "GHIKL" for i in range(6)},
+        }
+        paths = self._make_aln_dir(tmp_path, clusters)
+        heatmap_dir = tmp_path / "heatmaps"
+        _generate_cluster_motif_heatmap(
+            "HMM1", paths,
+            out_dir=str(heatmap_dir),
+            summary_dir=str(tmp_path / "summary"),
+            figure_format=["png"],
+        )
+        assert (heatmap_dir / "HMM1.cluster_motif_heatmap.png").exists()
+
+    def test_matrix_tsv_written(self, tmp_path):
+        """Matrix TSV should be written to summary_dir."""
+        clusters = {
+            0: {f"s{i}": "ACDEF" for i in range(6)},
+            1: {f"t{i}": "GHIKL" for i in range(6)},
+        }
+        paths = self._make_aln_dir(tmp_path, clusters)
+        summary_dir = tmp_path / "summary"
+        _generate_cluster_motif_heatmap(
+            "HMM1", paths,
+            out_dir=str(tmp_path / "heatmaps"),
+            summary_dir=str(summary_dir),
+        )
+        assert (summary_dir / "HMM1.cluster_motif_heatmap_matrix.tsv").exists()
+
+    def test_identical_clusters_low_jsd(self, tmp_path):
+        """Identical clusters should produce near-zero JSD vs global."""
+        seq = "ACDEFGHIKL"
+        clusters = {
+            0: {f"s{i}": seq for i in range(8)},
+            1: {f"t{i}": seq for i in range(8)},
+        }
+        paths = self._make_aln_dir(tmp_path, clusters)
+        result = _generate_cluster_motif_heatmap(
+            "HMM1", paths,
+            out_dir=str(tmp_path / "heatmaps"),
+            summary_dir=str(tmp_path / "summary"),
+            metric="jsd_vs_global",
+        )
+        # Identical distributions → JSD vs pooled global ≈ 0
+        assert result.values.max() < 0.01
+
+    def test_distinct_clusters_nonzero_jsd(self, tmp_path):
+        """Completely different clusters should produce high JSD vs global."""
+        clusters = {
+            0: {f"s{i}": "AAAA" for i in range(8)},
+            1: {f"t{i}": "CCCC" for i in range(8)},
+        }
+        paths = self._make_aln_dir(tmp_path, clusters)
+        result = _generate_cluster_motif_heatmap(
+            "HMM1", paths,
+            out_dir=str(tmp_path / "heatmaps"),
+            summary_dir=str(tmp_path / "summary"),
+            metric="jsd_vs_global",
+        )
+        assert result.values.max() > 0.1
+
+    # ── edge case / guard tests ───────────────────────────────────────────────
+
+    def test_single_cluster_returns_empty(self, tmp_path):
+        """Only one eligible cluster → return empty DataFrame."""
+        import pandas as pd
+        clusters = {0: {f"s{i}": "ACDE" for i in range(6)}}
+        paths = self._make_aln_dir(tmp_path, clusters)
+        result = _generate_cluster_motif_heatmap(
+            "HMM1", paths,
+            out_dir=str(tmp_path / "heatmaps"),
+            summary_dir=str(tmp_path / "summary"),
+        )
+        assert isinstance(result, pd.DataFrame)
+        assert result.empty
+
+    def test_min_cluster_size_filters(self, tmp_path):
+        """Clusters below min_cluster_size should be excluded."""
+        import pandas as pd
+        clusters = {
+            0: {f"s{i}": "ACDE" for i in range(2)},  # too small
+            1: {f"t{i}": "FGHI" for i in range(2)},  # too small
+        }
+        paths = self._make_aln_dir(tmp_path, clusters)
+        result = _generate_cluster_motif_heatmap(
+            "HMM1", paths,
+            out_dir=str(tmp_path / "heatmaps"),
+            summary_dir=str(tmp_path / "summary"),
+            min_cluster_size=5,
+        )
+        assert isinstance(result, pd.DataFrame)
+        assert result.empty
+
+    def test_gaps_skipped(self, tmp_path):
+        """Gap characters should not affect matrix validity."""
+        clusters = {
+            0: {f"s{i}": "--AA--" for i in range(6)},
+            1: {f"t{i}": "--CC--" for i in range(6)},
+        }
+        paths = self._make_aln_dir(tmp_path, clusters)
+        result = _generate_cluster_motif_heatmap(
+            "HMM1", paths,
+            out_dir=str(tmp_path / "heatmaps"),
+            summary_dir=str(tmp_path / "summary"),
+        )
+        assert (result.values >= 0).all()
+
+    def test_force_overwrites_existing(self, tmp_path):
+        """force=True should overwrite an existing figure file."""
+        import os
+        clusters = {
+            0: {f"s{i}": "ACDEF" for i in range(6)},
+            1: {f"t{i}": "GHIKL" for i in range(6)},
+        }
+        paths = self._make_aln_dir(tmp_path, clusters)
+        heatmap_dir = tmp_path / "heatmaps"
+        heatmap_dir.mkdir(parents=True, exist_ok=True)
+        existing = heatmap_dir / "HMM1.cluster_motif_heatmap.png"
+        existing.write_bytes(b"dummy")
+        mtime_before = existing.stat().st_mtime
+
+        import time
+        time.sleep(0.05)
+
+        _generate_cluster_motif_heatmap(
+            "HMM1", paths,
+            out_dir=str(heatmap_dir),
+            summary_dir=str(tmp_path / "summary"),
+            figure_format=["png"],
+            force=True,
+        )
+        assert existing.stat().st_mtime > mtime_before
+        assert existing.stat().st_size > len(b"dummy")
