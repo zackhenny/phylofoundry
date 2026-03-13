@@ -6,10 +6,12 @@
         "cds_dir": null,
         "gtdb_dir": null,
         "taxonomy_file": null,
+        "globdb_taxonomy_file": null,
         "pfam_dir": null
     },
     "output": {
-        "outdir": null
+        "outdir": null,
+        "workdir": null
     },
     "resources": {
         "cpu": 8

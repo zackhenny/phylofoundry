@@ -38,12 +38,13 @@ def run_taxonomy_integrate(cfg, summary_dir):
 
     gtdb_dir = cfg["inputs"].get("gtdb_dir")
     tax_file = cfg["inputs"].get("taxonomy_file")
+    globdb_tax_file = cfg["inputs"].get("globdb_taxonomy_file")
 
-    if not (gtdb_dir or tax_file):
+    if not (gtdb_dir or tax_file or globdb_tax_file):
         print("[taxonomy_integrate] No taxonomy source configured; skipping.")
         return {}
 
-    tax_map = _load_taxonomy(gtdb_dir, tax_file)
+    tax_map = _load_taxonomy(gtdb_dir, tax_file, globdb_tax_file)
     if not tax_map:
         print("[taxonomy_integrate] No taxonomy data loaded.")
         return {}

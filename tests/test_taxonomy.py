@@ -182,10 +182,123 @@ def test_compute_kl_uses_detected_clades_when_clades_tsv_missing(tmp_path, monke
     monkeypatch.setattr(post, "kl_divergence", lambda *_args, **_kwargs: 0.0)
 
     cfg = {
-        "inputs": {"gtdb_dir": None, "taxonomy_file": None},
+        "inputs": {"gtdb_dir": None, "taxonomy_file": None, "globdb_taxonomy_file": None},
         "post": {"enabled": True, "compute_kl": True, "clades_tsv": None, "kl_pairs": None}
     }
     post.run_post(cfg, str(tree_dir), str(clipkit_dir), "", str(post_dir), str(summary_dir), None, force=True)
 
     kl_fp = post_dir / "kl_divergence.tsv"
     assert os.path.exists(kl_fp)
+
+
+# ── GlobDB taxonomy tests ──────────────────────────────────────────────────
+
+
+def test_load_taxonomy_globdb_headerless(tmp_path):
+    """GlobDB taxonomy files are headerless TSVs: col1=genome_id, col2=taxonomy."""
+    tax_fp = tmp_path / "globdb_taxonomy.tsv"
+    with open(tax_fp, "w") as f:
+        f.write("genome1\td__Bacteria;p__Firmicutes;g__Bacillus\n")
+        f.write("genome2\td__Archaea;p__Euryarchaeota;g__Methanobacterium\n")
+        f.write("genome3.faa\td__Bacteria;p__Proteobacteria;g__Escherichia\n")
+
+    tax_map = post._load_taxonomy(None, None, str(tax_fp))
+
+    assert tax_map["genome1"] == "d__Bacteria;p__Firmicutes;g__Bacillus"
+    assert tax_map["genome2"] == "d__Archaea;p__Euryarchaeota;g__Methanobacterium"
+    # Extension normalization: "genome3.faa" → "genome3"
+    assert tax_map["genome3"] == "d__Bacteria;p__Proteobacteria;g__Escherichia"
+
+
+def test_load_taxonomy_globdb_overrides_gtdb(tmp_path):
+    """GlobDB taxonomy entries override GTDB entries for the same genome."""
+    # GTDB source
+    gtdb_dir = tmp_path / "gtdb_out"
+    gtdb_dir.mkdir()
+    with open(gtdb_dir / "gtdbtk.bac120.summary.tsv", "w") as f:
+        f.write("user_genome\tclassification\n")
+        f.write("genomeA\tGTDB_TaxA\n")
+
+    # GlobDB source (overrides GTDB for genomeA)
+    globdb_fp = tmp_path / "globdb.tsv"
+    with open(globdb_fp, "w") as f:
+        f.write("genomeA\tGlobDB_TaxA\n")
+        f.write("genomeB\tGlobDB_TaxB\n")
+
+    tax_map = post._load_taxonomy(str(gtdb_dir), None, str(globdb_fp))
+
+    assert tax_map["genomeA"] == "GlobDB_TaxA"
+    assert tax_map["genomeB"] == "GlobDB_TaxB"
+
+
+def test_load_taxonomy_globdb_warns_on_header(tmp_path, capsys):
+    """A warning is printed when the first row looks like an accidental header."""
+    tax_fp = tmp_path / "globdb_with_header.tsv"
+    with open(tax_fp, "w") as f:
+        f.write("genome_id\ttaxonomy\n")
+        f.write("genome1\td__Bacteria;p__Firmicutes\n")
+
+    tax_map = post._load_taxonomy(None, None, str(tax_fp))
+
+    captured = capsys.readouterr()
+    assert "looks like a header" in captured.out
+    # Both rows are treated as data since the file is headerless by definition;
+    # the "header" row itself is included (with a warning).
+    assert "genome_id" in tax_map
+    assert "genome1" in tax_map
+
+
+def test_load_taxonomy_globdb_too_few_columns(tmp_path, capsys):
+    """Files with fewer than 2 columns are skipped with a warning."""
+    tax_fp = tmp_path / "single_col.tsv"
+    with open(tax_fp, "w") as f:
+        f.write("genome1\n")
+        f.write("genome2\n")
+
+    tax_map = post._load_taxonomy(None, None, str(tax_fp))
+
+    captured = capsys.readouterr()
+    assert "fewer than 2 columns" in captured.out
+    assert len(tax_map) == 0
+
+
+def test_taxonomy_integrate_uses_globdb(tmp_path):
+    """run_taxonomy_integrate correctly writes genome_taxonomy.tsv from GlobDB file."""
+    from phylofoundry.tasks.taxonomy_integrate import run_taxonomy_integrate
+
+    summary_dir = tmp_path / "summary"
+    summary_dir.mkdir()
+
+    # Create a minimal best_hits file so the annotated output is also tested
+    pd.DataFrame({"genome": ["genome1.faa", "genome2"], "protein": ["p1", "p2"]}).to_csv(
+        summary_dir / "best_hits.competitive.tsv", sep="\t", index=False
+    )
+
+    globdb_fp = tmp_path / "globdb.tsv"
+    with open(globdb_fp, "w") as f:
+        f.write("genome1\td__Bacteria;p__Firmicutes\n")
+        f.write("genome2\td__Archaea;p__Euryarchaeota\n")
+
+    cfg = {
+        "inputs": {
+            "gtdb_dir": None,
+            "taxonomy_file": None,
+            "globdb_taxonomy_file": str(globdb_fp),
+        }
+    }
+    tax_map = run_taxonomy_integrate(cfg, str(summary_dir))
+
+    assert len(tax_map) == 2
+    assert tax_map["genome1"] == "d__Bacteria;p__Firmicutes"
+
+    genome_tax_fp = summary_dir / "genome_taxonomy.tsv"
+    assert genome_tax_fp.exists()
+    df = pd.read_csv(genome_tax_fp, sep="\t")
+    assert set(df["genome"]) == {"genome1", "genome2"}
+
+    annotated_fp = summary_dir / "best_hits.with_taxonomy.tsv"
+    assert annotated_fp.exists()
+    ann_df = pd.read_csv(annotated_fp, sep="\t")
+    assert "taxonomy" in ann_df.columns
+    row1 = ann_df[ann_df["genome"] == "genome1.faa"].iloc[0]
+    assert row1["taxonomy"] == "d__Bacteria;p__Firmicutes"

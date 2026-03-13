@@ -216,6 +216,17 @@ class TestConfig:
         assert "codon" in DEFAULT_CONFIG
         assert "hyphy" in DEFAULT_CONFIG
 
+    def test_default_config_workdir_and_globdb_keys(self):
+        from phylofoundry.constants import DEFAULT_CONFIG
+
+        # workdir defaults to None so it is optional but present
+        assert "workdir" in DEFAULT_CONFIG["output"]
+        assert DEFAULT_CONFIG["output"]["workdir"] is None
+
+        # globdb_taxonomy_file defaults to None so it is optional but present
+        assert "globdb_taxonomy_file" in DEFAULT_CONFIG["inputs"]
+        assert DEFAULT_CONFIG["inputs"]["globdb_taxonomy_file"] is None
+
     def test_steps_are_in_order(self):
         from phylofoundry.constants import STEPS
 

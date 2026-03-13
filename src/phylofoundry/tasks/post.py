@@ -110,8 +110,29 @@ def validate_tips_in_tree(tree, tips):
     return missing
 
 
-def _load_taxonomy(gtdb_dir, tax_file):
-    """Load taxonomy map from GTDB-Tk output or custom TSV."""
+def _load_taxonomy(gtdb_dir, tax_file, globdb_tax_file=None):
+    """Load taxonomy map from GTDB-Tk output, a custom TSV, or a GlobDB taxonomy file.
+
+    Parameters
+    ----------
+    gtdb_dir:
+        Optional path to a GTDB-Tk output directory. The function looks for
+        ``gtdbtk.*.summary.tsv`` files with ``user_genome`` and
+        ``classification`` columns.
+    tax_file:
+        Optional path to a custom taxonomy TSV with a header row and columns
+        ``genome`` and ``lineage``.
+    globdb_tax_file:
+        Optional path to a GlobDB taxonomy TSV file. GlobDB files are
+        **headerless**; column 1 is the genome ID and column 2 is the GTDB
+        taxonomy string. A warning is printed when the first row looks like
+        an accidentally included header line.
+
+    Returns
+    -------
+    dict
+        Mapping of normalised genome ID → lineage string.
+    """
     from ..utils.helpers import normalize_genome_id
     tax_map = {}
 
@@ -140,7 +161,35 @@ def _load_taxonomy(gtdb_dir, tax_file):
                     tax_map[key] = str(r["lineage"])
         except Exception as e:
              print(f"[post] Warning: Failed to parse taxonomy file {tax_file}: {e}")
-             
+
+    # 3. Load from GlobDB headerless taxonomy file if provided (overrides previous sources)
+    if globdb_tax_file and os.path.exists(globdb_tax_file):
+        try:
+            df = pd.read_csv(globdb_tax_file, sep="\t", header=None, dtype=str)
+            if df.shape[1] < 2:
+                print(
+                    f"[post] Warning: GlobDB taxonomy file {globdb_tax_file} has fewer than "
+                    "2 columns; skipping."
+                )
+            else:
+                # Detect accidental header row: first value resembles a known column name
+                # rather than a genome ID (genome IDs typically do not equal common header labels).
+                _known_headers = {"genome_id", "genome", "user_genome", "id", "name"}
+                first_val = str(df.iloc[0, 0]).strip().lower()
+                if first_val in _known_headers:
+                    print(
+                        f"[post] Warning: The first row of the GlobDB taxonomy file "
+                        f"'{globdb_tax_file}' looks like a header ('{df.iloc[0, 0]}'). "
+                        "GlobDB taxonomy files must be headerless (column 1 = genome_id, "
+                        "column 2 = GTDB taxonomy). The first row will be treated as data; "
+                        "if this row is actually a header, remove it from the file."
+                    )
+                for _, r in df.iterrows():
+                    key = normalize_genome_id(str(r.iloc[0]))
+                    tax_map[key] = str(r.iloc[1])
+        except Exception as e:
+            print(f"[post] Warning: Failed to parse GlobDB taxonomy file {globdb_tax_file}: {e}")
+
     return tax_map
 
 
@@ -483,9 +532,11 @@ def run_post(cfg, tree_dir, clipkit_dir, aln_dir, post_dir, summary_dir, hmm_kee
     # ── Taxonomy Integration ──────────────────────────────────────────────
     gtdb_dir = cfg["inputs"].get("gtdb_dir")
     tax_file = cfg["inputs"].get("taxonomy_file")
-    
-    if gtdb_dir or tax_file:
-        tax_map = _load_taxonomy(gtdb_dir, tax_file)
+    globdb_tax_file = cfg["inputs"].get("globdb_taxonomy_file")
+    tax_map = {}
+
+    if gtdb_dir or tax_file or globdb_tax_file:
+        tax_map = _load_taxonomy(gtdb_dir, tax_file, globdb_tax_file)
         if tax_map:
             print(f"[post] Loaded taxonomy for {len(tax_map)} genomes.")
             # 1. Save genome->taxonomy map
@@ -520,7 +571,7 @@ def run_post(cfg, tree_dir, clipkit_dir, aln_dir, post_dir, summary_dir, hmm_kee
     else:
         detect_method = str(post_cfg.get("detect_clades_method", "")).strip().lower()
         if detect_method == "taxonomy":
-            clades = _detect_taxonomy_clades(summary_dir, tax_map if (gtdb_dir or tax_file) else {}, post_cfg.get("taxonomy_clade_level", "genus"))
+            clades = _detect_taxonomy_clades(summary_dir, tax_map if (gtdb_dir or tax_file or globdb_tax_file) else {}, post_cfg.get("taxonomy_clade_level", "genus"))
         elif detect_method == "treecluster":
             clades = _detect_treecluster_clades(
                 tree_dir,
