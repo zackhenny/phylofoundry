@@ -9,6 +9,7 @@
 -   **Competitive HMM Hits**: Uses both `hmmscan` and `hmmsearch` to identify the best functional assignments for proteins, resolving overlapping hits competitively by bitscore.
 -   **Automated Phylogeny**: Per-HMM alignment (MAFFT/HMMER), trimming (ClipKit), and tree inference (IQ-TREE).
 -   **Protein Embeddings** (Optional): Generates per-HMM embeddings (ESM-2, HuggingFace) and dimensionality reduction (PCA/UMAP), with flexible clustering (HDBSCAN or Leiden) on PCA or raw embeddings, and 2D/3D UMAP scatter plots.
+-   **Cluster-Aware Subworkflow** (Optional): Extends the embedding step with per-cluster MSAs, profile HMMs, and sequence logos for subfamily-level motif analysis (see [Cluster-Aware Subworkflow](#-cluster-aware-subworkflow-optional)).
 -   **Ancestral Sequence Reconstruction**: Parses IQ-TREE `.state` files to reconstruct ancestral protein sequences, embeds them alongside modern sequences, and visualizes evolutionary trajectories in UMAP space.
 -   **Combined Tree Mode**: `--combined` flag to build a single tree from all HMM hits, with combined embeddings and clustering.
 -   **Motif Scoring** (Optional): Uses ESM-2 attention weights to score structurally important motifs (e.g., `--motifs HPEVY,HPEVF`).
@@ -258,6 +259,7 @@ The pipeline runs as a series of sequential **Steps**. You can control execution
 -   **Analysis**: Performs PCA on the embeddings to reduce dimensionality, and UMAP (2D or 3D, visualization only) for scatter plots.
 -   **Clustering**: Runs HDBSCAN or Leiden on PCA-reduced or raw embedding vectors to auto-discover functional clusters.
 -   **Output**: `embeddings/<hmm_name>.pca.tsv`, `.umap.tsv`, `.umap.png`, `.umap.clustered.png`, `summary/clade_assignment.tsv`.
+-   **Cluster Subworkflow** (optional): When `embeddings.cluster_subworkflow.enabled=true`, runs an additional per-cluster analysis for each HMM hit set (see [Cluster Subworkflow](#-cluster-aware-subworkflow-optional) below).
 
 ### Step 5: `phylo`
 -   **Action**:
@@ -313,6 +315,143 @@ The pipeline runs as a series of sequential **Steps**. You can control execution
 -   **Output**: `summary/discovered_motifs.tsv` — columns: `kmer`, `n_sequences`, `mean_attention_delta`, `source_clade`, `reference_clade`.
 -   **HA Outputs (optional)**: `discover/<HMM>.ha_enrichment.tsv` and `discover/<HMM>.ha_hubs.tsv` when `ha.enabled=true` and `discover.use_ha=true`.
 -   **Candidate residue outputs (optional)**: `discover/<HMM>.candidate_residues.tsv` and `discover/<HMM>.candidate_regions.tsv` when `discover.candidates.enabled=true`.
+
+---
+
+## 🧬 Cluster-Aware Subworkflow (Optional)
+
+An **optional extension of the `embed` step** that operates on embedding-defined clusters to support subfamily-level motif discovery and comparison.
+
+Enable it by setting `embeddings.cluster_subworkflow.enabled = true` in your config.  All existing pipeline behaviour is preserved — this subworkflow adds extra outputs without replacing any step.
+
+### Pipeline logic
+
+For each HMM hit set processed by the `embed` step:
+
+```
+embeddings → PCA → kNN graph → HDBSCAN/Leiden clusters
+    └── per-cluster:
+          ├── membership tier assignment (core / affiliate / bridge / outlier)
+          ├── per-cluster seed FASTA (core sequences only by default)
+          ├── seed MSA (MAFFT)
+          ├── sequence logo (PNG + SVG)
+          └── profile HMM (hmmbuild)
+    └── noise sequences:
+          └── classification using kNN neighbourhood evidence
+                (peripheral_homolog / bridge_sequence / partial_homolog /
+                 fusion_or_extension / outlier)
+              + optional HMM scoring via hmmscan
+```
+
+### Membership tiers
+
+Each sequence is assigned one of six membership tiers based on kNN neighbourhood metrics:
+
+| Tier | Label | Meaning |
+|---|---|---|
+| **Core** | `core` | Cluster member with high neighbourhood purity (≥ 0.8) and mutual-kNN support (≥ 0.3). Used as the seed for MSA/logo/HMM construction. |
+| **Affiliate** | `affiliate` | Cluster member with moderate purity (0.5–0.8) or low mutual-kNN. Included in MSA when `seed_membership = "core_and_affiliate"`. |
+| **Bridge** | `bridge` | Cluster member whose dominant neighbour cluster differs. May reflect inter-cluster variation. |
+| **Noise – peripheral** | `noise_peripheral` | Noise (HDBSCAN −1) with strong kNN affinity to a specific cluster (purity ≥ 0.5). Likely a peripheral homolog. |
+| **Noise – bridge** | `noise_bridge` | Noise with moderate kNN affinity to a cluster (purity 0.25–0.5). |
+| **Outlier** | `outlier` | Noise with no clear cluster affiliation. Possible fusion, truncation, or bad data. |
+
+### kNN neighbourhood metrics
+
+For every sequence, the following per-sequence metrics are computed and written to `summary/<HMM>.cluster_membership.tsv`:
+
+| Column | Description |
+|---|---|
+| `protein_id` | Sequence identifier. |
+| `cluster_id` | HDBSCAN/Leiden cluster assignment (−1 = noise). |
+| `dominant_cluster` | The cluster most represented in the kNN neighbourhood. |
+| `neighborhood_purity` | Fraction of neighbours belonging to the dominant cluster. |
+| `dist_weighted_purity` | Distance-weighted neighbourhood purity. |
+| `mutual_knn_support` | Fraction of neighbours that also list this sequence in their kNN. |
+| `neighborhood_entropy` | Shannon entropy of the neighbourhood label distribution. |
+| `median_neighbor_distance` | Median Euclidean distance to kNN in PCA space. |
+
+### Noise classification
+
+Noise sequences (HDBSCAN label −1) are classified into:
+
+| Classification | Condition |
+|---|---|
+| `peripheral_homolog` | purity ≥ 0.6 toward a single cluster |
+| `partial_homolog` | 0.3 ≤ purity < 0.6, low entropy |
+| `bridge_sequence` | 0.3 ≤ purity < 0.6, high entropy |
+| `fusion_or_extension` | No dominant cluster, very high entropy (> 2.0) |
+| `outlier` | No clear affiliation |
+
+If `build_cluster_hmms = true` and `hmmscan` is available, noise sequences are additionally scored against all per-cluster HMMs to improve classification.
+
+### Outputs
+
+For each HMM processed by the cluster subworkflow, the following files are produced under the main output directory:
+
+```
+cluster_fasta/<HMM>/
+    cluster_<id>.core.faa          # Core-tier seed sequences
+    cluster_<id>.affiliate.faa     # Affiliate-tier sequences
+
+cluster_alignments/<HMM>/
+    cluster_<id>.seed.aln.faa      # MAFFT MSA of seed sequences
+
+cluster_logos/<HMM>/
+    cluster_<id>.logo.png          # Sequence logo (raster)
+    cluster_<id>.logo.svg          # Sequence logo (vector)
+
+cluster_hmms/<HMM>/
+    cluster_<id>.hmm               # Profile HMM (hmmbuild)
+
+summary/
+    <HMM>.cluster_membership.tsv   # Per-sequence kNN metrics + tier
+    <HMM>.cluster_logo_manifest.tsv
+    <HMM>.noise_classification.tsv
+    <HMM>.cluster_recruitment.tsv  # (optional, when HMM scoring runs)
+```
+
+### Sequence logos
+
+Logos are generated from per-cluster seed MSAs using matplotlib (no extra dependencies required).  Each bar position corresponds to an alignment column; bar height reflects information content (bits); colours reflect amino-acid chemical class.
+
+Colour scheme:
+
+| Colour | Group |
+|---|---|
+| Orange | Hydrophobic (A, V, L, I, M, F, W) |
+| Purple | Proline (P) |
+| Green | Polar uncharged (S, T, N, Q, Y) |
+| Yellow | Cysteine (C), Glycine (G) |
+| Blue | Positively charged (R, K, H) |
+| Red | Negatively charged (D, E) |
+| Grey | Gap / unknown |
+
+### Example config snippet
+
+```json
+{
+  "embeddings": {
+    "enabled": true,
+    "cluster_embeddings": true,
+    "cluster_on": "PCA",
+    "cluster_method": "hdbscan",
+    "hdbscan_min_cluster_size": 5,
+    "knn_neighbors": 20,
+    "cluster_subworkflow": {
+      "enabled": true,
+      "build_cluster_msas": true,
+      "seed_membership": "core_only",
+      "build_cluster_hmms": true,
+      "classify_noise": true,
+      "generate_sequence_logos": true,
+      "logo_format": ["png", "svg"]
+    }
+  }
+}
+```
+
+> **Note**: This subworkflow requires MAFFT (for MSAs) and optionally HMMER (`hmmbuild`, `hmmscan`) for profile HMM construction and noise scoring.  Both are already listed as core pipeline dependencies.  Sequence logos require only matplotlib, which is a standard Python dependency.
 
 ---
 
@@ -585,6 +724,37 @@ Protein Language Model analysis.
     - Attention-driven analyses include HA/LoC calling, motif HA scoring, HA enrichment/hubs, and candidate residues.
 -   `cluster_embeddings`: (Default: `true`) Run HDBSCAN clustering on embeddings.
 -   `hdbscan_min_cluster_size`: (Default: `5`) Minimum cluster size for HDBSCAN.
+-   `cluster_subworkflow`: Optional sub-section; see [Cluster Subworkflow](#cluster_subworkflow) below.
+
+#### `cluster_subworkflow`
+An optional sub-section nested under `embeddings` that activates the **cluster-aware subworkflow** (per-cluster MSA, sequence logos, and profile HMMs).
+
+```json
+"cluster_subworkflow": {
+    "enabled": false,
+    "build_cluster_msas": true,
+    "seed_membership": "core_only",
+    "build_cluster_hmms": true,
+    "classify_noise": true,
+    "recover_affiliates": true,
+    "generate_sequence_logos": true,
+    "logo_format": ["png", "svg"],
+    "compare_cluster_hmms": false
+}
+```
+
+| Option | Default | Description |
+|---|---|---|
+| `enabled` | `false` | Set to `true` to activate the subworkflow. |
+| `build_cluster_msas` | `true` | Build a seed MSA for each cluster using MAFFT. |
+| `seed_membership` | `"core_only"` | Which sequences seed the MSA: `"core_only"` (recommended) or `"core_and_affiliate"`. |
+| `build_cluster_hmms` | `true` | Build a profile HMM for each cluster MSA via `hmmbuild`. |
+| `classify_noise` | `true` | Classify HDBSCAN noise points using kNN neighbourhood evidence (and optional HMM scoring). |
+| `recover_affiliates` | `true` | Keep affiliate-tier sequences available for downstream use. |
+| `generate_sequence_logos` | `true` | Generate a PNG/SVG sequence logo for each cluster MSA. |
+| `logo_format` | `["png", "svg"]` | Output formats for sequence logos. |
+| `compare_cluster_hmms` | `false` | Reserved for future cross-cluster HMM comparison. |
+
 
 ### `ha`
 High-Attention (HA) site calling.
