@@ -13,6 +13,7 @@ dependencies:
   - umap-learn
   - hmmer
   - mafft
+  - pal2nal
   - clipkit
   - iqtree
   - treeshrink
