@@ -304,12 +304,26 @@ def _validate_emb_cfg(emb_cfg: dict) -> dict:
     # error from scikit-learn, which is caught gracefully in _run_hdbscan.
     cfg.setdefault("hdbscan_metric", "euclidean")
 
+    # kNN parameters
+    cfg.setdefault("run_knn", True)
+    knn_neighbors = int(cfg.get("knn_neighbors", 10))
+    if knn_neighbors < 1:
+        print(
+            f"[embed] Warning: 'knn_neighbors' must be >= 1; got {knn_neighbors}. Defaulting to 10.",
+            file=sys.stderr,
+        )
+        knn_neighbors = 10
+    cfg["knn_neighbors"] = knn_neighbors
+
+    # pca_components default
+    cfg.setdefault("pca_components", 50)
+
     return cfg
 
 
 def compute_embeddings_for_hmm(hmm_name: str, seqs: dict, emb_cfg: dict, outdir_embeddings: str,
                                 force: bool, clades: dict | None, tax_map: dict | None = None):
-    """Compute embeddings, PCA, UMAP (visualization only), clustering, and save plots + TSVs.
+    """Compute embeddings, PCA, kNN, UMAP (visualization only), clustering, and save plots + TSVs.
 
     Clustering behaviour is controlled by the following config options:
 
@@ -319,6 +333,8 @@ def compute_embeddings_for_hmm(hmm_name: str, seqs: dict, emb_cfg: dict, outdir_
     * ``hdbscan_metric`` (default ``"euclidean"``): distance metric for HDBSCAN.
     * ``umap_dimensions`` (``2`` | ``3``): dimensionality of the UMAP projection
       used **only** for visualisation, never for clustering.
+    * ``run_knn`` (default ``True``): compute a cosine kNN graph on PCA space.
+    * ``knn_neighbors`` (default ``10``): number of neighbors for kNN.
 
     Returns a list of cluster assignment dicts (for clade_assignment.tsv), or
     empty list.
@@ -328,6 +344,7 @@ def compute_embeddings_for_hmm(hmm_name: str, seqs: dict, emb_cfg: dict, outdir_
 
     out_npy = os.path.join(outdir_embeddings, f"{hmm_name}.embeddings.npy")
     out_pca = os.path.join(outdir_embeddings, f"{hmm_name}.pca.tsv")
+    out_knn = os.path.join(outdir_embeddings, f"{hmm_name}.knn.tsv")
     out_umap = os.path.join(outdir_embeddings, f"{hmm_name}.umap.tsv")
     out_umap_png = os.path.join(outdir_embeddings, f"{hmm_name}.umap.png")
     out_umap_clust_png = os.path.join(outdir_embeddings, f"{hmm_name}.umap.clustered.png")
@@ -394,6 +411,35 @@ def compute_embeddings_for_hmm(hmm_name: str, seqs: dict, emb_cfg: dict, outdir_
         rows.append(r)
     pd.DataFrame(rows).to_csv(out_pca, sep="\t", index=False)
 
+    # ── kNN on PCA space ──────────────────────────────────────────────────
+    if emb_cfg.get("run_knn", True):
+        try:
+            from sklearn.neighbors import NearestNeighbors
+            knn_neighbors = int(emb_cfg.get("knn_neighbors", 10))
+            n_knn = min(knn_neighbors, len(ids) - 1)
+            if n_knn < 1:
+                import sys as _sys
+                print(f"[embed] kNN skipped for {hmm_name}: not enough sequences.", file=_sys.stderr)
+            else:
+                nbrs = NearestNeighbors(n_neighbors=n_knn, metric="cosine").fit(Z)
+                distances, indices = nbrs.kneighbors(Z)
+                knn_rows = []
+                for tip, dists, idxs in zip(ids, distances, indices):
+                    protein = tip.split("|", 1)[1] if "|" in tip else tip
+                    for rank, (dist, j) in enumerate(zip(dists, idxs), start=1):
+                        neighbor_tip = ids[j]
+                        neighbor_protein = neighbor_tip.split("|", 1)[1] if "|" in neighbor_tip else neighbor_tip
+                        knn_rows.append({
+                            "protein_id": protein,
+                            "neighbor_rank": rank,
+                            "neighbor_id": neighbor_protein,
+                            "distance": float(dist),
+                        })
+                pd.DataFrame(knn_rows).to_csv(out_knn, sep="\t", index=False)
+        except Exception as e:
+            import sys as _sys
+            print(f"[embed] kNN failed for {hmm_name}: {e}", file=_sys.stderr)
+
     # ── UMAP (visualization only) ─────────────────────────────────────────
     U = None
     try:
@@ -402,7 +448,7 @@ def compute_embeddings_for_hmm(hmm_name: str, seqs: dict, emb_cfg: dict, outdir_
         reducer = umap.UMAP(n_components=umap_dims, random_state=42)
         with _w.catch_warnings():
             _w.simplefilter("ignore")
-            U = reducer.fit_transform(X)
+            U = reducer.fit_transform(Z)
 
         u_rows = []
         for tip, coords in zip(ids, U):
