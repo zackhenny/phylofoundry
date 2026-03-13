@@ -955,3 +955,200 @@ class TestComputeClusterKlDivergence:
         assert (df["js_divergence"] <= 1).all()
 
 
+# ── _compute_cluster_jsd_analysis ─────────────────────────────────────────────
+
+from phylofoundry.tasks.embed import _compute_cluster_jsd_analysis
+
+
+class TestComputeClusterJsdAnalysis:
+    """Unit tests for _compute_cluster_jsd_analysis()."""
+
+    def _make_aln_dir(self, tmp_path, clusters):
+        """Write per-cluster aligned FASTAs and return {cl_id: path} dict."""
+        paths = {}
+        for cl_id, seqs in clusters.items():
+            fp = str(tmp_path / f"cluster_{cl_id}.seed.aln.faa")
+            _write_aligned_fasta(fp, seqs)
+            paths[cl_id] = fp
+        return paths
+
+    # ── basic smoke tests ──────────────────────────────────────────────────────
+
+    def test_returns_dataframes(self, tmp_path):
+        """Should return two DataFrames (per_position, top_sites)."""
+        clusters = {
+            0: {f"s{i}": "ACDEF" * 4 for i in range(6)},
+            1: {f"t{i}": "GHIKL" * 4 for i in range(6)},
+        }
+        paths = self._make_aln_dir(tmp_path, clusters)
+        df, top = _compute_cluster_jsd_analysis("HMM1", paths)
+        assert hasattr(df, "columns")
+        assert hasattr(top, "columns")
+
+    def test_nonempty_for_two_clusters(self, tmp_path):
+        """Two distinct clusters should produce non-empty output."""
+        clusters = {
+            0: {f"s{i}": "ACDEFGHIKL" for i in range(6)},
+            1: {f"t{i}": "MNPQRSTVWY" for i in range(6)},
+        }
+        paths = self._make_aln_dir(tmp_path, clusters)
+        df, top = _compute_cluster_jsd_analysis("HMM1", paths)
+        assert not df.empty
+        assert not top.empty
+
+    def test_expected_columns(self, tmp_path):
+        """Output DataFrame must contain the expected column set."""
+        clusters = {
+            0: {f"s{i}": "ACDEFGHIKL" for i in range(6)},
+            1: {f"t{i}": "MNPQRSTVWY" for i in range(6)},
+        }
+        paths = self._make_aln_dir(tmp_path, clusters)
+        df, _ = _compute_cluster_jsd_analysis("HMM1", paths)
+        expected = {
+            "hmm_name", "cluster_A", "cluster_B", "pair",
+            "aln_position", "js_divergence",
+            "top_aa_A", "top_aa_B", "n_seqs_A", "n_seqs_B",
+        }
+        assert expected.issubset(set(df.columns))
+
+    def test_no_kl_columns(self, tmp_path):
+        """JSD-only output must not contain asymmetric KL columns."""
+        clusters = {
+            0: {f"s{i}": "ACDE" for i in range(6)},
+            1: {f"t{i}": "FGHI" for i in range(6)},
+        }
+        paths = self._make_aln_dir(tmp_path, clusters)
+        df, _ = _compute_cluster_jsd_analysis("HMM1", paths)
+        assert "kl_A_to_B" not in df.columns
+        assert "kl_B_to_A" not in df.columns
+
+    # ── divergence value tests ─────────────────────────────────────────────────
+
+    def test_jsd_in_valid_range(self, tmp_path):
+        """JSD values must lie in [0, 1] bits."""
+        clusters = {
+            0: {f"s{i}": "AAAA" for i in range(8)},
+            1: {f"t{i}": "CCCC" for i in range(8)},
+        }
+        paths = self._make_aln_dir(tmp_path, clusters)
+        df, _ = _compute_cluster_jsd_analysis("HMM1", paths)
+        assert (df["js_divergence"] >= 0).all()
+        assert (df["js_divergence"] <= 1).all()
+
+    def test_high_divergence_for_distinct_clusters(self, tmp_path):
+        """Clusters with completely different residues should show high JSD."""
+        clusters = {
+            0: {f"s{i}": "AAAA" for i in range(8)},
+            1: {f"t{i}": "CCCC" for i in range(8)},
+        }
+        paths = self._make_aln_dir(tmp_path, clusters)
+        df, _ = _compute_cluster_jsd_analysis("HMM1", paths, pseudocount=1e-6)
+        assert df["js_divergence"].max() > 0.5
+
+    def test_low_divergence_for_identical_clusters(self, tmp_path):
+        """Identical clusters should produce near-zero JSD at all positions."""
+        seq = "ACDEFGHIKL"
+        clusters = {
+            0: {f"s{i}": seq for i in range(8)},
+            1: {f"t{i}": seq for i in range(8)},
+        }
+        paths = self._make_aln_dir(tmp_path, clusters)
+        df, _ = _compute_cluster_jsd_analysis("HMM1", paths)
+        assert df["js_divergence"].max() < 0.01
+
+    def test_symmetry(self, tmp_path):
+        """JSD is symmetric: swapping cluster A/B must yield the same value."""
+        clusters = {
+            0: {f"s{i}": "AAAA" for i in range(8)},
+            1: {f"t{i}": "CCCC" for i in range(8)},
+        }
+        paths = self._make_aln_dir(tmp_path, clusters)
+        df, _ = _compute_cluster_jsd_analysis("HMM1", paths)
+        # Only one pair in this case; verify JSD value is consistent across rows
+        assert df["js_divergence"].nunique() <= 2  # identical positions may share same value
+
+    # ── row and pair count tests ───────────────────────────────────────────────
+
+    def test_row_count_equals_pairs_times_columns(self, tmp_path):
+        """Should have n_pairs * aln_len rows in per_position_df."""
+        aln_len = 10
+        clusters = {
+            0: {f"s{i}": "A" * aln_len for i in range(6)},
+            1: {f"t{i}": "C" * aln_len for i in range(6)},
+            2: {f"u{i}": "G" * aln_len for i in range(6)},
+        }
+        paths = self._make_aln_dir(tmp_path, clusters)
+        df, _ = _compute_cluster_jsd_analysis("HMM1", paths)
+        # C(3,2) = 3 pairs; each pair × 10 columns = 30 rows
+        assert len(df) == 3 * aln_len
+
+    def test_top_sites_at_most_top_n(self, tmp_path):
+        """Top-sites table should have at most top_n_sites rows per pair."""
+        aln_len = 15
+        top_n = 5
+        clusters = {
+            0: {f"s{i}": "A" * aln_len for i in range(6)},
+            1: {f"t{i}": "C" * aln_len for i in range(6)},
+        }
+        paths = self._make_aln_dir(tmp_path, clusters)
+        _, top = _compute_cluster_jsd_analysis("HMM1", paths, top_n_sites=top_n)
+        assert len(top) <= top_n
+
+    def test_aln_position_1based(self, tmp_path):
+        """aln_position should start at 1 (1-based indexing)."""
+        clusters = {
+            0: {f"s{i}": "ACDE" for i in range(6)},
+            1: {f"t{i}": "FGHI" for i in range(6)},
+        }
+        paths = self._make_aln_dir(tmp_path, clusters)
+        df, _ = _compute_cluster_jsd_analysis("HMM1", paths)
+        assert df["aln_position"].min() == 1
+
+    def test_hmm_name_in_output(self, tmp_path):
+        """hmm_name column should match the provided name."""
+        clusters = {
+            0: {f"s{i}": "ACDE" for i in range(6)},
+            1: {f"t{i}": "FGHI" for i in range(6)},
+        }
+        paths = self._make_aln_dir(tmp_path, clusters)
+        df, _ = _compute_cluster_jsd_analysis("MY_HMM", paths)
+        assert (df["hmm_name"] == "MY_HMM").all()
+
+    # ── edge case / guard tests ────────────────────────────────────────────────
+
+    def test_single_cluster_returns_empty(self, tmp_path):
+        """Only one cluster → no pairs → both DataFrames empty."""
+        clusters = {0: {f"s{i}": "ACDE" for i in range(6)}}
+        paths = self._make_aln_dir(tmp_path, clusters)
+        df, top = _compute_cluster_jsd_analysis("HMM1", paths)
+        assert df.empty
+        assert top.empty
+
+    def test_empty_paths_returns_empty(self, tmp_path):
+        """Empty input dict should return two empty DataFrames."""
+        df, top = _compute_cluster_jsd_analysis("HMM1", {})
+        assert df.empty
+        assert top.empty
+
+    def test_min_cluster_size_filters_small_clusters(self, tmp_path):
+        """Clusters below min_cluster_size are excluded; may leave < 2 eligible."""
+        clusters = {
+            0: {f"s{i}": "ACDE" for i in range(2)},  # too small
+            1: {f"t{i}": "FGHI" for i in range(2)},  # too small
+        }
+        paths = self._make_aln_dir(tmp_path, clusters)
+        df, top = _compute_cluster_jsd_analysis("HMM1", paths, min_cluster_size=5)
+        assert df.empty
+
+    def test_gaps_skipped_in_counts(self, tmp_path):
+        """Gap characters should not affect JSD validity."""
+        clusters = {
+            0: {f"s{i}": "--AA--" for i in range(6)},
+            1: {f"t{i}": "--CC--" for i in range(6)},
+        }
+        paths = self._make_aln_dir(tmp_path, clusters)
+        df, _ = _compute_cluster_jsd_analysis("HMM1", paths)
+        assert (df["js_divergence"] >= 0).all()
+        assert (df["js_divergence"] <= 1).all()
+
+

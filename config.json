@@ -97,6 +97,12 @@
                 "min_cluster_size": 5,
                 "pseudocount": 1e-6,
                 "top_n_sites": 20
+            },
+            "jsd_analysis": {
+                "enabled": false,
+                "min_cluster_size": 5,
+                "pseudocount": 1e-6,
+                "top_n_sites": 20
             }
         }
     },

@@ -411,6 +411,8 @@ summary/
     <HMM>.cluster_recruitment.tsv        # (optional, when HMM scoring runs)
     <HMM>.cluster_kl_divergence.tsv      # (optional) Per-position KL/JSD divergence
     <HMM>.cluster_kl_top_sites.tsv       # (optional) Top divergent positions per pair
+    <HMM>.cluster_jsd_analysis.tsv       # (optional) Per-position Jensen-Shannon divergence
+    <HMM>.cluster_jsd_top_sites.tsv      # (optional) Top JSD positions per cluster pair
 ```
 
 ### KL-divergence differential motif analysis
@@ -450,6 +452,62 @@ The companion file `<HMM>.cluster_kl_top_sites.tsv` contains the same columns bu
 | Key | Default | Description |
 |---|---|---|
 | `enabled` | `false` | Enable KL divergence analysis between cluster MSAs. |
+| `min_cluster_size` | `5` | Skip clusters with fewer than this many aligned sequences. |
+| `pseudocount` | `1e-6` | Pseudocount added to residue counts before normalisation. |
+| `top_n_sites` | `20` | Number of top-divergent sites to report in the summary table. |
+
+---
+
+### Jensen-Shannon divergence analysis
+
+When `cluster_subworkflow.jsd_analysis.enabled = true`, PhyloFoundry runs a dedicated **Jensen-Shannon divergence (JSD)** analysis step that quantifies residue distribution differences between cluster MSAs at every alignment position.
+
+This step operates after cluster MSAs and sequence logos are produced and is independent of the KL divergence analysis — both, either, or neither can be enabled simultaneously.
+
+#### Why JSD?
+
+Unlike KL divergence, JSD is:
+
+- **Symmetric**: JSD(A, B) = JSD(B, A)
+- **Bounded**: values lie in [0, 1] bits
+- **Numerically stable**: well-behaved with small or zero probabilities
+- **Easier to interpret** when comparing distributions across multiple clusters
+
+These properties make JSD a robust metric for identifying positions where amino-acid usage differs most strongly between embedding-defined subfamilies.
+
+#### How it works
+
+For each pair of clusters that have valid seed MSAs and at least `min_cluster_size` aligned sequences:
+
+1. **Amino-acid frequency distributions** are computed at every alignment column.
+2. A **pseudocount** is added to each residue count before normalisation.
+3. **Symmetric Jensen-Shannon divergence** (range 0–1 bits) is computed via `scipy.spatial.distance.jensenshannon`.
+4. Results are written to two TSV files.
+
+Large JSD values indicate positions where amino-acid usage differs strongly between clusters — candidate sites for functional divergence, motif evolution, catalytic residue substitutions, or subfamily-specific conservation.
+
+#### Output columns — `<HMM>.cluster_jsd_analysis.tsv`
+
+| Column | Description |
+|---|---|
+| `hmm_name` | HMM / hit-set identifier. |
+| `cluster_A` | First cluster ID. |
+| `cluster_B` | Second cluster ID. |
+| `pair` | Label `cluster_A:cluster_B`. |
+| `aln_position` | 1-based alignment column index. |
+| `js_divergence` | Symmetric Jensen-Shannon divergence in bits (0–1). |
+| `top_aa_A` | Most common amino acid in cluster A at this position. |
+| `top_aa_B` | Most common amino acid in cluster B at this position. |
+| `n_seqs_A` | Number of sequences in cluster A. |
+| `n_seqs_B` | Number of sequences in cluster B. |
+
+The companion file `<HMM>.cluster_jsd_top_sites.tsv` contains the same columns but is restricted to the top `top_n_sites` highest-JSD positions per cluster pair.
+
+#### JSD analysis config options
+
+| Key | Default | Description |
+|---|---|---|
+| `enabled` | `false` | Enable Jensen-Shannon divergence analysis between cluster MSAs. |
 | `min_cluster_size` | `5` | Skip clusters with fewer than this many aligned sequences. |
 | `pseudocount` | `1e-6` | Pseudocount added to residue counts before normalisation. |
 | `top_n_sites` | `20` | Number of top-divergent sites to report in the summary table. |
@@ -494,13 +552,19 @@ Colour scheme:
         "min_cluster_size": 5,
         "pseudocount": 1e-6,
         "top_n_sites": 20
+      },
+      "jsd_analysis": {
+        "enabled": true,
+        "min_cluster_size": 5,
+        "pseudocount": 1e-6,
+        "top_n_sites": 20
       }
     }
   }
 }
 ```
 
-> **Note**: This subworkflow requires MAFFT (for MSAs) and optionally HMMER (`hmmbuild`, `hmmscan`) for profile HMM construction and noise scoring.  Both are already listed as core pipeline dependencies.  Sequence logos require only matplotlib, and KL divergence analysis requires only the Python standard library — no additional dependencies are needed.
+> **Note**: This subworkflow requires MAFFT (for MSAs) and optionally HMMER (`hmmbuild`, `hmmscan`) for profile HMM construction and noise scoring.  Both are already listed as core pipeline dependencies.  Sequence logos require only matplotlib, KL divergence analysis requires only the Python standard library, and JSD analysis requires `scipy` — already included in the conda environment.
 
 ---
 
@@ -794,6 +858,12 @@ An optional sub-section nested under `embeddings` that activates the **cluster-a
         "min_cluster_size": 5,
         "pseudocount": 1e-6,
         "top_n_sites": 20
+    },
+    "jsd_analysis": {
+        "enabled": false,
+        "min_cluster_size": 5,
+        "pseudocount": 1e-6,
+        "top_n_sites": 20
     }
 }
 ```
@@ -813,6 +883,10 @@ An optional sub-section nested under `embeddings` that activates the **cluster-a
 | `kl_divergence.min_cluster_size` | `5` | Minimum number of aligned sequences required to include a cluster in KL analysis. |
 | `kl_divergence.pseudocount` | `1e-6` | Pseudocount added to residue counts before normalisation (avoids log(0)). |
 | `kl_divergence.top_n_sites` | `20` | Number of highest-JSD positions to include in the `cluster_kl_top_sites.tsv` summary. |
+| `jsd_analysis.enabled` | `false` | Enable dedicated Jensen-Shannon divergence analysis between cluster MSAs. |
+| `jsd_analysis.min_cluster_size` | `5` | Minimum number of aligned sequences required to include a cluster in JSD analysis. |
+| `jsd_analysis.pseudocount` | `1e-6` | Pseudocount added to residue counts before normalisation (avoids log(0)). |
+| `jsd_analysis.top_n_sites` | `20` | Number of highest-JSD positions to include in the `cluster_jsd_top_sites.tsv` summary. |
 
 
 ### `ha`
