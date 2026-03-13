@@ -421,6 +421,8 @@ summary/
     <HMM>.cluster_jsd_analysis.tsv            # (optional) Per-position Jensen-Shannon divergence
     <HMM>.cluster_jsd_top_sites.tsv           # (optional) Top JSD positions per cluster pair
     <HMM>.cluster_motif_heatmap_matrix.tsv    # (optional) Heatmap data matrix (clusters × positions)
+    <HMM>.motif_shift_regions.tsv            # (optional) Detected motif shift regions
+    <HMM>.motif_shift_signal.tsv             # (optional) Per-position divergence signal used for detection
 ```
 
 ### KL-divergence differential motif analysis
@@ -579,6 +581,66 @@ The data matrix uses `cluster_<id>` as row index and `pos_<N>` (1-based) as colu
 
 ---
 
+### Automatic motif shift detection (change-point analysis)
+
+When `cluster_subworkflow.change_point_detection.enabled = true`, PhyloFoundry automatically identifies **alignment regions where motif divergence changes significantly** between embedding clusters using **binary segmentation change-point detection**.
+
+Instead of requiring manual inspection of sequence logos or heatmaps, this step automatically detects **contiguous alignment regions where evolutionary motif changes occur** — candidate sites for catalytic motif substitutions, substrate-binding region evolution, domain boundary shifts, or cluster-specific insertions/deletions.
+
+#### How it works
+
+1. **Compute divergence signal** — a scalar divergence value is computed at every alignment position across eligible cluster MSAs.  Three signal types are supported:
+   - `"mean_jsd"` (default): mean pairwise Jensen–Shannon divergence across all cluster pairs.
+   - `"max_jsd"`: maximum pairwise JSD across all cluster pairs.
+   - `"jsd_vs_global"`: mean JSD of each cluster vs. the pooled global distribution.
+
+2. **Smooth signal** (optional) — a sliding-window mean of width `smoothing_window` reduces noise before detection.
+
+3. **Binary segmentation** — iteratively finds the single split point in each segment that maximally reduces within-segment variance.  A split is accepted only if the variance reduction exceeds `threshold`.  At most `max_changepoints` splits are performed.
+
+4. **Merge nearby boundaries** — adjacent change-points separated by fewer than `merge_distance` alignment columns are merged into a single boundary to simplify results.
+
+5. **Export regions** — every segment between consecutive change-points is written as a row in `<HMM>.motif_shift_regions.tsv`, together with its mean and maximum divergence.  The raw and smoothed per-position signal is also written to `<HMM>.motif_shift_signal.tsv`.
+
+#### Output columns — `<HMM>.motif_shift_regions.tsv`
+
+| Column | Description |
+|---|---|
+| `hmm_name` | HMM / hit-set identifier. |
+| `region_id` | 1-based sequential region identifier. |
+| `start_position` | 1-based first alignment column of the region. |
+| `end_position` | 1-based last alignment column of the region (inclusive). |
+| `n_positions` | Number of alignment columns in the region. |
+| `mean_divergence` | Mean divergence signal across region positions. |
+| `max_divergence` | Maximum divergence signal within the region. |
+| `signal_type` | Signal type used (e.g. `"mean_jsd"`). |
+
+#### Output columns — `<HMM>.motif_shift_signal.tsv`
+
+| Column | Description |
+|---|---|
+| `hmm_name` | HMM / hit-set identifier. |
+| `aln_position` | 1-based alignment column index. |
+| `signal_value` | Raw divergence signal at this position. |
+| `smoothed_signal_value` | Smoothed signal (equals raw signal when `smoothing_window` ≤ 1). |
+| `signal_type` | Signal type used. |
+
+#### Change-point detection config options
+
+| Key | Default | Description |
+|---|---|---|
+| `enabled` | `false` | Enable automatic motif shift detection. |
+| `signal` | `"mean_jsd"` | Divergence signal: `"mean_jsd"`, `"max_jsd"`, or `"jsd_vs_global"`. |
+| `smoothing_window` | `0` | Sliding-window mean smoothing width (0 or 1 = no smoothing). |
+| `min_segment_len` | `5` | Minimum alignment columns in any segment; splits creating shorter segments are rejected. |
+| `merge_distance` | `10` | Merge adjacent change-points separated by fewer than this many columns. |
+| `threshold` | `0.05` | Minimum within-segment variance reduction required to accept a split. Higher values yield fewer, more significant change-points. |
+| `max_changepoints` | `25` | Maximum number of change-points to detect. |
+| `min_cluster_size` | `5` | Skip clusters with fewer than this many aligned sequences. |
+| `pseudocount` | `1e-6` | Pseudocount added to residue counts before normalisation. |
+
+---
+
 ### Sequence logos
 
 Logos are generated from per-cluster seed MSAs using matplotlib (no extra dependencies required).  Each bar position corresponds to an alignment column; bar height reflects information content (bits); colours reflect amino-acid chemical class.
@@ -633,13 +695,24 @@ Colour scheme:
         "pseudocount": 1e-6,
         "figure_format": ["png", "svg"],
         "colormap": "YlOrRd"
+      },
+      "change_point_detection": {
+        "enabled": true,
+        "signal": "mean_jsd",
+        "smoothing_window": 5,
+        "min_segment_len": 5,
+        "merge_distance": 10,
+        "threshold": 0.05,
+        "max_changepoints": 25,
+        "min_cluster_size": 5,
+        "pseudocount": 1e-6
       }
     }
   }
 }
 ```
 
-> **Note**: This subworkflow requires MAFFT (for MSAs) and optionally HMMER (`hmmbuild`, `hmmscan`) for profile HMM construction and noise scoring.  Both are already listed as core pipeline dependencies.  Sequence logos require only matplotlib, KL divergence analysis requires only the Python standard library, JSD analysis requires `scipy`, and the cluster motif evolution heatmap requires only `matplotlib` — all already included in the conda environment.
+> **Note**: This subworkflow requires MAFFT (for MSAs) and optionally HMMER (`hmmbuild`, `hmmscan`) for profile HMM construction and noise scoring.  Both are already listed as core pipeline dependencies.  Sequence logos require only matplotlib, KL divergence analysis requires only the Python standard library, JSD analysis requires `scipy`, the cluster motif evolution heatmap requires only `matplotlib`, and change-point detection uses only NumPy and the Python standard library — all already included in the conda environment.
 
 ---
 
@@ -947,6 +1020,17 @@ An optional sub-section nested under `embeddings` that activates the **cluster-a
         "pseudocount": 1e-6,
         "figure_format": ["png"],
         "colormap": "YlOrRd"
+    },
+    "change_point_detection": {
+        "enabled": false,
+        "signal": "mean_jsd",
+        "smoothing_window": 0,
+        "min_segment_len": 5,
+        "merge_distance": 10,
+        "threshold": 0.05,
+        "max_changepoints": 25,
+        "min_cluster_size": 5,
+        "pseudocount": 1e-6
     }
 }
 ```
@@ -976,6 +1060,15 @@ An optional sub-section nested under `embeddings` that activates the **cluster-a
 | `motif_heatmap.pseudocount` | `1e-6` | Pseudocount added to residue counts before normalisation (avoids log(0)). |
 | `motif_heatmap.figure_format` | `["png"]` | Image formats to write (e.g. `["png", "svg"]`). |
 | `motif_heatmap.colormap` | `"YlOrRd"` | Matplotlib colour-map name for the heatmap cells. |
+| `change_point_detection.enabled` | `false` | Enable automatic motif shift detection via change-point analysis. |
+| `change_point_detection.signal` | `"mean_jsd"` | Divergence signal: `"mean_jsd"`, `"max_jsd"`, or `"jsd_vs_global"`. |
+| `change_point_detection.smoothing_window` | `0` | Sliding-window mean smoothing width applied before detection (0 or 1 = disabled). |
+| `change_point_detection.min_segment_len` | `5` | Minimum alignment columns per segment; splits creating shorter segments are rejected. |
+| `change_point_detection.merge_distance` | `10` | Merge adjacent change-points separated by fewer than this many columns. |
+| `change_point_detection.threshold` | `0.05` | Minimum variance reduction required to accept a split. Higher = fewer change-points. |
+| `change_point_detection.max_changepoints` | `25` | Maximum number of change-points to detect. |
+| `change_point_detection.min_cluster_size` | `5` | Skip clusters with fewer than this many aligned sequences. |
+| `change_point_detection.pseudocount` | `1e-6` | Pseudocount added to residue counts before normalisation. |
 
 
 ### `ha`

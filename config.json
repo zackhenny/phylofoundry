@@ -111,6 +111,17 @@
                 "pseudocount": 1e-6,
                 "figure_format": ["png"],
                 "colormap": "YlOrRd"
+            },
+            "change_point_detection": {
+                "enabled": false,
+                "signal": "mean_jsd",
+                "smoothing_window": 0,
+                "min_segment_len": 5,
+                "merge_distance": 10,
+                "threshold": 0.05,
+                "max_changepoints": 25,
+                "min_cluster_size": 5,
+                "pseudocount": 1e-6
             }
         }
     },
