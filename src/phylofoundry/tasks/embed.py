@@ -1,9 +1,12 @@
 import os
 import glob
+import math
+import subprocess
+import shutil
 import warnings
 import pandas as pd
 import numpy as np
-from ..utils.bio import read_fasta
+from ..utils.bio import read_fasta, write_fasta
 from ..utils.helpers import safe_mkdir, write_json
 
 def _pca_fit_transform(X, n_components=3):
@@ -261,6 +264,806 @@ def _run_leiden(X, n_neighbors=15, metric="cosine", resolution=1.0):
 
 _VALID_CLUSTER_ON = {"pca", "embeddings"}
 _VALID_CLUSTER_METHODS = {"hdbscan", "leiden"}
+_N_AMINO_ACIDS = 20  # Standard amino acids — used for information-content calculations.
+
+# ── Amino-acid color palette for sequence logos ───────────────────────────────
+_AA_COLORS = {
+    # Hydrophobic (non-polar aliphatic / aromatic)
+    "A": "#f0a030", "V": "#f0a030", "L": "#f0a030", "I": "#f0a030",
+    "M": "#f0a030", "F": "#f0a030", "W": "#f0a030", "P": "#c080ff",
+    # Polar uncharged
+    "S": "#30a830", "T": "#30a830", "N": "#30a830", "Q": "#30a830",
+    "C": "#e0c040", "Y": "#30a830",
+    # Positively charged
+    "R": "#3070d0", "K": "#3070d0", "H": "#8080d0",
+    # Negatively charged
+    "D": "#d03030", "E": "#d03030",
+    # Special
+    "G": "#bbbbbb",
+    # Gap / unknown
+    "-": "#eeeeee", "X": "#aaaaaa",
+}
+
+
+# ── Cluster subworkflow helpers ───────────────────────────────────────────────
+
+def _compute_knn_metrics(Z, ids, labels, k=10):
+    """Compute per-sequence kNN neighborhood metrics for cluster interpretation.
+
+    Parameters
+    ----------
+    Z : np.ndarray
+        PCA-reduced feature matrix (n_samples x n_components).
+    ids : list
+        Sequence identifiers aligned with rows of Z.
+    labels : list
+        Cluster labels (int; -1 = noise) aligned with rows of Z.
+    k : int
+        Number of nearest neighbours to consider.
+
+    Returns
+    -------
+    pd.DataFrame with columns: protein_id, cluster_id, dominant_cluster,
+    neighborhood_purity, dist_weighted_purity, mutual_knn_support,
+    neighborhood_entropy, median_neighbor_distance
+    """
+    try:
+        from sklearn.neighbors import NearestNeighbors
+        from collections import Counter
+
+        k_eff = min(k, len(ids) - 1)
+        if k_eff < 1:
+            return pd.DataFrame()
+
+        nbrs = NearestNeighbors(n_neighbors=k_eff, metric="euclidean").fit(Z)
+        distances, indices = nbrs.kneighbors(Z)
+
+        rows = []
+        for i, (tip, my_label) in enumerate(zip(ids, labels)):
+            protein = tip.split("|", 1)[1] if "|" in tip else tip
+            neighbor_labels = [labels[j] for j in indices[i]]
+            neighbor_dists = distances[i]
+
+            # Dominant cluster among all neighbours (noise counts as -1)
+            cnt_all = Counter(neighbor_labels)
+            nn_nonnoise = [lb for lb in neighbor_labels if lb != -1]
+            if nn_nonnoise:
+                cnt_nn = Counter(nn_nonnoise)
+                dominant_cluster = cnt_nn.most_common(1)[0][0]
+                purity = cnt_nn[dominant_cluster] / len(neighbor_labels)
+            else:
+                dominant_cluster = -1
+                purity = 0.0
+
+            # Distance-weighted purity
+            weights = 1.0 / (neighbor_dists + 1e-8)
+            total_weight = weights.sum()
+            if total_weight > 0:
+                per_label_weight: dict = {}
+                for lb, w in zip(neighbor_labels, weights):
+                    per_label_weight[lb] = per_label_weight.get(lb, 0.0) + w
+                if per_label_weight:
+                    best_lb = max(per_label_weight, key=lambda x: per_label_weight[x])
+                    dist_weighted_purity = per_label_weight[best_lb] / total_weight
+                else:
+                    dist_weighted_purity = 0.0
+            else:
+                dist_weighted_purity = 0.0
+
+            # Mutual kNN support: fraction of neighbours that also list i in their kNN
+            mutual_count = sum(1 for j in indices[i] if i in indices[j])
+            mutual_knn_support = mutual_count / k_eff if k_eff > 0 else 0.0
+
+            # Shannon entropy of neighbourhood label distribution
+            entropy = 0.0
+            total_n = len(neighbor_labels)
+            for cnt_val in cnt_all.values():
+                p = cnt_val / total_n
+                if p > 0:
+                    entropy -= p * math.log2(p)
+
+            rows.append({
+                "protein_id": protein,
+                "cluster_id": int(my_label),
+                "dominant_cluster": int(dominant_cluster),
+                "neighborhood_purity": round(float(purity), 4),
+                "dist_weighted_purity": round(float(dist_weighted_purity), 4),
+                "mutual_knn_support": round(float(mutual_knn_support), 4),
+                "neighborhood_entropy": round(float(entropy), 4),
+                "median_neighbor_distance": round(float(np.median(neighbor_dists)), 6),
+            })
+
+        return pd.DataFrame(rows)
+
+    except Exception as e:
+        import sys
+        print(f"[embed] kNN metrics computation failed: {e}", file=sys.stderr)
+        return pd.DataFrame()
+
+
+def _assign_membership_tiers(ids, labels, knn_df):
+    """Assign core/affiliate/bridge/outlier membership tiers to each sequence.
+
+    Rules
+    -----
+    * **core** — cluster member with neighbourhood purity ≥ 0.8 and dominant
+      cluster matching assigned cluster and mutual kNN support ≥ 0.3.
+    * **affiliate** — cluster member with purity in [0.5, 0.8) or mutual < 0.3.
+    * **bridge** — cluster member whose dominant neighbour cluster differs from
+      its own assigned cluster.
+    * **noise_peripheral** — noise point (label −1) with purity ≥ 0.5 toward a
+      specific cluster.
+    * **noise_bridge** — noise point with moderate purity (0.25–0.5).
+    * **outlier** — noise point with no clear affiliation.
+
+    Returns
+    -------
+    dict : {protein_id: tier_string}
+    """
+    tiers: dict = {}
+
+    if knn_df.empty:
+        for tip, label in zip(ids, labels):
+            protein = tip.split("|", 1)[1] if "|" in tip else tip
+            tiers[protein] = "core" if label >= 0 else "outlier"
+        return tiers
+
+    for _, row in knn_df.iterrows():
+        pid = row["protein_id"]
+        cl = int(row["cluster_id"])
+        dom = int(row["dominant_cluster"])
+        purity = float(row["neighborhood_purity"])
+        mutual = float(row["mutual_knn_support"])
+
+        if cl >= 0:
+            if dom != cl:
+                tiers[pid] = "bridge"
+            elif purity >= 0.8 and mutual >= 0.3:
+                tiers[pid] = "core"
+            elif purity >= 0.5:
+                tiers[pid] = "affiliate"
+            else:
+                tiers[pid] = "bridge"
+        else:
+            if dom >= 0 and purity >= 0.5:
+                tiers[pid] = "noise_peripheral"
+            elif dom >= 0 and purity >= 0.25:
+                tiers[pid] = "noise_bridge"
+            else:
+                tiers[pid] = "outlier"
+
+    return tiers
+
+
+def _write_cluster_fastas(seqs, ids, labels, tiers, outdir_fasta, force=False):
+    """Write per-cluster FASTA files separated by membership tier.
+
+    Parameters
+    ----------
+    seqs : dict
+        {tip_id: sequence} mapping (may use full ``genome|protein`` keys or
+        bare protein IDs — both are tried).
+    ids : list
+        Sequence identifiers in the same order as *labels*.
+    labels : list
+        Integer cluster labels (−1 = noise).
+    tiers : dict
+        {protein_id: tier_string} from :func:`_assign_membership_tiers`.
+    outdir_fasta : str
+        Directory to write FASTA files into.
+    force : bool
+        Overwrite existing files.
+
+    Returns
+    -------
+    dict : {cluster_id: {"core": path|None, "affiliate": path|None,
+                          "n_core": int, "n_affiliate": int}}
+    """
+    safe_mkdir(outdir_fasta)
+
+    cluster_core: dict = {}
+    cluster_affiliate: dict = {}
+
+    for tip, label in zip(ids, labels):
+        protein = tip.split("|", 1)[1] if "|" in tip else tip
+        tier = tiers.get(protein, "outlier")
+        seq = seqs.get(tip) or seqs.get(protein)
+        if seq is None:
+            continue
+        if label < 0:
+            continue  # noise handled separately
+
+        if tier == "core":
+            cluster_core.setdefault(label, {})[protein] = seq
+        elif tier in ("affiliate", "bridge"):
+            cluster_affiliate.setdefault(label, {})[protein] = seq
+
+    result: dict = {}
+    all_clusters = sorted(set(list(cluster_core.keys()) + list(cluster_affiliate.keys())))
+    for cl_id in all_clusters:
+        core_seqs = cluster_core.get(cl_id, {})
+        aff_seqs = cluster_affiliate.get(cl_id, {})
+
+        core_fp = os.path.join(outdir_fasta, f"cluster_{cl_id}.core.faa")
+        aff_fp = os.path.join(outdir_fasta, f"cluster_{cl_id}.affiliate.faa")
+
+        if core_seqs and (not os.path.exists(core_fp) or force):
+            write_fasta(core_fp, core_seqs)
+        if aff_seqs and (not os.path.exists(aff_fp) or force):
+            write_fasta(aff_fp, aff_seqs)
+
+        result[cl_id] = {
+            "core": core_fp if core_seqs else None,
+            "affiliate": aff_fp if aff_seqs else None,
+            "n_core": len(core_seqs),
+            "n_affiliate": len(aff_seqs),
+        }
+
+    return result
+
+
+def _build_cluster_msa(fasta_path, output_aln, threads=4, force=False):
+    """Run MAFFT on a cluster FASTA to produce a seed MSA.
+
+    Returns ``True`` on success or if the output already exists, ``False``
+    otherwise (e.g. MAFFT not found, too few sequences, or an error).
+    """
+    if os.path.exists(output_aln) and not force:
+        return True
+    if not os.path.exists(fasta_path):
+        return False
+    if not shutil.which("mafft"):
+        import sys
+        print("[embed/cluster] mafft not found in PATH — skipping MSA.", file=sys.stderr)
+        return False
+
+    n_seqs = sum(1 for line in open(fasta_path) if line.startswith(">"))
+    if n_seqs < 2:
+        import sys
+        print(
+            f"[embed/cluster] {os.path.basename(fasta_path)}: only {n_seqs} "
+            "sequence(s) — skipping MSA.",
+            file=sys.stderr,
+        )
+        return False
+
+    try:
+        cmd = f"mafft --auto --thread {threads} --quiet {fasta_path} > {output_aln}"
+        subprocess.run(cmd, shell=True, check=True, stderr=subprocess.DEVNULL)
+        return True
+    except subprocess.CalledProcessError as e:
+        import sys
+        print(f"[embed/cluster] mafft failed for {fasta_path}: {e}", file=sys.stderr)
+        return False
+    except Exception as e:
+        import sys
+        print(f"[embed/cluster] MSA error for {fasta_path}: {e}", file=sys.stderr)
+        return False
+
+
+def _generate_sequence_logo(msa_path, out_png, out_svg, hmm_name, cluster_id,
+                             formats=("png", "svg")):
+    """Generate a sequence logo from an MSA FASTA file using matplotlib.
+
+    Computes per-position information content (bits) and draws stacked
+    coloured bars where each bar height reflects the residue's contribution
+    to that position's information content.
+
+    Parameters
+    ----------
+    msa_path : str
+        Path to an aligned FASTA file.
+    out_png / out_svg : str
+        Output file paths for PNG and SVG respectively.
+    hmm_name : str
+        HMM name used in the plot title.
+    cluster_id : int | str
+        Cluster identifier used in the plot title.
+    formats : tuple[str]
+        Which formats to save (``"png"`` and/or ``"svg"``).
+
+    Returns
+    -------
+    tuple : (success: bool, n_seqs: int, alignment_length: int, n_effective_sites: int)
+        *n_effective_sites* counts positions with IC > 0.5 bits.
+    """
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+    except ImportError:
+        import sys
+        print("[embed/cluster] matplotlib not available — skipping logo.", file=sys.stderr)
+        return False, 0, 0, 0
+
+    try:
+        msa = read_fasta(msa_path)
+        if not msa:
+            return False, 0, 0, 0
+        seqs = list(msa.values())
+        if len(seqs) < 2:
+            return False, 0, 0, 0
+
+        aln_len = max(len(s) for s in seqs)
+        seqs_padded = [s.ljust(aln_len, "-") for s in seqs]
+        n_seqs = len(seqs_padded)
+        AMINO_ACIDS = list("ACDEFGHIKLMNPQRSTVWY")
+
+        # Compute per-position residue frequencies and information content
+        positions = []
+        for pos in range(aln_len):
+            col = [s[pos].upper() for s in seqs_padded if pos < len(s)]
+            non_gap = [c for c in col if c in AMINO_ACIDS]
+            if not non_gap:
+                positions.append({"ic": 0.0, "freqs": {}})
+                continue
+            from collections import Counter
+            cnt = Counter(non_gap)
+            total_ng = len(non_gap)
+            freqs = {aa: cnt[aa] / total_ng for aa in AMINO_ACIDS if cnt.get(aa, 0) > 0}
+            H = -sum(f * math.log2(f) for f in freqs.values() if f > 0)
+            ic = max(0.0, math.log2(_N_AMINO_ACIDS) - H) * (total_ng / len(col))
+            positions.append({"ic": ic, "freqs": freqs})
+
+        n_effective_sites = sum(1 for p in positions if p["ic"] > 0.5)
+
+        # Select positions to display (IC > threshold, skip nearly all-gap cols)
+        show_idx = [i for i, p in enumerate(positions) if p["ic"] > 0.05]
+        if not show_idx:
+            return False, n_seqs, aln_len, n_effective_sites
+
+        # Cap display length for readability
+        if len(show_idx) > 80:
+            show_idx = sorted(show_idx, key=lambda i: -positions[i]["ic"])[:80]
+            show_idx = sorted(show_idx)
+
+        fig_w = max(8, len(show_idx) * 0.22)
+        fig, ax = plt.subplots(figsize=(fig_w, 3))
+
+        for x_pos, col_idx in enumerate(show_idx):
+            p = positions[col_idx]
+            ic = p["ic"]
+            if ic <= 0 or not p["freqs"]:
+                continue
+            sorted_aas = sorted(p["freqs"].items(), key=lambda kv: kv[1])
+            y_bot = 0.0
+            for aa, freq in sorted_aas:
+                h = freq * ic
+                ax.bar(x_pos, h, bottom=y_bot, width=0.85,
+                       color=_AA_COLORS.get(aa, "#888888"),
+                       edgecolor="none", linewidth=0)
+                y_bot += h
+
+        ax.set_xlim(-0.5, len(show_idx) - 0.5)
+        ax.set_ylim(0, math.log2(_N_AMINO_ACIDS))
+        ax.set_xlabel("Alignment position")
+        ax.set_ylabel("Information content (bits)")
+        ax.set_title(f"{hmm_name} — Cluster {cluster_id} logo  (n={n_seqs})")
+
+        step = max(1, len(show_idx) // 20)
+        tick_x = list(range(0, len(show_idx), step))
+        ax.set_xticks(tick_x)
+        ax.set_xticklabels([str(show_idx[i] + 1) for i in tick_x], fontsize=6, rotation=90)
+
+        fig.tight_layout()
+        saved = False
+        if "png" in formats and out_png:
+            os.makedirs(os.path.dirname(out_png), exist_ok=True)
+            fig.savefig(out_png, dpi=150, format="png")
+            saved = True
+        if "svg" in formats and out_svg:
+            os.makedirs(os.path.dirname(out_svg), exist_ok=True)
+            fig.savefig(out_svg, format="svg")
+            saved = True
+        plt.close(fig)
+        return saved, n_seqs, aln_len, n_effective_sites
+
+    except Exception as e:
+        import sys
+        print(
+            f"[embed/cluster] Logo generation failed for {hmm_name} "
+            f"cluster {cluster_id}: {e}",
+            file=sys.stderr,
+        )
+        return False, 0, 0, 0
+
+
+def _build_cluster_hmm(msa_path, output_hmm, cluster_name, threads=4, force=False):
+    """Run ``hmmbuild`` to create a profile HMM from a cluster seed MSA.
+
+    Returns ``True`` on success or if the HMM already exists, ``False``
+    otherwise (e.g. ``hmmbuild`` not in PATH or an error).
+    """
+    if os.path.exists(output_hmm) and not force:
+        return True
+    if not os.path.exists(msa_path):
+        return False
+    if not shutil.which("hmmbuild"):
+        import sys
+        print("[embed/cluster] hmmbuild not found — skipping HMM build.", file=sys.stderr)
+        return False
+    try:
+        cmd = ["hmmbuild", "--cpu", str(threads), "-n", cluster_name,
+               output_hmm, msa_path]
+        subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL,
+                       stderr=subprocess.DEVNULL)
+        return True
+    except subprocess.CalledProcessError as e:
+        import sys
+        print(f"[embed/cluster] hmmbuild failed for {cluster_name}: {e}", file=sys.stderr)
+        return False
+    except Exception as e:
+        import sys
+        print(f"[embed/cluster] hmmbuild error for {cluster_name}: {e}", file=sys.stderr)
+        return False
+
+
+def _classify_noise_sequences(knn_df, hmm_name):
+    """Classify noise (label −1) sequences using kNN neighbourhood evidence.
+
+    Noise sequences are categorised as one of:
+
+    * **peripheral_homolog** — strong kNN affinity to a single cluster
+    * **partial_homolog** — moderate kNN affinity with low entropy
+    * **bridge_sequence** — mixed neighbourhood suggesting inter-cluster
+      bridging or domain fusion / truncation
+    * **fusion_or_extension** — very high entropy neighbourhood implying
+      an unusual architecture
+    * **outlier** — no clear cluster affiliation
+
+    Parameters
+    ----------
+    knn_df : pd.DataFrame
+        Output of :func:`_compute_knn_metrics`.
+    hmm_name : str
+        HMM name, stored in the result table.
+
+    Returns
+    -------
+    pd.DataFrame  with columns: hmm_name, protein_id, classification,
+    dominant_cluster, neighborhood_purity, neighborhood_entropy, notes
+    """
+    if knn_df.empty:
+        return pd.DataFrame()
+
+    noise_df = knn_df[knn_df["cluster_id"] == -1].copy()
+    if noise_df.empty:
+        return pd.DataFrame()
+
+    rows = []
+    for _, row in noise_df.iterrows():
+        pid = row["protein_id"]
+        dom = int(row["dominant_cluster"])
+        purity = float(row["neighborhood_purity"])
+        entropy = float(row["neighborhood_entropy"])
+
+        if dom >= 0 and purity >= 0.6:
+            classification = "peripheral_homolog"
+            notes = f"Strong kNN affinity to cluster {dom} (purity={purity:.2f})"
+        elif dom >= 0 and purity >= 0.3:
+            if entropy > 1.5:
+                classification = "bridge_sequence"
+                notes = (
+                    f"Mixed neighbourhood, partial affinity to cluster {dom} "
+                    f"(purity={purity:.2f}, entropy={entropy:.2f})"
+                )
+            else:
+                classification = "partial_homolog"
+                notes = f"Moderate kNN affinity to cluster {dom} (purity={purity:.2f})"
+        elif entropy > 2.0:
+            classification = "fusion_or_extension"
+            notes = (
+                f"High-entropy neighbourhood (entropy={entropy:.2f}), "
+                "possible domain fusion or extension"
+            )
+        else:
+            classification = "outlier"
+            notes = "No clear cluster affiliation"
+
+        rows.append({
+            "hmm_name": hmm_name,
+            "protein_id": pid,
+            "classification": classification,
+            "dominant_cluster": dom,
+            "neighborhood_purity": purity,
+            "neighborhood_entropy": round(entropy, 4),
+            "notes": notes,
+        })
+
+    return pd.DataFrame(rows)
+
+
+def run_cluster_subworkflow(hmm_name, seqs, ids, Z, labels, emb_cfg,
+                            outdir, summary_dir, threads=4, force=False):
+    """Orchestrate the cluster-aware subworkflow for a single HMM hit set.
+
+    For each embedding-defined cluster this function:
+
+    1. Computes per-sequence kNN neighbourhood metrics (local graph support).
+    2. Assigns membership tiers: core / affiliate / bridge / outlier.
+    3. Writes per-cluster FASTA files (core and affiliate seeds).
+    4. Builds a seed MSA for each cluster using MAFFT (core sequences only).
+    5. Generates a sequence logo (PNG + SVG) for each cluster MSA.
+    6. Optionally builds a profile HMM for each cluster MSA via ``hmmbuild``.
+    7. Classifies noise (HDBSCAN −1) sequences using kNN evidence.
+    8. Writes summary TSV tables and a logo manifest.
+
+    Parameters
+    ----------
+    hmm_name : str
+        Identifier for this HMM / hit-set.
+    seqs : dict
+        {tip_id: amino_acid_sequence}.
+    ids : list
+        Sequence IDs in the same order as *labels* and rows of *Z*.
+    Z : np.ndarray
+        PCA-reduced feature matrix (n_samples × n_pca_components).
+    labels : list
+        Integer cluster labels (−1 = noise).
+    emb_cfg : dict
+        The validated embeddings config dict.  The relevant sub-section is
+        ``emb_cfg["cluster_subworkflow"]``.
+    outdir : str
+        Root output directory (parent of ``cluster_fasta/``, etc.).
+    summary_dir : str
+        Directory for summary TSV files.
+    threads : int
+        CPU threads for MAFFT / ``hmmbuild``.
+    force : bool
+        Overwrite existing output files.
+    """
+    import sys
+
+    sub_cfg = emb_cfg.get("cluster_subworkflow", {})
+    if not sub_cfg.get("enabled", False):
+        return
+
+    build_msas = sub_cfg.get("build_cluster_msas", True)
+    seed_membership = sub_cfg.get("seed_membership", "core_only")
+    build_hmms = sub_cfg.get("build_cluster_hmms", True)
+    classify_noise = sub_cfg.get("classify_noise", True)
+    gen_logos = sub_cfg.get("generate_sequence_logos", True)
+    logo_formats = sub_cfg.get("logo_format", ["png", "svg"])
+
+    unique_clusters = sorted(set(labels) - {-1})
+    noise_count = sum(1 for lb in labels if lb == -1)
+    print(
+        f"[embed/cluster] Running cluster subworkflow for {hmm_name}: "
+        f"{len(unique_clusters)} clusters, {noise_count} noise points"
+    )
+
+    if not unique_clusters:
+        print(
+            f"[embed/cluster] No clusters found for {hmm_name} — "
+            "skipping cluster subworkflow.",
+            file=sys.stderr,
+        )
+        return
+
+    # ── 1. kNN metrics ────────────────────────────────────────────────────────
+    k = int(emb_cfg.get("knn_neighbors", 10))
+    knn_df = _compute_knn_metrics(Z, ids, labels, k=k)
+
+    if not knn_df.empty and summary_dir:
+        safe_mkdir(summary_dir)
+        knn_metrics_fp = os.path.join(summary_dir, f"{hmm_name}.cluster_membership.tsv")
+        knn_df.to_csv(knn_metrics_fp, sep="\t", index=False)
+        print(f"[embed/cluster] Wrote kNN metrics: {knn_metrics_fp}")
+
+    # ── 2. Membership tiers ───────────────────────────────────────────────────
+    tiers = _assign_membership_tiers(ids, labels, knn_df)
+
+    # ── 3. Per-cluster FASTAs ─────────────────────────────────────────────────
+    fasta_dir = os.path.join(outdir, "cluster_fasta", hmm_name)
+    cluster_info = _write_cluster_fastas(seqs, ids, labels, tiers, fasta_dir, force=force)
+    print(
+        f"[embed/cluster] Wrote cluster FASTAs for {hmm_name} "
+        f"({len(cluster_info)} clusters)"
+    )
+
+    # ── 4–6. Per-cluster MSA, logo, and HMM ──────────────────────────────────
+    aln_dir = os.path.join(outdir, "cluster_alignments", hmm_name)
+    logo_dir = os.path.join(outdir, "cluster_logos", hmm_name)
+    hmm_dir = os.path.join(outdir, "cluster_hmms", hmm_name)
+    safe_mkdir(aln_dir)
+    safe_mkdir(logo_dir)
+    if build_hmms:
+        safe_mkdir(hmm_dir)
+
+    logo_manifest_rows = []
+
+    for cl_id, info in cluster_info.items():
+        # Choose the seed FASTA according to seed_membership config
+        if seed_membership == "core_only":
+            seed_fasta = info["core"]
+            n_seed = info["n_core"]
+        else:  # "core_and_affiliate"
+            # Merge core + affiliate into a combined seed FASTA
+            core_fp = info["core"]
+            aff_fp = info["affiliate"]
+            if core_fp and aff_fp:
+                combined_fp = os.path.join(fasta_dir, f"cluster_{cl_id}.seed.faa")
+                if not os.path.exists(combined_fp) or force:
+                    core_s = read_fasta(core_fp) if core_fp and os.path.exists(core_fp) else {}
+                    aff_s = read_fasta(aff_fp) if aff_fp and os.path.exists(aff_fp) else {}
+                    write_fasta(combined_fp, {**core_s, **aff_s})
+                seed_fasta = combined_fp
+                n_seed = info["n_core"] + info["n_affiliate"]
+            elif core_fp:
+                seed_fasta = core_fp
+                n_seed = info["n_core"]
+            else:
+                seed_fasta = aff_fp
+                n_seed = info["n_affiliate"]
+
+        if not seed_fasta or not os.path.exists(seed_fasta) or n_seed < 2:
+            print(
+                f"[embed/cluster] Cluster {cl_id} of {hmm_name}: "
+                f"insufficient seed sequences ({n_seed}) — skipping.",
+                file=sys.stderr,
+            )
+            continue
+
+        aln_fp = os.path.join(aln_dir, f"cluster_{cl_id}.seed.aln.faa")
+        logo_png = os.path.join(logo_dir, f"cluster_{cl_id}.logo.png")
+        logo_svg = os.path.join(logo_dir, f"cluster_{cl_id}.logo.svg")
+        hmm_fp = os.path.join(hmm_dir, f"cluster_{cl_id}.hmm")
+
+        # Build MSA
+        msa_ok = False
+        if build_msas:
+            msa_ok = _build_cluster_msa(seed_fasta, aln_fp, threads=threads, force=force)
+
+        # Generate logo
+        logo_ok = False
+        n_logo_seqs = 0
+        n_eff_sites = 0
+        aln_len_logo = 0
+        if gen_logos and msa_ok:
+            logo_ok, n_logo_seqs, aln_len_logo, n_eff_sites = _generate_sequence_logo(
+                aln_fp, logo_png, logo_svg,
+                hmm_name, cl_id,
+                formats=logo_formats,
+            )
+            if logo_ok:
+                print(
+                    f"[embed/cluster] Logo saved for {hmm_name}/cluster_{cl_id} "
+                    f"(n={n_logo_seqs}, aln_len={aln_len_logo}, effective_sites={n_eff_sites})"
+                )
+
+        # Build cluster HMM
+        hmm_ok = False
+        if build_hmms and msa_ok:
+            cluster_name = f"{hmm_name}_cluster_{cl_id}"
+            hmm_ok = _build_cluster_hmm(aln_fp, hmm_fp, cluster_name,
+                                         threads=threads, force=force)
+            if hmm_ok:
+                print(f"[embed/cluster] HMM built: {hmm_fp}")
+
+        logo_manifest_rows.append({
+            "hmm_name": hmm_name,
+            "cluster_id": cl_id,
+            "membership_tier_used": seed_membership,
+            "n_sequences": n_seed,
+            "alignment_length": aln_len_logo,
+            "n_effective_sites": n_eff_sites,
+            "logo_png": logo_png if logo_ok and "png" in logo_formats else "",
+            "logo_svg": logo_svg if logo_ok and "svg" in logo_formats else "",
+            "hmm": hmm_fp if hmm_ok else "",
+            "notes": "",
+        })
+
+    # ── Write logo manifest ───────────────────────────────────────────────────
+    if logo_manifest_rows and summary_dir:
+        safe_mkdir(summary_dir)
+        manifest_fp = os.path.join(summary_dir, f"{hmm_name}.cluster_logo_manifest.tsv")
+        pd.DataFrame(logo_manifest_rows).to_csv(manifest_fp, sep="\t", index=False)
+        print(f"[embed/cluster] Wrote logo manifest: {manifest_fp}")
+
+    # ── 7. Noise classification ───────────────────────────────────────────────
+    if classify_noise and noise_count > 0:
+        noise_cls_df = _classify_noise_sequences(knn_df, hmm_name)
+        if not noise_cls_df.empty and summary_dir:
+            noise_fp = os.path.join(summary_dir, f"{hmm_name}.noise_classification.tsv")
+            noise_cls_df.to_csv(noise_fp, sep="\t", index=False)
+            print(f"[embed/cluster] Wrote noise classification: {noise_fp}")
+
+        # Optionally score noise against cluster HMMs if they were built
+        if build_hmms and shutil.which("hmmscan") and summary_dir:
+            _score_noise_against_hmms(
+                ids, labels, seqs, hmm_dir, hmm_name,
+                summary_dir, threads, force,
+            )
+
+    print(f"[embed/cluster] Cluster subworkflow complete for {hmm_name}.")
+
+
+def _score_noise_against_hmms(ids, labels, seqs, hmm_dir, hmm_name,
+                               summary_dir, threads=4, force=False):
+    """Score noise sequences against per-cluster HMMs using ``hmmscan``.
+
+    Writes ``summary/<HMM>.cluster_recruitment.tsv`` with best-HMM hits for
+    each noise sequence.  Silently skips if no HMM files are present or
+    ``hmmscan`` is not available.
+    """
+    import tempfile
+    import sys
+
+    recruitment_fp = os.path.join(summary_dir, f"{hmm_name}.cluster_recruitment.tsv")
+    if os.path.exists(recruitment_fp) and not force:
+        return
+
+    # Collect noise protein sequences
+    noise_seqs: dict = {}
+    for tip, label in zip(ids, labels):
+        if label == -1:
+            protein = tip.split("|", 1)[1] if "|" in tip else tip
+            seq = seqs.get(tip) or seqs.get(protein)
+            if seq:
+                noise_seqs[protein] = seq
+
+    if not noise_seqs:
+        return
+
+    # Collect built HMM files
+    hmm_files = sorted(glob.glob(os.path.join(hmm_dir, "cluster_*.hmm")))
+    if not hmm_files:
+        return
+
+    try:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # Write noise sequences to a temp FASTA
+            noise_fasta = os.path.join(tmpdir, "noise.faa")
+            write_fasta(noise_fasta, noise_seqs)
+
+            # Concatenate all cluster HMMs into a library
+            combined_hmm = os.path.join(tmpdir, "cluster_lib.hmm")
+            with open(combined_hmm, "wb") as fout:
+                for hf in hmm_files:
+                    with open(hf, "rb") as fin:
+                        fout.write(fin.read())
+
+            # hmmpress the library
+            subprocess.run(
+                ["hmmpress", "-f", combined_hmm],
+                check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            )
+
+            # Run hmmscan
+            tbl_out = os.path.join(tmpdir, "noise_hmmscan.tbl")
+            subprocess.run(
+                ["hmmscan", "--cpu", str(threads),
+                 "--noali", "--tblout", tbl_out, combined_hmm, noise_fasta],
+                check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            )
+
+            # Parse tblout (space-delimited, # = comment)
+            rows = []
+            with open(tbl_out) as fh:
+                for line in fh:
+                    if line.startswith("#"):
+                        continue
+                    parts = line.split()
+                    if len(parts) < 9:
+                        continue
+                    rows.append({
+                        "hmm_name": hmm_name,
+                        "protein_id": parts[2],
+                        "best_cluster_hmm": parts[0],
+                        "evalue": parts[4],
+                        "bitscore": parts[5],
+                    })
+
+            if rows:
+                safe_mkdir(summary_dir)
+                pd.DataFrame(rows).to_csv(recruitment_fp, sep="\t", index=False)
+                print(f"[embed/cluster] Wrote noise recruitment: {recruitment_fp}")
+
+    except Exception as e:
+        print(
+            f"[embed/cluster] Noise HMM scoring failed for {hmm_name}: {e}",
+            file=sys.stderr,
+        )
 
 
 def _validate_emb_cfg(emb_cfg: dict) -> dict:
@@ -318,11 +1121,28 @@ def _validate_emb_cfg(emb_cfg: dict) -> dict:
     # pca_components default
     cfg.setdefault("pca_components", 50)
 
+    # cluster_subworkflow defaults
+    sub_cfg = cfg.get("cluster_subworkflow", {})
+    if not isinstance(sub_cfg, dict):
+        sub_cfg = {}
+    sub_cfg.setdefault("enabled", False)
+    sub_cfg.setdefault("build_cluster_msas", True)
+    sub_cfg.setdefault("seed_membership", "core_only")
+    sub_cfg.setdefault("build_cluster_hmms", True)
+    sub_cfg.setdefault("classify_noise", True)
+    sub_cfg.setdefault("recover_affiliates", True)
+    sub_cfg.setdefault("generate_sequence_logos", True)
+    sub_cfg.setdefault("logo_format", ["png", "svg"])
+    sub_cfg.setdefault("compare_cluster_hmms", False)
+    cfg["cluster_subworkflow"] = sub_cfg
+
     return cfg
 
 
 def compute_embeddings_for_hmm(hmm_name: str, seqs: dict, emb_cfg: dict, outdir_embeddings: str,
-                                force: bool, clades: dict | None, tax_map: dict | None = None):
+                                force: bool, clades: dict | None, tax_map: dict | None = None,
+                                outdir: str | None = None, summary_dir: str | None = None,
+                                threads: int = 4):
     """Compute embeddings, PCA, kNN, UMAP (visualization only), clustering, and save plots + TSVs.
 
     Clustering behaviour is controlled by the following config options:
@@ -335,6 +1155,8 @@ def compute_embeddings_for_hmm(hmm_name: str, seqs: dict, emb_cfg: dict, outdir_
       used **only** for visualisation, never for clustering.
     * ``run_knn`` (default ``True``): compute a cosine kNN graph on PCA space.
     * ``knn_neighbors`` (default ``10``): number of neighbors for kNN.
+    * ``cluster_subworkflow.enabled`` (default ``False``): when ``True``, run the
+      optional cluster-aware subworkflow (per-cluster MSA, logos, HMMs).
 
     Returns a list of cluster assignment dicts (for clade_assignment.tsv), or
     empty list.
@@ -520,6 +1342,23 @@ def compute_embeddings_for_hmm(hmm_name: str, seqs: dict, emb_cfg: dict, outdir_
                                 cluster_labels=labels,
                                 title_suffix=f" ({cluster_method.upper()} clusters)")
 
+            # ── Optional cluster subworkflow ───────────────────────────────
+            if emb_cfg.get("cluster_subworkflow", {}).get("enabled", False):
+                _subworkflow_outdir = outdir if outdir else os.path.dirname(outdir_embeddings)
+                _subworkflow_sumdir = summary_dir
+                run_cluster_subworkflow(
+                    hmm_name=hmm_name,
+                    seqs=seqs,
+                    ids=ids,
+                    Z=Z,
+                    labels=labels,
+                    emb_cfg=emb_cfg,
+                    outdir=_subworkflow_outdir,
+                    summary_dir=_subworkflow_sumdir,
+                    threads=threads,
+                    force=force,
+                )
+
     # ── metadata ──────────────────────────────────────────────────────────
     meta = {
         "hmm": hmm_name,
@@ -581,12 +1420,14 @@ def run_embed(cfg, hmm_to_seqs, clades, emb_dir, fasta_dir, hmm_keep,
     emb_cfg = cfg.get("embeddings", {})
 
     # Resolve model_dir: explicit config value → {outdir}/models
+    outdir = cfg.get("output", {}).get("outdir", None)
     if "model_dir" not in emb_cfg or emb_cfg["model_dir"] is None:
-        outdir = cfg.get("output", {}).get("outdir", None)
         if outdir:
             emb_cfg = dict(emb_cfg)  # shallow copy so we don't mutate the caller's dict
             emb_cfg["model_dir"] = os.path.join(outdir, "models")
             print(f"[embed] Model cache directory: {emb_cfg['model_dir']}")
+
+    threads = int(cfg.get("resources", {}).get("cpu", 4))
 
     # ensure we have sequence bins
     if not hmm_to_seqs:
@@ -603,7 +1444,9 @@ def run_embed(cfg, hmm_to_seqs, clades, emb_dir, fasta_dir, hmm_keep,
             continue
         assignments = compute_embeddings_for_hmm(
             hmm, seqs, emb_cfg, emb_dir, force=force,
-            clades=clades, tax_map=tax_map
+            clades=clades, tax_map=tax_map,
+            outdir=outdir, summary_dir=summary_dir,
+            threads=threads,
         )
         if assignments:
             all_cluster_assignments.extend(assignments)

@@ -81,7 +81,18 @@
         "hdbscan_metric": "euclidean",
         "umap_dimensions": 2,
         "knn_neighbors": 10,
-        "run_knn": true
+        "run_knn": true,
+        "cluster_subworkflow": {
+            "enabled": false,
+            "build_cluster_msas": true,
+            "seed_membership": "core_only",
+            "build_cluster_hmms": true,
+            "classify_noise": true,
+            "recover_affiliates": true,
+            "generate_sequence_logos": true,
+            "logo_format": ["png", "svg"],
+            "compare_cluster_hmms": false
+        }
     },
     "curate": {
         "enabled": false,
