@@ -1409,3 +1409,398 @@ class TestGenerateClusterMotifHeatmap:
         )
         assert existing.stat().st_mtime > mtime_before
         assert existing.stat().st_size > len(b"dummy")
+
+
+# ── _detect_motif_shift_regions ───────────────────────────────────────────────
+
+from phylofoundry.tasks.embed import _detect_motif_shift_regions
+
+
+def _write_aligned_fasta_cpd(path, seqs):
+    """Write an aligned FASTA to *path* (dict {id: seq})."""
+    with open(path, "w") as fh:
+        for sid, seq in seqs.items():
+            fh.write(f">{sid}\n{seq}\n")
+
+
+class TestDetectMotifShiftRegions:
+    """Unit tests for _detect_motif_shift_regions()."""
+
+    def _make_aln_dir(self, tmp_path, clusters):
+        """Write per-cluster aligned FASTAs and return {cl_id: path} dict."""
+        paths = {}
+        for cl_id, seqs in clusters.items():
+            fp = str(tmp_path / f"cluster_{cl_id}.seed.aln.faa")
+            _write_aligned_fasta_cpd(fp, seqs)
+            paths[cl_id] = fp
+        return paths
+
+    # ── smoke / return-type tests ──────────────────────────────────────────────
+
+    def test_returns_two_dataframes(self, tmp_path):
+        """Should return (regions_df, signal_df) tuple."""
+        clusters = {
+            0: {f"s{i}": "ACDEF" * 4 for i in range(6)},
+            1: {f"t{i}": "GHIKL" * 4 for i in range(6)},
+        }
+        paths = self._make_aln_dir(tmp_path, clusters)
+        regions_df, signal_df = _detect_motif_shift_regions("HMM1", paths)
+        import pandas as pd
+        assert isinstance(regions_df, pd.DataFrame)
+        assert isinstance(signal_df, pd.DataFrame)
+
+    def test_nonempty_for_two_clusters(self, tmp_path):
+        """Two distinct clusters should produce non-empty output."""
+        clusters = {
+            0: {f"s{i}": "ACDEFGHIKL" for i in range(6)},
+            1: {f"t{i}": "MNPQRSTVWY" for i in range(6)},
+        }
+        paths = self._make_aln_dir(tmp_path, clusters)
+        regions_df, signal_df = _detect_motif_shift_regions("HMM1", paths)
+        assert not regions_df.empty
+        assert not signal_df.empty
+
+    # ── column tests ───────────────────────────────────────────────────────────
+
+    def test_regions_expected_columns(self, tmp_path):
+        """regions_df must contain the expected column set."""
+        clusters = {
+            0: {f"s{i}": "ACDEFGHIKL" for i in range(6)},
+            1: {f"t{i}": "MNPQRSTVWY" for i in range(6)},
+        }
+        paths = self._make_aln_dir(tmp_path, clusters)
+        regions_df, _ = _detect_motif_shift_regions("HMM1", paths)
+        expected = {
+            "hmm_name", "region_id", "start_position", "end_position",
+            "n_positions", "mean_divergence", "max_divergence", "signal_type",
+        }
+        assert expected.issubset(set(regions_df.columns))
+
+    def test_signal_expected_columns(self, tmp_path):
+        """signal_df must contain the expected column set."""
+        clusters = {
+            0: {f"s{i}": "ACDE" for i in range(6)},
+            1: {f"t{i}": "FGHI" for i in range(6)},
+        }
+        paths = self._make_aln_dir(tmp_path, clusters)
+        _, signal_df = _detect_motif_shift_regions("HMM1", paths)
+        expected = {
+            "hmm_name", "aln_position", "signal_value",
+            "smoothed_signal_value", "signal_type",
+        }
+        assert expected.issubset(set(signal_df.columns))
+
+    # ── signal value tests ─────────────────────────────────────────────────────
+
+    def test_signal_values_in_range(self, tmp_path):
+        """JSD-based signal values should lie in [0, 1]."""
+        clusters = {
+            0: {f"s{i}": "AAAA" for i in range(8)},
+            1: {f"t{i}": "CCCC" for i in range(8)},
+        }
+        paths = self._make_aln_dir(tmp_path, clusters)
+        _, signal_df = _detect_motif_shift_regions("HMM1", paths)
+        assert (signal_df["signal_value"] >= 0).all()
+        assert (signal_df["signal_value"] <= 1 + 1e-9).all()
+
+    def test_signal_length_equals_alignment_length(self, tmp_path):
+        """signal_df must have one row per alignment position."""
+        aln_len = 12
+        clusters = {
+            0: {f"s{i}": "A" * aln_len for i in range(6)},
+            1: {f"t{i}": "C" * aln_len for i in range(6)},
+        }
+        paths = self._make_aln_dir(tmp_path, clusters)
+        _, signal_df = _detect_motif_shift_regions("HMM1", paths)
+        assert len(signal_df) == aln_len
+
+    def test_signal_positions_1based(self, tmp_path):
+        """aln_position should start at 1 (1-based indexing)."""
+        clusters = {
+            0: {f"s{i}": "ACDE" for i in range(6)},
+            1: {f"t{i}": "FGHI" for i in range(6)},
+        }
+        paths = self._make_aln_dir(tmp_path, clusters)
+        _, signal_df = _detect_motif_shift_regions("HMM1", paths)
+        assert signal_df["aln_position"].min() == 1
+
+    # ── region structure tests ─────────────────────────────────────────────────
+
+    def test_regions_cover_full_alignment(self, tmp_path):
+        """Regions must contiguously cover the full alignment length."""
+        aln_len = 20
+        clusters = {
+            0: {f"s{i}": "A" * aln_len for i in range(6)},
+            1: {f"t{i}": "C" * aln_len for i in range(6)},
+        }
+        paths = self._make_aln_dir(tmp_path, clusters)
+        regions_df, _ = _detect_motif_shift_regions("HMM1", paths)
+        assert regions_df["start_position"].min() == 1
+        assert regions_df["end_position"].max() == aln_len
+        # No gaps between consecutive regions
+        rows = regions_df.sort_values("start_position").reset_index(drop=True)
+        for i in range(1, len(rows)):
+            assert rows.loc[i, "start_position"] == rows.loc[i - 1, "end_position"] + 1
+
+    def test_regions_n_positions_consistent(self, tmp_path):
+        """n_positions == end_position - start_position + 1 for every region."""
+        clusters = {
+            0: {f"s{i}": "ACDEFGHIKL" for i in range(6)},
+            1: {f"t{i}": "MNPQRSTVWY" for i in range(6)},
+        }
+        paths = self._make_aln_dir(tmp_path, clusters)
+        regions_df, _ = _detect_motif_shift_regions("HMM1", paths)
+        for _, row in regions_df.iterrows():
+            assert row["n_positions"] == row["end_position"] - row["start_position"] + 1
+
+    def test_mean_divergence_nonneg(self, tmp_path):
+        """mean_divergence must be >= 0 for all regions."""
+        clusters = {
+            0: {f"s{i}": "ACDE" for i in range(6)},
+            1: {f"t{i}": "FGHI" for i in range(6)},
+        }
+        paths = self._make_aln_dir(tmp_path, clusters)
+        regions_df, _ = _detect_motif_shift_regions("HMM1", paths)
+        assert (regions_df["mean_divergence"] >= 0).all()
+
+    def test_max_gte_mean_divergence(self, tmp_path):
+        """max_divergence >= mean_divergence for every region."""
+        clusters = {
+            0: {f"s{i}": "ACDE" for i in range(6)},
+            1: {f"t{i}": "FGHI" for i in range(6)},
+        }
+        paths = self._make_aln_dir(tmp_path, clusters)
+        regions_df, _ = _detect_motif_shift_regions("HMM1", paths)
+        assert (regions_df["max_divergence"] >= regions_df["mean_divergence"] - 1e-9).all()
+
+    def test_region_ids_sequential(self, tmp_path):
+        """region_id should be a sequential 1-based integer."""
+        aln_len = 20
+        clusters = {
+            0: {f"s{i}": "A" * aln_len for i in range(6)},
+            1: {f"t{i}": "C" * aln_len for i in range(6)},
+        }
+        paths = self._make_aln_dir(tmp_path, clusters)
+        regions_df, _ = _detect_motif_shift_regions("HMM1", paths)
+        rows = regions_df.sort_values("region_id").reset_index(drop=True)
+        assert list(rows["region_id"]) == list(range(1, len(rows) + 1))
+
+    def test_hmm_name_in_output(self, tmp_path):
+        """hmm_name column should match the provided name."""
+        clusters = {
+            0: {f"s{i}": "ACDE" for i in range(6)},
+            1: {f"t{i}": "FGHI" for i in range(6)},
+        }
+        paths = self._make_aln_dir(tmp_path, clusters)
+        regions_df, signal_df = _detect_motif_shift_regions("MY_HMM", paths)
+        assert (regions_df["hmm_name"] == "MY_HMM").all()
+        assert (signal_df["hmm_name"] == "MY_HMM").all()
+
+    # ── signal type tests ──────────────────────────────────────────────────────
+
+    def test_signal_type_mean_jsd(self, tmp_path):
+        """signal_type column should reflect the chosen signal."""
+        clusters = {
+            0: {f"s{i}": "ACDE" for i in range(6)},
+            1: {f"t{i}": "FGHI" for i in range(6)},
+        }
+        paths = self._make_aln_dir(tmp_path, clusters)
+        regions_df, signal_df = _detect_motif_shift_regions(
+            "HMM1", paths, signal="mean_jsd"
+        )
+        assert (signal_df["signal_type"] == "mean_jsd").all()
+        assert (regions_df["signal_type"] == "mean_jsd").all()
+
+    def test_signal_type_max_jsd(self, tmp_path):
+        """max_jsd signal should yield valid signal_df."""
+        clusters = {
+            0: {f"s{i}": "AAAA" for i in range(6)},
+            1: {f"t{i}": "CCCC" for i in range(6)},
+        }
+        paths = self._make_aln_dir(tmp_path, clusters)
+        _, signal_df = _detect_motif_shift_regions("HMM1", paths, signal="max_jsd")
+        assert (signal_df["signal_value"] >= 0).all()
+        assert (signal_df["signal_type"] == "max_jsd").all()
+
+    def test_signal_type_jsd_vs_global(self, tmp_path):
+        """jsd_vs_global signal should yield valid signal_df."""
+        clusters = {
+            0: {f"s{i}": "ACDE" for i in range(6)},
+            1: {f"t{i}": "FGHI" for i in range(6)},
+        }
+        paths = self._make_aln_dir(tmp_path, clusters)
+        _, signal_df = _detect_motif_shift_regions(
+            "HMM1", paths, signal="jsd_vs_global"
+        )
+        assert (signal_df["signal_value"] >= 0).all()
+        assert (signal_df["signal_type"] == "jsd_vs_global").all()
+
+    # ── smoothing tests ────────────────────────────────────────────────────────
+
+    def test_smoothing_does_not_change_length(self, tmp_path):
+        """Smoothing should not alter the number of signal positions."""
+        aln_len = 20
+        clusters = {
+            0: {f"s{i}": "A" * aln_len for i in range(6)},
+            1: {f"t{i}": "C" * aln_len for i in range(6)},
+        }
+        paths = self._make_aln_dir(tmp_path, clusters)
+        _, signal_df = _detect_motif_shift_regions(
+            "HMM1", paths, smoothing_window=5
+        )
+        assert len(signal_df) == aln_len
+
+    def test_no_smoothing_raw_equals_smoothed(self, tmp_path):
+        """With smoothing_window=0, raw and smoothed signals must be equal."""
+        clusters = {
+            0: {f"s{i}": "ACDE" for i in range(6)},
+            1: {f"t{i}": "FGHI" for i in range(6)},
+        }
+        paths = self._make_aln_dir(tmp_path, clusters)
+        _, signal_df = _detect_motif_shift_regions(
+            "HMM1", paths, smoothing_window=0
+        )
+        assert (
+            (signal_df["signal_value"] - signal_df["smoothed_signal_value"]).abs() < 1e-9
+        ).all()
+
+    # ── change-point detection tests ───────────────────────────────────────────
+
+    def test_high_threshold_yields_one_region(self, tmp_path):
+        """With a very high threshold, no splits occur → a single region."""
+        aln_len = 20
+        clusters = {
+            0: {f"s{i}": "A" * aln_len for i in range(6)},
+            1: {f"t{i}": "C" * aln_len for i in range(6)},
+        }
+        paths = self._make_aln_dir(tmp_path, clusters)
+        # threshold=1e9 prevents any split
+        regions_df, _ = _detect_motif_shift_regions(
+            "HMM1", paths, threshold=1e9
+        )
+        assert len(regions_df) == 1
+
+    def test_max_changepoints_limits_regions(self, tmp_path):
+        """max_changepoints caps the number of detected splits."""
+        aln_len = 60
+        # Alternating A/C blocks to create high-variance signal
+        seq_a = ("A" * 10 + "C" * 10) * 3
+        seq_b = ("C" * 10 + "A" * 10) * 3
+        clusters = {
+            0: {f"s{i}": seq_a for i in range(8)},
+            1: {f"t{i}": seq_b for i in range(8)},
+        }
+        paths = self._make_aln_dir(tmp_path, clusters)
+        regions_df, _ = _detect_motif_shift_regions(
+            "HMM1", paths, max_changepoints=3, threshold=0.0
+        )
+        # At most max_changepoints + 1 regions
+        assert len(regions_df) <= 4
+
+    # ── edge case / guard tests ────────────────────────────────────────────────
+
+    def test_single_cluster_returns_empty(self, tmp_path):
+        """Only one cluster → no pairs → both DataFrames empty."""
+        clusters = {0: {f"s{i}": "ACDE" for i in range(6)}}
+        paths = self._make_aln_dir(tmp_path, clusters)
+        regions_df, signal_df = _detect_motif_shift_regions("HMM1", paths)
+        assert regions_df.empty
+        assert signal_df.empty
+
+    def test_empty_paths_returns_empty(self, tmp_path):
+        """Empty input dict → both DataFrames empty."""
+        regions_df, signal_df = _detect_motif_shift_regions("HMM1", {})
+        assert regions_df.empty
+        assert signal_df.empty
+
+    def test_min_cluster_size_filters(self, tmp_path):
+        """Clusters below min_cluster_size are excluded."""
+        clusters = {
+            0: {f"s{i}": "ACDE" for i in range(2)},
+            1: {f"t{i}": "FGHI" for i in range(2)},
+        }
+        paths = self._make_aln_dir(tmp_path, clusters)
+        regions_df, signal_df = _detect_motif_shift_regions(
+            "HMM1", paths, min_cluster_size=5
+        )
+        assert regions_df.empty
+        assert signal_df.empty
+
+    def test_gaps_skipped_in_counts(self, tmp_path):
+        """Gap characters should not cause errors."""
+        clusters = {
+            0: {f"s{i}": "--AA--" for i in range(6)},
+            1: {f"t{i}": "--CC--" for i in range(6)},
+        }
+        paths = self._make_aln_dir(tmp_path, clusters)
+        regions_df, signal_df = _detect_motif_shift_regions("HMM1", paths)
+        assert (signal_df["signal_value"] >= 0).all()
+
+    def test_three_clusters_still_works(self, tmp_path):
+        """Three clusters should produce valid output."""
+        aln_len = 10
+        clusters = {
+            0: {f"s{i}": "A" * aln_len for i in range(6)},
+            1: {f"t{i}": "C" * aln_len for i in range(6)},
+            2: {f"u{i}": "G" * aln_len for i in range(6)},
+        }
+        paths = self._make_aln_dir(tmp_path, clusters)
+        regions_df, signal_df = _detect_motif_shift_regions("HMM1", paths)
+        assert not regions_df.empty
+        assert len(signal_df) == aln_len
+
+
+# ── _validate_emb_cfg: change_point_detection defaults ───────────────────────
+
+class TestValidateEmbCfgChangePointDetection:
+    """Tests for change_point_detection config section in _validate_emb_cfg."""
+
+    def _base_cfg(self):
+        return {
+            "backend": "esm",
+            "model": "esm2_t33_650M_UR50D",
+            "device": "cpu",
+            "batch_size": 4,
+            "repr_layer": None,
+            "pooling": "mean",
+            "pca_components": 3,
+            "cluster_embeddings": True,
+        }
+
+    def test_cpd_defaults_injected(self):
+        cfg = _validate_emb_cfg(self._base_cfg())
+        cpd = cfg["cluster_subworkflow"]["change_point_detection"]
+        assert cpd["enabled"] is False
+        assert cpd["signal"] == "mean_jsd"
+        assert cpd["smoothing_window"] == 0
+        assert cpd["min_segment_len"] == 5
+        assert cpd["merge_distance"] == 10
+        assert cpd["threshold"] == 0.05
+        assert cpd["max_changepoints"] == 25
+        assert cpd["min_cluster_size"] == 5
+
+    def test_cpd_can_be_enabled(self):
+        base = self._base_cfg()
+        base["cluster_subworkflow"] = {
+            "change_point_detection": {"enabled": True}
+        }
+        cfg = _validate_emb_cfg(base)
+        assert cfg["cluster_subworkflow"]["change_point_detection"]["enabled"] is True
+
+    def test_cpd_custom_signal(self):
+        base = self._base_cfg()
+        base["cluster_subworkflow"] = {
+            "change_point_detection": {"signal": "max_jsd"}
+        }
+        cfg = _validate_emb_cfg(base)
+        assert cfg["cluster_subworkflow"]["change_point_detection"]["signal"] == "max_jsd"
+
+    def test_cpd_non_dict_replaced_with_defaults(self):
+        base = self._base_cfg()
+        base["cluster_subworkflow"] = {
+            "change_point_detection": None
+        }
+        cfg = _validate_emb_cfg(base)
+        cpd = cfg["cluster_subworkflow"]["change_point_detection"]
+        assert isinstance(cpd, dict)
+        assert cpd["enabled"] is False

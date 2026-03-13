@@ -1080,6 +1080,53 @@ def run_cluster_subworkflow(hmm_name, seqs, ids, Z, labels, emb_cfg,
                 force=force,
             )
 
+    # ── 11. Change-point detection (motif shift regions) ────────────────────
+    cpd_cfg = sub_cfg.get("change_point_detection", {})
+    if cpd_cfg.get("enabled", False) and build_msas and len(unique_clusters) >= 2:
+        min_cl_size = int(cpd_cfg.get("min_cluster_size", 5))
+        pseudocount = float(cpd_cfg.get("pseudocount", 1e-6))
+        sig = str(cpd_cfg.get("signal", "mean_jsd"))
+        smoothing_window = int(cpd_cfg.get("smoothing_window", 0))
+        min_segment_len = int(cpd_cfg.get("min_segment_len", 5))
+        merge_distance = int(cpd_cfg.get("merge_distance", 10))
+        threshold = float(cpd_cfg.get("threshold", 0.05))
+        max_changepoints = int(cpd_cfg.get("max_changepoints", 25))
+
+        # Collect alignment paths for clusters that have a valid MSA
+        cluster_aln_paths = {}
+        for cl_id in unique_clusters:
+            aln_fp = os.path.join(aln_dir, f"cluster_{cl_id}.seed.aln.faa")
+            if os.path.exists(aln_fp):
+                cluster_aln_paths[cl_id] = aln_fp
+
+        if len(cluster_aln_paths) >= 2:
+            cpd_regions_df, cpd_signal_df = _detect_motif_shift_regions(
+                hmm_name,
+                cluster_aln_paths,
+                min_cluster_size=min_cl_size,
+                pseudocount=pseudocount,
+                signal=sig,
+                smoothing_window=smoothing_window,
+                min_segment_len=min_segment_len,
+                merge_distance=merge_distance,
+                threshold=threshold,
+                max_changepoints=max_changepoints,
+            )
+            if not cpd_regions_df.empty and summary_dir:
+                safe_mkdir(summary_dir)
+                regions_fp = os.path.join(
+                    summary_dir, f"{hmm_name}.motif_shift_regions.tsv"
+                )
+                cpd_regions_df.to_csv(regions_fp, sep="\t", index=False)
+                print(f"[embed/cluster] Wrote motif shift regions: {regions_fp}")
+            if not cpd_signal_df.empty and summary_dir:
+                safe_mkdir(summary_dir)
+                signal_fp = os.path.join(
+                    summary_dir, f"{hmm_name}.motif_shift_signal.tsv"
+                )
+                cpd_signal_df.to_csv(signal_fp, sep="\t", index=False)
+                print(f"[embed/cluster] Wrote motif shift signal: {signal_fp}")
+
     print(f"[embed/cluster] Cluster subworkflow complete for {hmm_name}.")
 
 
@@ -1699,6 +1746,339 @@ def _generate_cluster_motif_heatmap(
     return matrix_df
 
 
+def _detect_motif_shift_regions(
+    hmm_name,
+    cluster_aln_paths,
+    min_cluster_size=5,
+    pseudocount=1e-6,
+    signal="mean_jsd",
+    smoothing_window=0,
+    min_segment_len=5,
+    merge_distance=10,
+    threshold=0.05,
+    max_changepoints=25,
+):
+    """Detect motif shift regions across cluster alignments using change-point analysis.
+
+    Computes a per-position divergence signal from cluster MSAs, then applies
+    **binary segmentation** to identify alignment regions where the divergence
+    distribution changes significantly.  These regions often correspond to:
+
+    * catalytic motif substitutions
+    * substrate-binding region evolution
+    * domain boundary changes
+    * motif degeneration or expansion
+    * cluster-specific insertions or deletions
+
+    Parameters
+    ----------
+    hmm_name : str
+        HMM / hit-set identifier used for output labelling.
+    cluster_aln_paths : dict
+        Mapping ``{cluster_id: aligned_fasta_path}``.  All MSAs must share
+        the same alignment coordinate system (column count).
+    min_cluster_size : int
+        Clusters with fewer aligned sequences than this value are skipped.
+    pseudocount : float
+        Laplace-like pseudocount added to every residue count before
+        normalisation.  Prevents log(0) errors.
+    signal : str
+        Divergence signal to use for change-point detection.  Options:
+
+        ``"mean_jsd"``
+            Mean pairwise Jensen–Shannon divergence across all cluster pairs
+            at every alignment position.
+        ``"max_jsd"``
+            Maximum pairwise Jensen–Shannon divergence across all cluster
+            pairs at every alignment position.
+        ``"jsd_vs_global"``
+            JSD of each cluster vs. the pooled global distribution, averaged
+            across clusters at every alignment position.
+    smoothing_window : int
+        If > 1, apply a sliding-window mean smooth of this width to the
+        signal before change-point detection.  Use ``0`` or ``1`` to skip.
+    min_segment_len : int
+        Minimum number of alignment columns in any segment.  Change-points
+        that would create shorter segments are rejected.
+    merge_distance : int
+        Adjacent change-points separated by fewer than this many columns are
+        merged into a single boundary, simplifying the output.
+    threshold : float
+        Minimum reduction in within-segment sum-of-squared-deviations
+        required before a split is accepted.  Higher values produce fewer,
+        more significant change-points.
+    max_changepoints : int
+        Maximum number of change-points to detect.
+
+    Returns
+    -------
+    regions_df : pd.DataFrame
+        One row per detected segment with columns: ``hmm_name``,
+        ``region_id``, ``start_position``, ``end_position``,
+        ``n_positions``, ``mean_divergence``, ``max_divergence``,
+        ``signal_type``.
+    signal_df : pd.DataFrame
+        Per-position signal values with columns: ``hmm_name``,
+        ``aln_position``, ``signal_value``, ``smoothed_signal_value``,
+        ``signal_type``.
+    """
+    import sys
+    import math
+    from collections import Counter
+    from itertools import combinations
+
+    import numpy as np
+    from ..utils.bio import read_fasta
+
+    AA_ALPHABET = list("ACDEFGHIKLMNPQRSTVWY")
+    GAP_CHARS = set("-. X?*")
+
+    # ── helpers ───────────────────────────────────────────────────────────────
+
+    def _site_counts(aln_seqs):
+        """Return a list of Counter objects, one per alignment column."""
+        if not aln_seqs:
+            return []
+        seqs_list = list(aln_seqs.values())
+        n_cols = len(seqs_list[0])
+        counts = []
+        for col_idx in range(n_cols):
+            c = Counter()
+            for seq in seqs_list:
+                if col_idx < len(seq):
+                    aa = seq[col_idx].upper()
+                    if aa not in GAP_CHARS and aa in set(AA_ALPHABET):
+                        c[aa] += 1
+            counts.append(c)
+        return counts
+
+    def _to_prob_vector(counts, pc=pseudocount):
+        """Convert a Counter to a normalised probability vector."""
+        raw = np.array([counts.get(a, 0) + pc for a in AA_ALPHABET], dtype=float)
+        return raw / raw.sum()
+
+    def _jsd_two(p_vec, q_vec):
+        """Symmetric JSD in bits (range 0–1)."""
+        m_vec = 0.5 * (p_vec + q_vec)
+        jsd = 0.0
+        for p, m in zip(p_vec, m_vec):
+            if p > 0 and m > 0:
+                jsd += 0.5 * p * math.log2(p / m)
+        for q, m in zip(q_vec, m_vec):
+            if q > 0 and m > 0:
+                jsd += 0.5 * q * math.log2(q / m)
+        return float(jsd)
+
+    def _smooth(values, window):
+        """Apply sliding-window mean smoothing."""
+        if window < 2 or len(values) < window:
+            return list(values)
+        result = []
+        half = window // 2
+        n = len(values)
+        for i in range(n):
+            lo = max(0, i - half)
+            hi = min(n, i + half + 1)
+            result.append(sum(values[lo:hi]) / (hi - lo))
+        return result
+
+    def _segment_cost(arr):
+        """Sum of squared deviations from segment mean."""
+        if len(arr) == 0:
+            return 0.0
+        m = sum(arr) / len(arr)
+        return sum((x - m) ** 2 for x in arr)
+
+    def _binary_segmentation(values, min_size, thr, max_cps):
+        """Binary segmentation; returns sorted list of change-point indices.
+
+        Each index is the 0-based start position of the *second* half after a
+        split (i.e. a boundary between segments).
+        """
+        n = len(values)
+        if n < 2 * min_size:
+            return []
+
+        def _best_split_in(l, r):
+            if r - l < 2 * min_size:
+                return None, 0.0
+            base = _segment_cost(values[l:r])
+            best_gain = thr
+            best_s = None
+            for s in range(l + min_size, r - min_size + 1):
+                gain = base - _segment_cost(values[l:s]) - _segment_cost(values[s:r])
+                if gain > best_gain:
+                    best_gain = gain
+                    best_s = s
+            return best_s, best_gain
+
+        segments = [(0, n)]
+        change_points = []
+
+        for _ in range(max_cps):
+            best_split = None
+            best_gain = 0.0
+            best_idx = None
+
+            for i, (l, r) in enumerate(segments):
+                s, g = _best_split_in(l, r)
+                if g > best_gain:
+                    best_gain = g
+                    best_split = s
+                    best_idx = i
+
+            if best_split is None:
+                break
+
+            l, r = segments[best_idx]
+            segments.pop(best_idx)
+            segments.append((l, best_split))
+            segments.append((best_split, r))
+            change_points.append(best_split)
+
+        return sorted(change_points)
+
+    def _merge_close_changepoints(cps, dist):
+        """Remove change-points that are closer than *dist* to their neighbour."""
+        if not cps:
+            return []
+        merged = [cps[0]]
+        for cp in cps[1:]:
+            if cp - merged[-1] >= dist:
+                merged.append(cp)
+        return merged
+
+    # ── load cluster MSAs ─────────────────────────────────────────────────────
+    cluster_counts = {}
+    cluster_n_seqs = {}
+
+    for cl_id, aln_fp in cluster_aln_paths.items():
+        try:
+            aln_seqs = read_fasta(aln_fp)
+        except Exception as exc:
+            print(
+                f"[embed/cluster/cpd] Could not read {aln_fp}: {exc}",
+                file=sys.stderr,
+            )
+            continue
+        n_seqs = len(aln_seqs)
+        if n_seqs < min_cluster_size:
+            print(
+                f"[embed/cluster/cpd] Cluster {cl_id} ({n_seqs} seqs) is below "
+                f"min_cluster_size={min_cluster_size} -- skipping.",
+                file=sys.stderr,
+            )
+            continue
+        cluster_counts[cl_id] = _site_counts(aln_seqs)
+        cluster_n_seqs[cl_id] = n_seqs
+
+    eligible = sorted(cluster_counts.keys())
+    if len(eligible) < 2:
+        return pd.DataFrame(), pd.DataFrame()
+
+    aln_len = min(len(cluster_counts[cl]) for cl in eligible)
+    if aln_len == 0:
+        return pd.DataFrame(), pd.DataFrame()
+
+    # ── compute divergence signal ─────────────────────────────────────────────
+    raw_signal = np.zeros(aln_len, dtype=float)
+
+    if signal in ("mean_jsd", "max_jsd"):
+        pair_signals = {}
+        for cl_a, cl_b in combinations(eligible, 2):
+            pair_jsd = []
+            for pos in range(aln_len):
+                p = _to_prob_vector(cluster_counts[cl_a][pos])
+                q = _to_prob_vector(cluster_counts[cl_b][pos])
+                pair_jsd.append(_jsd_two(p, q))
+            pair_signals[(cl_a, cl_b)] = pair_jsd
+
+        for pos in range(aln_len):
+            vals = [pair_signals[k][pos] for k in pair_signals]
+            raw_signal[pos] = (
+                float(np.mean(vals)) if signal == "mean_jsd"
+                else float(np.max(vals))
+            )
+    else:
+        # jsd_vs_global — also the fallback for any unrecognised signal value
+        if signal not in ("mean_jsd", "max_jsd", "jsd_vs_global"):
+            print(
+                f"[embed/cluster/cpd] Unrecognised signal '{signal}'; "
+                "falling back to 'jsd_vs_global'.",
+                file=sys.stderr,
+            )
+            signal = "jsd_vs_global"
+        global_counts = []
+        for pos in range(aln_len):
+            g = Counter()
+            for cl in eligible:
+                for aa, cnt in cluster_counts[cl][pos].items():
+                    g[aa] += cnt
+            global_counts.append(g)
+
+        for pos in range(aln_len):
+            g_vec = _to_prob_vector(global_counts[pos])
+            per_cluster = [
+                _jsd_two(_to_prob_vector(cluster_counts[cl][pos]), g_vec)
+                for cl in eligible
+            ]
+            raw_signal[pos] = float(np.mean(per_cluster))
+
+    # ── smooth signal ─────────────────────────────────────────────────────────
+    smoothed_signal = (
+        _smooth(raw_signal.tolist(), smoothing_window)
+        if smoothing_window and smoothing_window > 1
+        else raw_signal.tolist()
+    )
+
+    # ── detect change-points ──────────────────────────────────────────────────
+    change_points = _binary_segmentation(
+        smoothed_signal,
+        min_size=min_segment_len,
+        thr=threshold,
+        max_cps=max_changepoints,
+    )
+    change_points = _merge_close_changepoints(change_points, merge_distance)
+
+    # ── build segment boundaries ──────────────────────────────────────────────
+    boundaries = [0] + change_points + [aln_len]
+    segments = [(boundaries[i], boundaries[i + 1]) for i in range(len(boundaries) - 1)]
+
+    # ── build regions DataFrame ───────────────────────────────────────────────
+    region_rows = []
+    for region_id, (l, r) in enumerate(segments, start=1):
+        seg_vals = raw_signal[l:r]
+        region_rows.append(
+            {
+                "hmm_name": hmm_name,
+                "region_id": region_id,
+                "start_position": l + 1,  # 1-based
+                "end_position": r,         # 1-based inclusive
+                "n_positions": r - l,
+                "mean_divergence": round(float(np.mean(seg_vals)), 6),
+                "max_divergence": round(float(np.max(seg_vals)), 6),
+                "signal_type": signal,
+            }
+        )
+
+    regions_df = pd.DataFrame(region_rows) if region_rows else pd.DataFrame()
+
+    # ── build signal DataFrame ────────────────────────────────────────────────
+    signal_rows = [
+        {
+            "hmm_name": hmm_name,
+            "aln_position": pos + 1,  # 1-based
+            "signal_value": round(float(raw_signal[pos]), 6),
+            "smoothed_signal_value": round(float(smoothed_signal[pos]), 6),
+            "signal_type": signal,
+        }
+        for pos in range(aln_len)
+    ]
+    signal_df = pd.DataFrame(signal_rows) if signal_rows else pd.DataFrame()
+
+    return regions_df, signal_df
+
+
 def _score_noise_against_hmms(ids, labels, seqs, hmm_dir, hmm_name,
                                summary_dir, threads=4, force=False):
     """Score noise sequences against per-cluster HMMs using ``hmmscan``.
@@ -1855,6 +2235,19 @@ def _validate_emb_cfg(emb_cfg: dict) -> dict:
     sub_cfg.setdefault("generate_sequence_logos", True)
     sub_cfg.setdefault("logo_format", ["png", "svg"])
     sub_cfg.setdefault("compare_cluster_hmms", False)
+    cpd_cfg = sub_cfg.get("change_point_detection", {})
+    if not isinstance(cpd_cfg, dict):
+        cpd_cfg = {}
+    cpd_cfg.setdefault("enabled", False)
+    cpd_cfg.setdefault("signal", "mean_jsd")
+    cpd_cfg.setdefault("smoothing_window", 0)
+    cpd_cfg.setdefault("min_segment_len", 5)
+    cpd_cfg.setdefault("merge_distance", 10)
+    cpd_cfg.setdefault("threshold", 0.05)
+    cpd_cfg.setdefault("max_changepoints", 25)
+    cpd_cfg.setdefault("min_cluster_size", 5)
+    cpd_cfg.setdefault("pseudocount", 1e-6)
+    sub_cfg["change_point_detection"] = cpd_cfg
     cfg["cluster_subworkflow"] = sub_cfg
 
     return cfg
