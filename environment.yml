@@ -24,6 +24,8 @@ dependencies:
   - hyphy
   - treecluster
   - clinker-py
+  - python-igraph
+  - leidenalg
   - pip
   - pip:
     - fair-esm

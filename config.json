@@ -75,7 +75,11 @@
         "pca_components": 3,
         "write_full_vectors": false,
         "cluster_embeddings": true,
-        "hdbscan_min_cluster_size": 5
+        "cluster_on": "PCA",
+        "cluster_method": "hdbscan",
+        "hdbscan_min_cluster_size": 5,
+        "hdbscan_metric": "euclidean",
+        "umap_dimensions": 2
     },
     "curate": {
         "enabled": false,

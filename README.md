@@ -8,7 +8,7 @@
 
 -   **Competitive HMM Hits**: Uses both `hmmscan` and `hmmsearch` to identify the best functional assignments for proteins, resolving overlapping hits competitively by bitscore.
 -   **Automated Phylogeny**: Per-HMM alignment (MAFFT/HMMER), trimming (ClipKit), and tree inference (IQ-TREE).
--   **Protein Embeddings** (Optional): Generates per-HMM embeddings (ESM) and dimensionality reduction (PCA/UMAP), with HDBSCAN clustering and UMAP scatter plots.
+-   **Protein Embeddings** (Optional): Generates per-HMM embeddings (ESM-2, HuggingFace) and dimensionality reduction (PCA/UMAP), with flexible clustering (HDBSCAN or Leiden) on PCA or raw embeddings, and 2D/3D UMAP scatter plots.
 -   **Ancestral Sequence Reconstruction**: Parses IQ-TREE `.state` files to reconstruct ancestral protein sequences, embeds them alongside modern sequences, and visualizes evolutionary trajectories in UMAP space.
 -   **Combined Tree Mode**: `--combined` flag to build a single tree from all HMM hits, with combined embeddings and clustering.
 -   **Motif Scoring** (Optional): Uses ESM-2 attention weights to score structurally important motifs (e.g., `--motifs HPEVY,HPEVF`).
@@ -255,8 +255,8 @@ The pipeline runs as a series of sequential **Steps**. You can control execution
 
 ### Step 4: `embed` (Optional)
 -   **Action**: Uses Protein Language Models (ESM-2, etc.) to embed sequences.
--   **Analysis**: Performs PCA and UMAP on the embeddings to visualize sequence space.
--   **Clustering**: Runs HDBSCAN on raw embeddings to auto-discover functional clusters.
+-   **Analysis**: Performs PCA on the embeddings to reduce dimensionality, and UMAP (2D or 3D, visualization only) for scatter plots.
+-   **Clustering**: Runs HDBSCAN or Leiden on PCA-reduced or raw embedding vectors to auto-discover functional clusters.
 -   **Output**: `embeddings/<hmm_name>.pca.tsv`, `.umap.tsv`, `.umap.png`, `.umap.clustered.png`, `summary/clade_assignment.tsv`.
 
 ### Step 5: `phylo`
@@ -369,6 +369,51 @@ phylofoundry --dump_default_config > config.json
 -   `enabled`: Set to `true` to run embedding step.
 -   `model`: `esm2_t33_650M_UR50D` (default) or other HuggingFace models.
 -   `device`: `cuda` (GPU) or `cpu`.
+-   `cluster_on`: `"PCA"` (default) or `"embeddings"` — whether to cluster PCA-reduced vectors or raw embedding vectors. PCA is recommended for most datasets as it reduces noise.
+-   `cluster_method`: `"hdbscan"` (default) or `"leiden"` — clustering algorithm.
+    -   `hdbscan`: Density-based clustering; produces a noise label (`-1`) for outlier points. Best for small-to-medium datasets.
+    -   `leiden`: Community-detection on a cosine kNN graph. Assigns every point to a cluster (no noise label). Recommended for large datasets (> 10,000 sequences).
+-   `hdbscan_metric`: Distance metric used for HDBSCAN clustering and, when `cluster_method: leiden`, for building the kNN graph (default: `"euclidean"`). Set to `"cosine"` for embedding-space clustering. Any metric supported by [scikit-learn](https://scikit-learn.org/stable/modules/generated/sklearn.neighbors.NearestNeighbors.html) is accepted.
+-   `hdbscan_min_cluster_size`: Minimum cluster size for HDBSCAN (default: `5`).
+-   `umap_dimensions`: `2` (default) or `3` — dimensionality of the UMAP projection. UMAP is used **only for visualization**; cluster labels are never derived from UMAP coordinates.
+
+> **Clustering vs Visualization**
+>
+> Cluster labels are always computed from the feature space selected by `cluster_on` (PCA or raw embeddings). UMAP is a separate dimensionality reduction step used solely to produce 2D/3D scatter plots. Changing `umap_dimensions` does **not** affect cluster assignments.
+
+##### Example — Leiden on PCA with cosine kNN
+
+```json
+"embeddings": {
+    "enabled": true,
+    "cluster_on": "PCA",
+    "cluster_method": "leiden",
+    "hdbscan_metric": "cosine",
+    "umap_dimensions": 2
+}
+```
+
+##### Example — HDBSCAN on raw embeddings with cosine metric
+
+```json
+"embeddings": {
+    "enabled": true,
+    "cluster_on": "embeddings",
+    "cluster_method": "hdbscan",
+    "hdbscan_metric": "cosine",
+    "hdbscan_min_cluster_size": 10,
+    "umap_dimensions": 3
+}
+```
+
+##### When to use each method
+
+| Scenario | Recommended settings |
+| :--- | :--- |
+| Small dataset (< 1,000 sequences), general use | `cluster_on: PCA`, `cluster_method: hdbscan`, `hdbscan_metric: euclidean` |
+| Large dataset (> 10,000 sequences) | `cluster_on: PCA`, `cluster_method: leiden`, `hdbscan_metric: cosine` |
+| High-dimensional raw embeddings, no PCA | `cluster_on: embeddings`, `cluster_method: hdbscan`, `hdbscan_metric: cosine` |
+| 3-D visualization only | Any clustering setting + `umap_dimensions: 3` |
 
 #### `job` / `resources`
 -   `cpu`: Number of threads. If running on Slurm, this is auto-detected from `$SLURM_CPUS_PER_TASK`.

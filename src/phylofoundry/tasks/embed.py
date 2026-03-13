@@ -99,13 +99,28 @@ def _embed_transformers(seqs: dict, model_id_or_path: str, device: str, batch_si
     return ids, X
 
 def _save_umap_plot(U, ids, hmm_name, out_png, clades=None, cluster_labels=None, title_suffix=""):
-    """Generate and save a UMAP scatter plot as PNG."""
+    """Generate and save a UMAP scatter plot as PNG. Supports 2D and 3D projections."""
     try:
         import matplotlib
         matplotlib.use("Agg")
         import matplotlib.pyplot as plt
 
-        fig, ax = plt.subplots(figsize=(8, 6))
+        n_dims = U.shape[1] if U.ndim > 1 else 2
+        is_3d = (n_dims >= 3)
+
+        if is_3d:
+            fig = plt.figure(figsize=(9, 7))
+            ax = fig.add_subplot(111, projection="3d")
+        else:
+            fig, ax = plt.subplots(figsize=(8, 6))
+
+        def _scatter(pts, color, label=None):
+            if is_3d:
+                ax.scatter(pts[:, 0], pts[:, 1], pts[:, 2], c=[color], s=20, alpha=0.7,
+                           label=label, edgecolors="none")
+            else:
+                ax.scatter(pts[:, 0], pts[:, 1], c=[color], s=20, alpha=0.7,
+                           label=label, edgecolors="none")
 
         if cluster_labels is not None:
             unique_labels = sorted(set(cluster_labels))
@@ -115,7 +130,7 @@ def _save_umap_plot(U, ids, hmm_name, out_png, clades=None, cluster_labels=None,
                 pts = U[[i for i, m in enumerate(mask) if m]]
                 color = "lightgrey" if label == -1 else cmap(unique_labels.index(label) % 20)
                 lbl = "Noise" if label == -1 else f"Cluster {label}"
-                ax.scatter(pts[:, 0], pts[:, 1], c=[color], s=20, alpha=0.7, label=lbl, edgecolors="none")
+                _scatter(pts, color, label=lbl)
             ax.legend(fontsize=7, loc="best", framealpha=0.7, markerscale=1.5)
         elif clades:
             # Color by user-provided clades
@@ -130,18 +145,23 @@ def _save_umap_plot(U, ids, hmm_name, out_png, clades=None, cluster_labels=None,
                 mask = [a == cn for a in assigned]
                 pts = U[[i for i, m in enumerate(mask) if m]]
                 if len(pts) > 0:
-                    ax.scatter(pts[:, 0], pts[:, 1], c=[cmap(ci)], s=20, alpha=0.7, label=cn, edgecolors="none")
+                    _scatter(pts, cmap(ci), label=cn)
             # Unassigned
             mask = [a is None for a in assigned]
             pts = U[[i for i, m in enumerate(mask) if m]]
             if len(pts) > 0:
-                ax.scatter(pts[:, 0], pts[:, 1], c="lightgrey", s=15, alpha=0.5, label="unassigned", edgecolors="none")
+                _scatter(pts, "lightgrey", label="unassigned")
             ax.legend(fontsize=7, loc="best", framealpha=0.7, markerscale=1.5)
         else:
-            ax.scatter(U[:, 0], U[:, 1], c="steelblue", s=20, alpha=0.7, edgecolors="none")
+            if is_3d:
+                ax.scatter(U[:, 0], U[:, 1], U[:, 2], c="steelblue", s=20, alpha=0.7, edgecolors="none")
+            else:
+                ax.scatter(U[:, 0], U[:, 1], c="steelblue", s=20, alpha=0.7, edgecolors="none")
 
         ax.set_xlabel("UMAP 1")
         ax.set_ylabel("UMAP 2")
+        if is_3d:
+            ax.set_zlabel("UMAP 3")
         ax.set_title(f"{hmm_name} — UMAP{title_suffix}")
         fig.tight_layout()
         fig.savefig(out_png, dpi=200)
@@ -155,11 +175,17 @@ def _save_umap_plot(U, ids, hmm_name, out_png, clades=None, cluster_labels=None,
         print(f"[embed] UMAP plot failed for {hmm_name}: {e}", file=sys.stderr)
 
 
-def _run_hdbscan(X, min_cluster_size=5):
-    """Cluster embeddings with HDBSCAN. Returns list of integer labels (-1 = noise)."""
+def _run_hdbscan(X, min_cluster_size=5, metric="euclidean"):
+    """Cluster embeddings with HDBSCAN. Returns list of integer labels (-1 = noise).
+
+    Args:
+        X: Feature matrix (n_samples x n_features).
+        min_cluster_size: Minimum cluster size for HDBSCAN.
+        metric: Distance metric (e.g. 'euclidean', 'cosine').
+    """
     try:
         from sklearn.cluster import HDBSCAN
-        clusterer = HDBSCAN(min_cluster_size=min_cluster_size)
+        clusterer = HDBSCAN(min_cluster_size=min_cluster_size, metric=metric)
         labels = clusterer.fit_predict(X)
         return labels.tolist()
     except ImportError:
@@ -172,10 +198,132 @@ def _run_hdbscan(X, min_cluster_size=5):
         return None
 
 
+def _run_leiden(X, n_neighbors=15, metric="cosine", resolution=1.0):
+    """Cluster embeddings with Leiden algorithm on a kNN graph.
+
+    Builds a cosine (or other metric) k-nearest-neighbour graph, then runs
+    the Leiden community-detection algorithm.  Suitable for large datasets.
+
+    Args:
+        X: Feature matrix (n_samples x n_features).
+        n_neighbors: Number of neighbours for the kNN graph.
+        metric: Distance metric for kNN graph construction (default: 'cosine').
+        resolution: Resolution parameter for Leiden (higher → more clusters).
+
+    Returns:
+        List of integer cluster labels (0-based), or None on failure.
+    """
+    try:
+        import igraph as ig
+        import leidenalg
+        from sklearn.neighbors import NearestNeighbors
+
+        n_samples = X.shape[0]
+        k = min(n_neighbors, n_samples - 1)
+
+        nn = NearestNeighbors(n_neighbors=k, metric=metric, algorithm="auto")
+        nn.fit(X)
+        distances, indices = nn.kneighbors(X)
+
+        # Build undirected kNN graph (edges weighted by 1 - distance)
+        edges = []
+        weights = []
+        for i, (nbrs, dists) in enumerate(zip(indices, distances)):
+            for j, d in zip(nbrs, dists):
+                if j > i:
+                    edges.append((i, j))
+        weights.append(max(0.0, 1.0 - d))  # similarity weight (clamped to [0, 1])
+
+        g = ig.Graph(n=n_samples, edges=edges)
+        g.es["weight"] = weights
+
+        partition = leidenalg.find_partition(
+            g,
+            leidenalg.RBConfigurationVertexPartition,
+            weights="weight",
+            resolution_parameter=resolution,
+            seed=42,
+        )
+        labels = [0] * n_samples
+        for cluster_id, members in enumerate(partition):
+            for node_idx in members:
+                labels[node_idx] = cluster_id
+        return labels
+    except ImportError:
+        import sys
+        print("[embed] Leiden clustering requires igraph and leidenalg. Skipping.", file=sys.stderr)
+        return None
+    except Exception as e:
+        import sys
+        print(f"[embed] Leiden clustering failed: {e}", file=sys.stderr)
+        return None
+
+
+_VALID_CLUSTER_ON = {"pca", "embeddings"}
+_VALID_CLUSTER_METHODS = {"hdbscan", "leiden"}
+
+
+def _validate_emb_cfg(emb_cfg: dict) -> dict:
+    """Validate and normalise the embeddings config section.
+
+    Returns a copy of *emb_cfg* with defaults filled in and values normalised.
+    Raises ``ValueError`` for invalid option combinations.
+    """
+    import sys
+    cfg = dict(emb_cfg)
+
+    # cluster_on
+    cluster_on = str(cfg.get("cluster_on", "PCA")).lower()
+    if cluster_on not in _VALID_CLUSTER_ON:
+        raise ValueError(
+            f"[embed] Invalid 'cluster_on' value '{cfg.get('cluster_on')}'. "
+            f"Must be one of: {sorted(_VALID_CLUSTER_ON)}"
+        )
+    cfg["_cluster_on"] = cluster_on  # normalised lowercase key used internally
+
+    # cluster_method
+    cluster_method = str(cfg.get("cluster_method", "hdbscan")).lower()
+    if cluster_method not in _VALID_CLUSTER_METHODS:
+        raise ValueError(
+            f"[embed] Invalid 'cluster_method' value '{cfg.get('cluster_method')}'. "
+            f"Must be one of: {sorted(_VALID_CLUSTER_METHODS)}"
+        )
+    cfg["_cluster_method"] = cluster_method
+
+    # umap_dimensions
+    umap_dims = int(cfg.get("umap_dimensions", 2))
+    if umap_dims not in (2, 3):
+        print(
+            f"[embed] Warning: 'umap_dimensions' must be 2 or 3; got {umap_dims}. Defaulting to 2.",
+            file=sys.stderr,
+        )
+        umap_dims = 2
+    cfg["_umap_dimensions"] = umap_dims
+
+    # hdbscan_metric – any string is accepted; invalid values produce a runtime
+    # error from scikit-learn, which is caught gracefully in _run_hdbscan.
+    cfg.setdefault("hdbscan_metric", "euclidean")
+
+    return cfg
+
+
 def compute_embeddings_for_hmm(hmm_name: str, seqs: dict, emb_cfg: dict, outdir_embeddings: str,
-                               force: bool, clades: dict | None, tax_map: dict | None = None):
-    """Compute embeddings, PCA, UMAP, HDBSCAN clustering, and save plots + TSVs.
-    Returns a list of cluster assignment dicts (for clade_assignment.tsv), or empty list."""
+                                force: bool, clades: dict | None, tax_map: dict | None = None):
+    """Compute embeddings, PCA, UMAP (visualization only), clustering, and save plots + TSVs.
+
+    Clustering behaviour is controlled by the following config options:
+
+    * ``cluster_on`` (``"PCA"`` | ``"embeddings"``): whether to cluster the
+      PCA-reduced vectors or the raw embedding vectors.
+    * ``cluster_method`` (``"hdbscan"`` | ``"leiden"``): clustering algorithm.
+    * ``hdbscan_metric`` (default ``"euclidean"``): distance metric for HDBSCAN.
+    * ``umap_dimensions`` (``2`` | ``3``): dimensionality of the UMAP projection
+      used **only** for visualisation, never for clustering.
+
+    Returns a list of cluster assignment dicts (for clade_assignment.tsv), or
+    empty list.
+    """
+    import sys
     safe_mkdir(outdir_embeddings)
 
     out_npy = os.path.join(outdir_embeddings, f"{hmm_name}.embeddings.npy")
@@ -192,20 +340,28 @@ def compute_embeddings_for_hmm(hmm_name: str, seqs: dict, emb_cfg: dict, outdir_
 
     seqs = {k: v.replace(" ", "").replace("\n", "").replace("*", "").replace(".", "") for k, v in seqs.items()}
     if len(seqs) < 3:
-        import sys
         print(f"[embed] Warning: HMM '{hmm_name}' has less than 3 sequences. Skipping embeddings.", file=sys.stderr)
         return []
+
+    # ── Validate config ───────────────────────────────────────────────────
+    try:
+        emb_cfg = _validate_emb_cfg(emb_cfg)
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return []
+
+    cluster_on = emb_cfg["_cluster_on"]        # "pca" or "embeddings"
+    cluster_method = emb_cfg["_cluster_method"]  # "hdbscan" or "leiden"
+    umap_dims = emb_cfg["_umap_dimensions"]      # 2 or 3
 
     backend = emb_cfg["backend"]
     device = emb_cfg["device"]
     batch_size = int(emb_cfg["batch_size"])
     model_name = emb_cfg["model"]
     repr_layer = emb_cfg.get("repr_layer", None)
-
     model_dir = emb_cfg.get("model_dir", None)
 
     try:
-        import sys
         if backend == "esm":
             ids, X = _embed_esm(seqs, model_name=model_name, device=device, batch_size=batch_size, repr_layer=repr_layer, model_dir=model_dir)
         elif backend == "transformers":
@@ -220,7 +376,7 @@ def compute_embeddings_for_hmm(hmm_name: str, seqs: dict, emb_cfg: dict, outdir_
     X = X.astype(np.float32)
     np.save(out_npy, X)
 
-    # PCA
+    # ── PCA ───────────────────────────────────────────────────────────────
     ncomp = int(emb_cfg["pca_components"])
     if ncomp < 2:
         ncomp = 2
@@ -238,49 +394,64 @@ def compute_embeddings_for_hmm(hmm_name: str, seqs: dict, emb_cfg: dict, outdir_
         rows.append(r)
     pd.DataFrame(rows).to_csv(out_pca, sep="\t", index=False)
 
-    # ── UMAP ──────────────────────────────────────────────────────────────
+    # ── UMAP (visualization only) ─────────────────────────────────────────
     U = None
     try:
         import umap
         import warnings as _w
-        reducer = umap.UMAP(n_components=2, random_state=42)
+        reducer = umap.UMAP(n_components=umap_dims, random_state=42)
         with _w.catch_warnings():
             _w.simplefilter("ignore")
             U = reducer.fit_transform(X)
-        
+
         u_rows = []
         for tip, coords in zip(ids, U):
             genome = tip.split("|", 1)[0] if "|" in tip else "Unknown"
             protein = tip.split("|", 1)[1] if "|" in tip else tip
-            u_rows.append({
+            row = {
                 "hmm": hmm_name,
                 "tip": tip,
                 "genome": genome,
                 "protein": protein,
                 "UMAP1": float(coords[0]),
-                "UMAP2": float(coords[1])
-            })
+                "UMAP2": float(coords[1]),
+            }
+            if umap_dims >= 3:
+                row["UMAP3"] = float(coords[2])
+            u_rows.append(row)
         pd.DataFrame(u_rows).to_csv(out_umap, sep="\t", index=False)
 
         # Save UMAP plot (colored by clades if available)
         _save_umap_plot(U, ids, hmm_name, out_umap_png, clades=clades)
     except ImportError:
-        import sys
         print("[embed] UMAP skip: umap-learn not installed.", file=sys.stderr)
     except Exception as e:
-        import sys
         print(f"[embed] UMAP failed for {hmm_name}: {e}", file=sys.stderr)
 
-    # ── HDBSCAN clustering ────────────────────────────────────────────────
+    # ── Clustering ────────────────────────────────────────────────────────
+    # Select the feature matrix to cluster on (PCA or raw embeddings)
     cluster_assignments = []
     if emb_cfg.get("cluster_embeddings", True):
-        min_cs = int(emb_cfg.get("hdbscan_min_cluster_size", 5))
-        labels = _run_hdbscan(X, min_cluster_size=min_cs)
+        X_clust = Z if cluster_on == "pca" else X
+        print(f"[embed] Clustering on {'PCA' if cluster_on == 'pca' else 'raw embeddings'} "
+              f"using {cluster_method.upper()} for {hmm_name}")
+
+        if cluster_method == "leiden":
+            leiden_metric = emb_cfg.get("hdbscan_metric", "cosine")  # reused for kNN graph metric
+            labels = _run_leiden(X_clust, metric=leiden_metric)
+        else:
+            # default: hdbscan
+            min_cs = int(emb_cfg.get("hdbscan_min_cluster_size", 5))
+            hdb_metric = emb_cfg.get("hdbscan_metric", "euclidean")
+            labels = _run_hdbscan(X_clust, min_cluster_size=min_cs, metric=hdb_metric)
+
         if labels is not None:
-            # Genome ID normalizer for taxonomy lookup
             from ..utils.helpers import normalize_genome_id
-            n_clusters = len(set(labels) - {-1})
-            print(f"[embed] HDBSCAN found {n_clusters} clusters for {hmm_name} ({sum(1 for l in labels if l == -1)} noise points)")
+            unique_clusters = set(labels) - {-1}
+            n_clusters = len(unique_clusters)
+            noise_count = sum(1 for lb in labels if lb == -1)
+            print(f"[embed] {cluster_method.upper()} found {n_clusters} clusters for {hmm_name} "
+                  f"({noise_count} noise points)")
 
             for tip, label in zip(ids, labels):
                 genome = tip.split("|", 1)[0] if "|" in tip else "Unknown"
@@ -297,12 +468,13 @@ def compute_embeddings_for_hmm(hmm_name: str, seqs: dict, emb_cfg: dict, outdir_
                     "taxonomy": taxonomy,
                 })
 
-            # Save cluster-colored UMAP plot
+            # Save cluster-colored UMAP plot (UMAP used only for visualization)
             if U is not None:
                 _save_umap_plot(U, ids, hmm_name, out_umap_clust_png,
-                                cluster_labels=labels, title_suffix=" (HDBSCAN clusters)")
+                                cluster_labels=labels,
+                                title_suffix=f" ({cluster_method.upper()} clusters)")
 
-    # metadata
+    # ── metadata ──────────────────────────────────────────────────────────
     meta = {
         "hmm": hmm_name,
         "backend": backend,
@@ -315,6 +487,9 @@ def compute_embeddings_for_hmm(hmm_name: str, seqs: dict, emb_cfg: dict, outdir_
         "explained_variance_ratio": var,
         "n_sequences": int(len(ids)),
         "vector_dim": int(X.shape[1]),
+        "cluster_on": cluster_on,
+        "cluster_method": cluster_method,
+        "umap_dimensions": umap_dims,
     }
     write_json(meta, out_meta)
 
