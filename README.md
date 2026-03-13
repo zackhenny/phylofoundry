@@ -405,11 +405,54 @@ cluster_hmms/<HMM>/
     cluster_<id>.hmm               # Profile HMM (hmmbuild)
 
 summary/
-    <HMM>.cluster_membership.tsv   # Per-sequence kNN metrics + tier
+    <HMM>.cluster_membership.tsv         # Per-sequence kNN metrics + tier
     <HMM>.cluster_logo_manifest.tsv
     <HMM>.noise_classification.tsv
-    <HMM>.cluster_recruitment.tsv  # (optional, when HMM scoring runs)
+    <HMM>.cluster_recruitment.tsv        # (optional, when HMM scoring runs)
+    <HMM>.cluster_kl_divergence.tsv      # (optional) Per-position KL/JSD divergence
+    <HMM>.cluster_kl_top_sites.tsv       # (optional) Top divergent positions per pair
 ```
+
+### KL-divergence differential motif analysis
+
+When `cluster_subworkflow.kl_divergence.enabled = true`, PhyloFoundry automatically computes **per-position KL divergence and Jensen-Shannon divergence (JSD)** between all pairs of cluster MSAs.  This identifies alignment columns where amino-acid usage differs most strongly between embedding-defined subfamilies — candidate sites for functional divergence, substrate-specificity shifts, or motif evolution.
+
+#### How it works
+
+For each pair of clusters that have valid seed MSAs and at least `min_cluster_size` aligned sequences:
+
+1. **Amino-acid frequency distributions** are computed at every alignment column for each cluster.
+2. A **pseudocount** is added to avoid zero probabilities.
+3. **Asymmetric KL divergence** (KL(A→B) and KL(B→A)) and **symmetric Jensen-Shannon divergence** (JSD, range 0–1 bits) are computed at every position.
+4. Results are written to two TSV files (see [Outputs](#outputs) above).
+
+#### Output columns — `<HMM>.cluster_kl_divergence.tsv`
+
+| Column | Description |
+|---|---|
+| `hmm_name` | HMM / hit-set identifier. |
+| `cluster_A` | First cluster ID. |
+| `cluster_B` | Second cluster ID. |
+| `pair` | Label `cluster_A:cluster_B`. |
+| `aln_position` | 1-based alignment column index. |
+| `kl_A_to_B` | KL divergence KL(A ∥ B) in bits. |
+| `kl_B_to_A` | KL divergence KL(B ∥ A) in bits. |
+| `js_divergence` | Symmetric Jensen-Shannon divergence in bits (0–1). |
+| `top_aa_A` | Most common amino acid in cluster A at this position. |
+| `top_aa_B` | Most common amino acid in cluster B at this position. |
+| `n_seqs_A` | Number of sequences in cluster A. |
+| `n_seqs_B` | Number of sequences in cluster B. |
+
+The companion file `<HMM>.cluster_kl_top_sites.tsv` contains the same columns but is restricted to the top `top_n_sites` highest-JSD positions per cluster pair, making it easy to identify candidate evolutionary shift sites at a glance.
+
+#### KL divergence config options
+
+| Key | Default | Description |
+|---|---|---|
+| `enabled` | `false` | Enable KL divergence analysis between cluster MSAs. |
+| `min_cluster_size` | `5` | Skip clusters with fewer than this many aligned sequences. |
+| `pseudocount` | `1e-6` | Pseudocount added to residue counts before normalisation. |
+| `top_n_sites` | `20` | Number of top-divergent sites to report in the summary table. |
 
 ### Sequence logos
 
@@ -445,13 +488,19 @@ Colour scheme:
       "build_cluster_hmms": true,
       "classify_noise": true,
       "generate_sequence_logos": true,
-      "logo_format": ["png", "svg"]
+      "logo_format": ["png", "svg"],
+      "kl_divergence": {
+        "enabled": true,
+        "min_cluster_size": 5,
+        "pseudocount": 1e-6,
+        "top_n_sites": 20
+      }
     }
   }
 }
 ```
 
-> **Note**: This subworkflow requires MAFFT (for MSAs) and optionally HMMER (`hmmbuild`, `hmmscan`) for profile HMM construction and noise scoring.  Both are already listed as core pipeline dependencies.  Sequence logos require only matplotlib, which is a standard Python dependency.
+> **Note**: This subworkflow requires MAFFT (for MSAs) and optionally HMMER (`hmmbuild`, `hmmscan`) for profile HMM construction and noise scoring.  Both are already listed as core pipeline dependencies.  Sequence logos require only matplotlib, and KL divergence analysis requires only the Python standard library — no additional dependencies are needed.
 
 ---
 
@@ -739,7 +788,13 @@ An optional sub-section nested under `embeddings` that activates the **cluster-a
     "recover_affiliates": true,
     "generate_sequence_logos": true,
     "logo_format": ["png", "svg"],
-    "compare_cluster_hmms": false
+    "compare_cluster_hmms": false,
+    "kl_divergence": {
+        "enabled": false,
+        "min_cluster_size": 5,
+        "pseudocount": 1e-6,
+        "top_n_sites": 20
+    }
 }
 ```
 
@@ -754,6 +809,10 @@ An optional sub-section nested under `embeddings` that activates the **cluster-a
 | `generate_sequence_logos` | `true` | Generate a PNG/SVG sequence logo for each cluster MSA. |
 | `logo_format` | `["png", "svg"]` | Output formats for sequence logos. |
 | `compare_cluster_hmms` | `false` | Reserved for future cross-cluster HMM comparison. |
+| `kl_divergence.enabled` | `false` | Enable per-position KL/JSD divergence analysis between cluster MSAs. |
+| `kl_divergence.min_cluster_size` | `5` | Minimum number of aligned sequences required to include a cluster in KL analysis. |
+| `kl_divergence.pseudocount` | `1e-6` | Pseudocount added to residue counts before normalisation (avoids log(0)). |
+| `kl_divergence.top_n_sites` | `20` | Number of highest-JSD positions to include in the `cluster_kl_top_sites.tsv` summary. |
 
 
 ### `ha`
