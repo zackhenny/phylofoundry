@@ -29,6 +29,7 @@ dependencies:
   - leidenalg
   - pip
   - pip:
+    - logomaker
     - fair-esm
     - transformers
     - torch
