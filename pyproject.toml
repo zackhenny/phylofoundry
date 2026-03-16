@@ -32,6 +32,7 @@ all = [
   "pygenomeviz",
   "matplotlib",
   "scipy",
+  "logomaker",
 ]
 # Just the embedding stack
 embed = [
@@ -42,6 +43,7 @@ embed = [
   "torch",
   "transformers",
   "fair-esm",
+  "logomaker",
 ]
 # Post-processing
 post = [
