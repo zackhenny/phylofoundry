@@ -436,7 +436,17 @@ def run_synteny(cfg, synteny_dir, tree_dir, scan_df, search_df, hmm_keep, force=
                     nucl_seq = Seq(nucl_seq)
             else:
                 nucl_seq = Seq("N" * size)
-            
+
+            # Detect focal gene strand and orient everything consistently
+            focal_feat = next((f for f in feats if f.get("is_focal")), None)
+            focal_strand = 1
+            if focal_feat is not None:
+                focal_strand = 1 if str(focal_feat["strand"]) in ["1", "+"] else -1
+
+            if focal_strand == -1:
+                # Reverse-complement the sequence so the focal gene points forward
+                nucl_seq = nucl_seq.reverse_complement()
+
             # Make track name unique to support multiple contigs/proteins per genome
             safe_prot = protein.replace("|", "_").split("~")[-1]
             track_name = f"{genome}_{safe_prot}"
@@ -448,7 +458,17 @@ def run_synteny(cfg, synteny_dir, tree_dir, scan_df, search_df, hmm_keep, force=
             
             for f in feats:
                 strand = 1 if str(f["strand"]) in ["1", "+"] else -1
-                loc = FeatureLocation(f["start"] - min_start, f["end"] - min_start, strand=strand)
+                feat_start = f["start"] - min_start
+                feat_end = f["end"] - min_start
+
+                if focal_strand == -1:
+                    # Flip coordinates relative to the reversed sequence
+                    new_start = size - feat_end
+                    new_end = size - feat_start
+                    strand = -strand
+                    feat_start, feat_end = new_start, new_end
+
+                loc = FeatureLocation(feat_start, feat_end, strand=strand)
                 
                 qualifiers = {
                     "locus_tag": [f.get("label", "")],

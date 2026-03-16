@@ -102,6 +102,119 @@ class TestSyntenyParsing:
         assert feats[1]["is_focal"]
         assert feats[1]["strand"] == -1 # complement
 
+class TestGenBankOrientation:
+    """Tests that GenBank records are oriented so the focal gene is on the forward strand."""
+
+    def _make_feats(self, focal_strand):
+        """Return three synthetic features with the focal gene in the middle."""
+        return [
+            {"start": 100, "end": 200, "strand": 1, "label": "up", "protein_id": "p1",
+             "translation": "", "is_focal": False, "uid": "p1"},
+            {"start": 300, "end": 400, "strand": focal_strand, "label": "focal", "protein_id": "p2",
+             "translation": "", "is_focal": True, "uid": "p2"},
+            {"start": 500, "end": 600, "strand": 1, "label": "down", "protein_id": "p3",
+             "translation": "", "is_focal": False, "uid": "p3"},
+        ]
+
+    def _build_gbk_record(self, feats, contig_seq=None):
+        """Replicate the GenBank-building logic from run_synteny, returning the SeqRecord."""
+        from Bio.SeqRecord import SeqRecord
+        from Bio.Seq import Seq
+        from Bio.SeqFeature import SeqFeature, FeatureLocation
+
+        min_start = min(f["start"] for f in feats)
+        max_end = max(f["end"] for f in feats)
+        size = max_end - min_start + 1
+
+        if contig_seq is not None:
+            nucl_seq = contig_seq[min_start:max_end]
+            if isinstance(nucl_seq, str):
+                nucl_seq = Seq(nucl_seq)
+        else:
+            nucl_seq = Seq("N" * size)
+
+        focal_feat = next((f for f in feats if f.get("is_focal")), None)
+        focal_strand = 1
+        if focal_feat is not None:
+            focal_strand = 1 if str(focal_feat["strand"]) in ["1", "+"] else -1
+
+        if focal_strand == -1:
+            nucl_seq = nucl_seq.reverse_complement()
+
+        rec = SeqRecord(nucl_seq, id="genome_p2", name="genome_p2",
+                        description="test", annotations={"molecule_type": "DNA"})
+
+        for f in feats:
+            strand = 1 if str(f["strand"]) in ["1", "+"] else -1
+            feat_start = f["start"] - min_start
+            feat_end = f["end"] - min_start
+
+            if focal_strand == -1:
+                new_start = size - feat_end
+                new_end = size - feat_start
+                strand = -strand
+                feat_start, feat_end = new_start, new_end
+
+            loc = FeatureLocation(feat_start, feat_end, strand=strand)
+            qualifiers = {"locus_tag": [f.get("label", "")]}
+            sf = SeqFeature(loc, type="CDS", id=f["uid"], qualifiers=qualifiers)
+            rec.features.append(sf)
+
+        return rec, focal_strand
+
+    def test_forward_focal_gene_unchanged(self):
+        """When the focal gene is on the forward strand, coordinates are unchanged."""
+        feats = self._make_feats(focal_strand=1)
+        rec, _ = self._build_gbk_record(feats)
+
+        focal_sf = next(sf for sf in rec.features if sf.id == "p2")
+        # Focal gene at original offset from min_start (300-100=200, 400-100=300)
+        assert focal_sf.location.strand == 1
+        assert int(focal_sf.location.start) == 200
+        assert int(focal_sf.location.end) == 300
+
+    def test_reverse_focal_gene_flipped(self):
+        """When the focal gene is on the reverse strand, all features are flipped."""
+        feats = self._make_feats(focal_strand=-1)
+        size = 600 - 100 + 1  # max_end - min_start + 1 = 501
+        rec, focal_strand = self._build_gbk_record(feats)
+
+        assert focal_strand == -1
+
+        focal_sf = next(sf for sf in rec.features if sf.id == "p2")
+        # Focal gene was originally at offsets 200-300; after flip it should be forward
+        assert focal_sf.location.strand == 1, "Focal gene should be forward after flip"
+
+        # All neighbours should have their strands inverted relative to original
+        upstream_sf = next(sf for sf in rec.features if sf.id == "p1")
+        downstream_sf = next(sf for sf in rec.features if sf.id == "p3")
+        assert upstream_sf.location.strand == -1
+        assert downstream_sf.location.strand == -1
+
+    def test_reverse_focal_gene_with_sequence(self):
+        """When a real sequence is provided and focal is reverse, sequence is rev-comped."""
+        from Bio.Seq import Seq
+
+        # Build with a contig sequence of all-A; reverse complement of all-A is all-T
+        contig_seq = Seq("A" * 600)
+        feats = self._make_feats(focal_strand=-1)
+        rec, _ = self._build_gbk_record(feats, contig_seq=contig_seq)
+
+        # Rev-comp of all-A is all-T
+        assert str(rec.seq) == "T" * len(rec.seq)
+
+    def test_no_focal_gene_unchanged(self):
+        """If no focal gene is found, features are written with original orientation."""
+        feats = [
+            {"start": 100, "end": 200, "strand": -1, "label": "a", "protein_id": "p1",
+             "translation": "", "is_focal": False, "uid": "p1"},
+        ]
+        rec, focal_strand = self._build_gbk_record(feats)
+        assert focal_strand == 1  # defaults to forward
+        sf = rec.features[0]
+        assert sf.location.strand == -1  # original orientation preserved
+
+
 class TestSyntenyRun:
     @patch("phylofoundry.tasks.synteny.run_cmd")
     def test_run_synteny_flow(self, mock_run, tmp_path):
