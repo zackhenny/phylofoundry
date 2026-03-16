@@ -543,11 +543,11 @@ def _build_cluster_msa(fasta_path, output_aln, threads=4, force=False):
 
 def _generate_sequence_logo(msa_path, out_png, out_svg, hmm_name, cluster_id,
                              formats=("png", "svg")):
-    """Generate a sequence logo from an MSA FASTA file using matplotlib.
+    """Generate a sequence logo from an MSA FASTA file using logomaker.
 
-    Computes per-position information content (bits) and draws stacked
-    coloured bars where each bar height reflects the residue's contribution
-    to that position's information content.
+    Uses the ``logomaker`` package (https://logomaker.readthedocs.io/) to
+    produce a publication-quality information-content logo.  Falls back to a
+    matplotlib stacked-bar implementation when ``logomaker`` is not installed.
 
     Parameters
     ----------
@@ -567,14 +567,8 @@ def _generate_sequence_logo(msa_path, out_png, out_svg, hmm_name, cluster_id,
     tuple : (success: bool, n_seqs: int, alignment_length: int, n_effective_sites: int)
         *n_effective_sites* counts positions with IC > 0.5 bits.
     """
-    try:
-        import matplotlib
-        matplotlib.use("Agg")
-        import matplotlib.pyplot as plt
-    except ImportError:
-        import sys
-        print("[embed/cluster] matplotlib not available — skipping logo.", file=sys.stderr)
-        return False, 0, 0, 0
+    import sys
+    from collections import Counter
 
     try:
         msa = read_fasta(msa_path)
@@ -589,43 +583,111 @@ def _generate_sequence_logo(msa_path, out_png, out_svg, hmm_name, cluster_id,
         n_seqs = len(seqs_padded)
         AMINO_ACIDS = list("ACDEFGHIKLMNPQRSTVWY")
 
-        # Compute per-position residue frequencies and information content
-        positions = []
+        # Build per-position counts matrix
+        counts_rows = []
+        col_totals = []
         for pos in range(aln_len):
             col = [s[pos].upper() for s in seqs_padded if pos < len(s)]
             non_gap = [c for c in col if c in AMINO_ACIDS]
-            if not non_gap:
-                positions.append({"ic": 0.0, "freqs": {}})
-                continue
-            from collections import Counter
             cnt = Counter(non_gap)
-            total_ng = len(non_gap)
-            freqs = {aa: cnt[aa] / total_ng for aa in AMINO_ACIDS if cnt.get(aa, 0) > 0}
-            H = -sum(f * math.log2(f) for f in freqs.values() if f > 0)
-            ic = max(0.0, math.log2(_N_AMINO_ACIDS) - H) * (total_ng / len(col))
-            positions.append({"ic": ic, "freqs": freqs})
+            counts_rows.append({aa: cnt.get(aa, 0) for aa in AMINO_ACIDS})
+            col_totals.append(len(col))
 
-        n_effective_sites = sum(1 for p in positions if p["ic"] > 0.5)
+        counts_df = pd.DataFrame(counts_rows, columns=AMINO_ACIDS)
 
-        # Select positions to display (IC > threshold, skip nearly all-gap cols)
-        show_idx = [i for i, p in enumerate(positions) if p["ic"] > 0.05]
+        # Compute per-position information content (gap-weighted)
+        ic_per_pos = []
+        for pos, row in counts_df.iterrows():
+            total_ng = row.sum()
+            if total_ng == 0:
+                ic_per_pos.append(0.0)
+                continue
+            freqs = row / total_ng
+            H = -sum(f * math.log2(f) for f in freqs if f > 0)
+            ic = max(0.0, math.log2(_N_AMINO_ACIDS) - H)
+            gap_weight = total_ng / col_totals[pos] if col_totals[pos] > 0 else 0.0
+            ic_per_pos.append(ic * gap_weight)
+
+        n_effective_sites = sum(1 for ic in ic_per_pos if ic > 0.5)
+
+        # Select positions to display (IC > threshold)
+        show_idx = [i for i, ic in enumerate(ic_per_pos) if ic > 0.05]
         if not show_idx:
             return False, n_seqs, aln_len, n_effective_sites
 
         # Cap display length for readability
         if len(show_idx) > 80:
-            show_idx = sorted(show_idx, key=lambda i: -positions[i]["ic"])[:80]
+            show_idx = sorted(show_idx, key=lambda i: -ic_per_pos[i])[:80]
             show_idx = sorted(show_idx)
+
+        display_counts = counts_df.iloc[show_idx].reset_index(drop=True)
+
+        # ── Try logomaker ──────────────────────────────────────────────────
+        try:
+            import logomaker
+            import matplotlib
+            matplotlib.use("Agg")
+            import matplotlib.pyplot as plt
+
+            # logomaker computes its own information content from raw counts.
+            # The gap-weighted IC computed above is still used for:
+            #   1. n_effective_sites (positions with IC > 0.5 bits)
+            #   2. show_idx selection (filtering low-IC positions)
+            # The logo rendering itself uses logomaker's standard IC formula.
+            info_df = logomaker.transform_matrix(
+                display_counts,
+                from_type="counts",
+                to_type="information",
+            )
+
+            fig_w = max(8, len(show_idx) * 0.22)
+            fig, ax = plt.subplots(figsize=(fig_w, 3))
+            logomaker.Logo(info_df, color_scheme="chemistry", ax=ax)
+            ax.set_xlabel("Alignment position")
+            ax.set_ylabel("Information content (bits)")
+            ax.set_title(f"{hmm_name} — Cluster {cluster_id} logo  (n={n_seqs})")
+            step = max(1, len(show_idx) // 20)
+            tick_x = list(range(0, len(show_idx), step))
+            ax.set_xticks(tick_x)
+            ax.set_xticklabels(
+                [str(show_idx[i] + 1) for i in tick_x], fontsize=6, rotation=90
+            )
+            fig.tight_layout()
+            saved = _save_logo_figure(fig, out_png, out_svg, formats)
+            plt.close(fig)
+            return saved, n_seqs, aln_len, n_effective_sites
+
+        except ImportError:
+            print(
+                "[embed/cluster] logomaker not available — using matplotlib fallback.",
+                file=sys.stderr,
+            )
+
+        # ── Matplotlib fallback ───────────────────────────────────────────
+        try:
+            import matplotlib
+            matplotlib.use("Agg")
+            import matplotlib.pyplot as plt
+        except ImportError:
+            print(
+                "[embed/cluster] matplotlib not available — skipping logo.",
+                file=sys.stderr,
+            )
+            return False, 0, 0, 0
 
         fig_w = max(8, len(show_idx) * 0.22)
         fig, ax = plt.subplots(figsize=(fig_w, 3))
 
         for x_pos, col_idx in enumerate(show_idx):
-            p = positions[col_idx]
-            ic = p["ic"]
-            if ic <= 0 or not p["freqs"]:
+            ic = ic_per_pos[col_idx]
+            if ic <= 0:
                 continue
-            sorted_aas = sorted(p["freqs"].items(), key=lambda kv: kv[1])
+            row = counts_df.iloc[col_idx]
+            total_ng = row.sum()
+            if total_ng == 0:
+                continue
+            freqs = {aa: row[aa] / total_ng for aa in AMINO_ACIDS if row[aa] > 0}
+            sorted_aas = sorted(freqs.items(), key=lambda kv: kv[1])
             y_bot = 0.0
             for aa, freq in sorted_aas:
                 h = freq * ic
@@ -646,26 +708,31 @@ def _generate_sequence_logo(msa_path, out_png, out_svg, hmm_name, cluster_id,
         ax.set_xticklabels([str(show_idx[i] + 1) for i in tick_x], fontsize=6, rotation=90)
 
         fig.tight_layout()
-        saved = False
-        if "png" in formats and out_png:
-            os.makedirs(os.path.dirname(out_png), exist_ok=True)
-            fig.savefig(out_png, dpi=150, format="png")
-            saved = True
-        if "svg" in formats and out_svg:
-            os.makedirs(os.path.dirname(out_svg), exist_ok=True)
-            fig.savefig(out_svg, format="svg")
-            saved = True
+        saved = _save_logo_figure(fig, out_png, out_svg, formats)
         plt.close(fig)
         return saved, n_seqs, aln_len, n_effective_sites
 
     except Exception as e:
-        import sys
         print(
             f"[embed/cluster] Logo generation failed for {hmm_name} "
             f"cluster {cluster_id}: {e}",
             file=sys.stderr,
         )
         return False, 0, 0, 0
+
+
+def _save_logo_figure(fig, out_png, out_svg, formats):
+    """Save a matplotlib figure to PNG and/or SVG; return True if any file was written."""
+    saved = False
+    if "png" in formats and out_png:
+        os.makedirs(os.path.dirname(out_png), exist_ok=True)
+        fig.savefig(out_png, dpi=150, format="png")
+        saved = True
+    if "svg" in formats and out_svg:
+        os.makedirs(os.path.dirname(out_svg), exist_ok=True)
+        fig.savefig(out_svg, format="svg")
+        saved = True
+    return saved
 
 
 def _build_cluster_hmm(msa_path, output_hmm, cluster_name, threads=4, force=False):
@@ -773,8 +840,79 @@ def _classify_noise_sequences(knn_df, hmm_name):
     return pd.DataFrame(rows)
 
 
+def _compute_cluster_taxonomy_composition(ids, labels, tax_map, hmm_name):
+    """Compute family-level taxonomic composition for each embedding cluster.
+
+    For every sequence ID (``genome|protein`` format), the genome identifier
+    is extracted, looked up in *tax_map*, and the ``f__`` rank token is parsed
+    from the lineage string.  Counts and fractions are then computed per
+    (cluster, family) pair.
+
+    Parameters
+    ----------
+    ids : list[str]
+        Sequence identifiers aligned with *labels*.  Expected format is
+        ``<genome_id>|<protein_id>``; bare IDs (no ``|``) are also accepted.
+    labels : list[int]
+        Cluster label per sequence (−1 = noise/unassigned).
+    tax_map : dict
+        Mapping of normalised genome ID → GTDB-style lineage string
+        (e.g. ``"d__Bacteria;p__...;f__Pseudomonadaceae;g__..."``)
+    hmm_name : str
+        HMM / hit-set identifier added as a column to the result.
+
+    Returns
+    -------
+    pd.DataFrame
+        Columns: ``hmm_name``, ``cluster_id``, ``family``, ``count``,
+        ``fraction``.  Empty DataFrame when *tax_map* is empty or no
+        family-level annotation is found.
+    """
+    if not tax_map:
+        return pd.DataFrame()
+
+    from ..utils.helpers import normalize_genome_id
+
+    rows = []
+    for tip, label in zip(ids, labels):
+        genome = tip.split("|", 1)[0] if "|" in tip else tip
+        norm_g = normalize_genome_id(genome)
+        lineage = tax_map.get(norm_g, "")
+        family = "Unknown"
+        for token in str(lineage).split(";"):
+            token = token.strip()
+            if token.lower().startswith("f__"):
+                family = token
+                break
+        rows.append({"cluster_id": int(label), "family": family})
+
+    if not rows:
+        return pd.DataFrame()
+
+    df = pd.DataFrame(rows)
+    result_rows = []
+    for cl_id, grp in df.groupby("cluster_id"):
+        counts = grp["family"].value_counts()
+        total = counts.sum()
+        for family, cnt in counts.items():
+            result_rows.append({
+                "hmm_name": hmm_name,
+                "cluster_id": cl_id,
+                "family": family,
+                "count": int(cnt),
+                "fraction": round(float(cnt) / total, 4),
+            })
+
+    if not result_rows:
+        return pd.DataFrame()
+
+    return pd.DataFrame(result_rows).sort_values(["cluster_id", "count"],
+                                                  ascending=[True, False]).reset_index(drop=True)
+
+
 def run_cluster_subworkflow(hmm_name, seqs, ids, Z, labels, emb_cfg,
-                            outdir, summary_dir, threads=4, force=False):
+                            outdir, summary_dir, threads=4, force=False,
+                            tax_map=None):
     """Orchestrate the cluster-aware subworkflow for a single HMM hit set.
 
     For each embedding-defined cluster this function:
@@ -787,6 +925,8 @@ def run_cluster_subworkflow(hmm_name, seqs, ids, Z, labels, emb_cfg,
     6. Optionally builds a profile HMM for each cluster MSA via ``hmmbuild``.
     7. Classifies noise (HDBSCAN −1) sequences using kNN evidence.
     8. Writes summary TSV tables and a logo manifest.
+    9. If *tax_map* is provided, writes family-level taxonomic composition per
+       cluster to ``<summary_dir>/<hmm_name>.cluster_taxonomy_composition.tsv``.
 
     Parameters
     ----------
@@ -811,6 +951,10 @@ def run_cluster_subworkflow(hmm_name, seqs, ids, Z, labels, emb_cfg,
         CPU threads for MAFFT / ``hmmbuild``.
     force : bool
         Overwrite existing output files.
+    tax_map : dict | None
+        Optional mapping of normalised genome ID → lineage string.  When
+        provided, family-level taxonomic composition is computed for each
+        cluster and written to *summary_dir*.
     """
     import sys
 
@@ -1128,6 +1272,17 @@ def run_cluster_subworkflow(hmm_name, seqs, ids, Z, labels, emb_cfg,
                 print(f"[embed/cluster] Wrote motif shift signal: {signal_fp}")
 
     print(f"[embed/cluster] Cluster subworkflow complete for {hmm_name}.")
+
+    # ── 12. Taxonomic composition of clusters ────────────────────────────────
+    if tax_map:
+        tax_comp_df = _compute_cluster_taxonomy_composition(ids, labels, tax_map, hmm_name)
+        if not tax_comp_df.empty and summary_dir:
+            safe_mkdir(summary_dir)
+            tax_fp = os.path.join(
+                summary_dir, f"{hmm_name}.cluster_taxonomy_composition.tsv"
+            )
+            tax_comp_df.to_csv(tax_fp, sep="\t", index=False)
+            print(f"[embed/cluster] Wrote cluster taxonomy composition: {tax_fp}")
 
 
 def _compute_cluster_kl_divergence(
@@ -2458,8 +2613,6 @@ def compute_embeddings_for_hmm(hmm_name: str, seqs: dict, emb_cfg: dict, outdir_
 
             # ── Optional cluster subworkflow ───────────────────────────────
             if emb_cfg.get("cluster_subworkflow", {}).get("enabled", False):
-                _subworkflow_outdir = outdir if outdir else os.path.dirname(outdir_embeddings)
-                _subworkflow_sumdir = summary_dir
                 run_cluster_subworkflow(
                     hmm_name=hmm_name,
                     seqs=seqs,
@@ -2467,10 +2620,11 @@ def compute_embeddings_for_hmm(hmm_name: str, seqs: dict, emb_cfg: dict, outdir_
                     Z=Z,
                     labels=labels,
                     emb_cfg=emb_cfg,
-                    outdir=_subworkflow_outdir,
-                    summary_dir=_subworkflow_sumdir,
+                    outdir=outdir_embeddings,
+                    summary_dir=summary_dir,
                     threads=threads,
                     force=force,
+                    tax_map=tax_map,
                 )
 
     # ── metadata ──────────────────────────────────────────────────────────

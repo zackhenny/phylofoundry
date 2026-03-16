@@ -1804,3 +1804,108 @@ class TestValidateEmbCfgChangePointDetection:
         cpd = cfg["cluster_subworkflow"]["change_point_detection"]
         assert isinstance(cpd, dict)
         assert cpd["enabled"] is False
+
+
+# ── _compute_cluster_taxonomy_composition ─────────────────────────────────────
+
+from phylofoundry.tasks.embed import _compute_cluster_taxonomy_composition
+
+
+class TestComputeClusterTaxonomyComposition:
+    """Tests for _compute_cluster_taxonomy_composition()."""
+
+    def _make_tax_map(self):
+        """Return a small genome → lineage mapping."""
+        return {
+            "genome1": "d__Bacteria;p__Proteobacteria;c__Gammaproteobacteria;"
+                       "o__Pseudomonadales;f__Pseudomonadaceae;g__Pseudomonas;"
+                       "s__Pseudomonas aeruginosa",
+            "genome2": "d__Bacteria;p__Proteobacteria;c__Gammaproteobacteria;"
+                       "o__Pseudomonadales;f__Pseudomonadaceae;g__Pseudomonas;"
+                       "s__Pseudomonas putida",
+            "genome3": "d__Bacteria;p__Firmicutes;c__Bacilli;o__Bacillales;"
+                       "f__Bacillaceae;g__Bacillus;s__Bacillus subtilis",
+        }
+
+    def test_returns_dataframe(self):
+        """Should return a non-empty DataFrame when tax_map is provided."""
+        import pandas as pd
+        ids = ["genome1|prot1", "genome2|prot2", "genome3|prot3"]
+        labels = [0, 0, 1]
+        result = _compute_cluster_taxonomy_composition(ids, labels, self._make_tax_map(), "TESTHMM")
+        assert isinstance(result, pd.DataFrame)
+        assert not result.empty
+
+    def test_expected_columns(self):
+        """Result must contain expected columns."""
+        ids = ["genome1|prot1", "genome2|prot2", "genome3|prot3"]
+        labels = [0, 0, 1]
+        result = _compute_cluster_taxonomy_composition(ids, labels, self._make_tax_map(), "TESTHMM")
+        expected = {"hmm_name", "cluster_id", "family", "count", "fraction"}
+        assert expected.issubset(set(result.columns))
+
+    def test_hmm_name_column(self):
+        """hmm_name column should equal the provided name."""
+        ids = ["genome1|prot1", "genome2|prot2"]
+        labels = [0, 0]
+        result = _compute_cluster_taxonomy_composition(ids, labels, self._make_tax_map(), "MYHMM")
+        assert (result["hmm_name"] == "MYHMM").all()
+
+    def test_family_extracted_correctly(self):
+        """Family tokens (f__) should be extracted from the lineage string."""
+        ids = ["genome1|prot1", "genome2|prot2"]
+        labels = [0, 0]
+        result = _compute_cluster_taxonomy_composition(ids, labels, self._make_tax_map(), "TESTHMM")
+        families = set(result["family"].tolist())
+        assert "f__Pseudomonadaceae" in families
+
+    def test_fractions_sum_to_one_per_cluster(self):
+        """Fractions within a cluster should sum to 1.0."""
+        ids = ["genome1|prot1", "genome2|prot2", "genome3|prot3"]
+        labels = [0, 0, 0]
+        result = _compute_cluster_taxonomy_composition(ids, labels, self._make_tax_map(), "TESTHMM")
+        total = result[result["cluster_id"] == 0]["fraction"].sum()
+        assert abs(total - 1.0) < 1e-6
+
+    def test_noise_sequences_included(self):
+        """Sequences with label −1 should appear in cluster_id −1 rows."""
+        ids = ["genome1|prot1", "genome3|prot3"]
+        labels = [0, -1]
+        result = _compute_cluster_taxonomy_composition(ids, labels, self._make_tax_map(), "TESTHMM")
+        assert -1 in result["cluster_id"].values
+
+    def test_empty_tax_map_returns_empty(self):
+        """Empty tax_map should return an empty DataFrame."""
+        import pandas as pd
+        ids = ["genome1|prot1", "genome2|prot2"]
+        labels = [0, 1]
+        result = _compute_cluster_taxonomy_composition(ids, labels, {}, "TESTHMM")
+        assert isinstance(result, pd.DataFrame)
+        assert result.empty
+
+    def test_bare_id_without_pipe(self):
+        """Sequence IDs without '|' separator should be treated as genome IDs."""
+        tax_map = {
+            "genome1": "d__Bacteria;p__Proteobacteria;c__Gammaproteobacteria;"
+                       "o__Pseudomonadales;f__Pseudomonadaceae;g__Pseudomonas;"
+                       "s__Pseudomonas aeruginosa",
+        }
+        ids = ["genome1", "genome1"]
+        labels = [0, 0]
+        result = _compute_cluster_taxonomy_composition(ids, labels, tax_map, "TESTHMM")
+        assert not result.empty
+        assert "f__Pseudomonadaceae" in result["family"].values
+
+    def test_unknown_genome_labelled_unknown(self):
+        """Sequences whose genome is not in tax_map should have family 'Unknown'."""
+        ids = ["unknown_genome|prot1"]
+        labels = [0]
+        result = _compute_cluster_taxonomy_composition(ids, labels, self._make_tax_map(), "TESTHMM")
+        assert "Unknown" in result["family"].values
+
+    def test_multiple_clusters(self):
+        """Each cluster should be represented as a separate group."""
+        ids = ["genome1|prot1", "genome2|prot2", "genome3|prot3"]
+        labels = [0, 1, 2]
+        result = _compute_cluster_taxonomy_composition(ids, labels, self._make_tax_map(), "TESTHMM")
+        assert set(result["cluster_id"].unique()) == {0, 1, 2}
