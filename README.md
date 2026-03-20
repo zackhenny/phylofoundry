@@ -149,6 +149,13 @@ The pipeline creates a structured `results` directory:
 ### 1. Basic Execution (Conda)
 
 ```bash
+# Recommended: explicit 'run' subcommand
+phylofoundry run \
+  --faa_dir ./data/proteomes \
+  --hmm_dir ./data/markers \
+  --outdir ./results_run1
+
+# Legacy form (also works, automatically routed to 'run')
 phylofoundry \
   --faa_dir ./data/proteomes \
   --hmm_dir ./data/markers \
@@ -158,7 +165,8 @@ phylofoundry \
 Or using a config file:
 
 ```bash
-phylofoundry --config config.json
+phylofoundry run --config config.json
+# or: phylofoundry --config config.json  (legacy, still works)
 ```
 
 ### 2. Running with Docker
@@ -168,9 +176,18 @@ Mount your data directories so the container can see them.
 ```bash
 docker run --rm -v $(pwd)/data:/data -v $(pwd)/results:/results \
   phylofoundry:latest \
+  run \
   --faa_dir /data/proteomes \
   --hmm_dir /data/markers \
   --outdir /results
+```
+
+To run a single module inside Docker:
+
+```bash
+docker run --rm -v $(pwd)/results:/results \
+  phylofoundry:latest \
+  embed --outdir /results --cpu 8
 ```
 
 ### 3. Running with Apptainer (HPC)
@@ -200,25 +217,122 @@ apptainer run \
   --bind /path/to/my/data:/data \
   --bind /path/to/my/results:/results \
   phylofoundry.sif \
+  run \
   --faa_dir /data/proteomes \
   --hmm_dir /data/markers \
   --outdir /results
 ```
 
-### 4. CLI Reference
+### 4. Modular CLI — Run a Single Step
+
+Each pipeline stage can be invoked individually using the **module subcommand** interface.  This lets you re-run or test a specific step without executing the full pipeline.
+
+```bash
+# Run only the embedding step
+phylofoundry embed --outdir ./results --cpu 8
+
+# Run only the phylo step, using MAFFT alignment
+phylofoundry phylo --outdir ./results --cpu 16 --mafft
+
+# Run only the HMMER search step
+phylofoundry hmmer \
+  --faa_dir ./data/proteomes \
+  --hmm_dir ./data/markers \
+  --outdir ./results
+
+# Run only the taxonomy integration step, supplying a custom taxonomy TSV
+phylofoundry taxonomy \
+  --outdir ./results \
+  --taxonomy_file ./data/custom_taxonomy.tsv
+
+# Detect clades using TreeCluster
+phylofoundry detect-clades --outdir ./results --detect_method treecluster
+
+# Score specific motifs with ESM-2 attention
+phylofoundry score-motifs --outdir ./results --motifs HPEVY,HPEVF
+```
+
+Optional pipeline steps (`embed`, `curate`, `synteny`, `hyphy`, etc.) are **automatically enabled** when invoked as a subcommand — you do not need to set `enabled: true` in the config.
+
+#### Available modules
+
+| Subcommand | Pipeline step | Key extra flags |
+| :--- | :--- | :--- |
+| `prep` | Combine FAA / HMM inputs | — |
+| `hmmer` | HMM scan/search or DIAMOND blastp | `--diamond_mode`, `--diamond_query` |
+| `extract` | Extract sequences per HMM | — |
+| `embed` | Protein language model embeddings | `--model`, `--device`, `--batch_size`, `--backend` |
+| `phylo` | MSA + IQ-TREE phylogeny | `--mafft`, `--combined`, `--iqtree_bin`, `--iq_boot` |
+| `curate` | TreeShrink / ESM sequence curation | — |
+| `taxonomy` | GTDB-Tk / custom taxonomy integration | `--gtdb_dir`, `--taxonomy_file` |
+| `conservation` | Per-site conservation & KL divergence | `--clades_tsv` |
+| `detect-clades` | Clade detection (taxonomy / TreeCluster / tree+embed) | `--detect_method` |
+| `post` | Legacy combined post-processing | — |
+| `synteny` | Synteny neighbourhood plots | `--gbk_dir`, `--gff_dir` |
+| `codon` | Codon-aware alignments (pal2nal) | `--pal2nal_cmd` |
+| `hyphy` | HyPhy selection tests | `--hyphy_bin`, `--hyphy_tests` |
+| `score-motifs` | Score motifs with ESM-2 attention | `--motifs` |
+| `discover-motifs` | Discover novel motifs via attention | — |
+
+Every module also accepts the **common flags** `--config`, `--faa_dir`, `--hmm_dir`, `--outdir`, `--cpu`, and `--force`.
+
+### 5. Utility Commands
+
+```bash
+# List all registered workflow steps with descriptions
+phylofoundry list-steps
+
+# Show the execution plan for a config (no steps are run)
+phylofoundry plan --config config.json
+phylofoundry plan --faa_dir ./proteomes --hmm_dir ./markers --outdir ./results
+
+# Validate configuration without running the pipeline
+phylofoundry validate --config config.json
+
+# Check tool availability and Python-package health
+phylofoundry doctor
+
+# Print the default config JSON (useful as a starting template)
+phylofoundry dump-config > my_config.json
+```
+
+### 6. `run` — Full Pipeline (explicit form)
+
+```bash
+# Equivalent to the legacy invocation — run the full pipeline
+phylofoundry run \
+  --faa_dir ./data/proteomes \
+  --hmm_dir ./data/markers \
+  --outdir ./results_run1
+
+# Run a range of steps
+phylofoundry run \
+  --config config.json \
+  --start_at embed \
+  --stop_after phylo
+```
+
+### 7. CLI Reference
+
+#### Common flags (accepted by every subcommand)
 
 | Flag | Description |
 | :--- | :--- |
 | `--config <path>` | JSON config file (merged with defaults and CLI overrides). |
 | `--faa_dir <path>` | Override `inputs.faa_dir`. |
 | `--hmm_dir <path>` | Override `inputs.hmm_input`. |
-| `--diamond_query <path>` | Override `inputs.diamond_query` (FASTA file or directory for DIAMOND mode). |
-| `--diamond_mode` | Enable DIAMOND search mode (use protein FASTA queries instead of HMMs). |
 | `--outdir <path>` | Override `output.outdir`. |
 | `--cpu <N>` | Override `resources.cpu`. |
+| `--force` | Override `workflow.force=true` (re-run existing steps). |
+
+#### `run`-only flags
+
+| Flag | Description |
+| :--- | :--- |
+| `--diamond_query <path>` | Override `inputs.diamond_query` (FASTA file or directory for DIAMOND mode). |
+| `--diamond_mode` | Enable DIAMOND search mode (use protein FASTA queries instead of HMMs). |
 | `--start_at <step>` | Override `workflow.start_at`. |
 | `--stop_after <step>` | Override `workflow.stop_after`. |
-| `--force` | Override `workflow.force=true` (re-run existing steps). |
 | `--combined` | Enable combined tree from all HMMs (`phylo.combined_tree`). |
 | `--motifs <list>` | Comma-separated motif list for attention scoring (e.g., `HPEVY,HPEVF`). |
 | `--dump_default_config` | Print the default config JSON and exit. |
@@ -227,22 +341,26 @@ apptainer run \
 | `--validate-config` | Validate the config without running the pipeline and exit. |
 | `--doctor` | Check tool availability and environment health, then exit. |
 
+> **Backward compatibility**: The old-style `phylofoundry --config config.json` (with no subcommand) continues to work and is automatically routed to `phylofoundry run`.
+
 *Note*: Paths inside the container (`/data`) must match where you mounted them, or just map them 1:1 (e.g., `--bind /scratch/user/project:/scratch/user/project`).
 
 ---
 
 ## 🔄 Workflow Logic
 
-The pipeline runs as a series of sequential **Steps**. You can control execution using `--start_at <STEP>` and `--stop_after <STEP>`.
+The pipeline runs as a series of sequential **steps**. You can run the full pipeline with `phylofoundry run`, or invoke any step individually using its CLI subcommand (see [§ Modular CLI](#4-modular-cli--run-a-single-step) above).
 
-### Step 1: `prep`
+Control execution range with `--start_at <STEP>` and `--stop_after <STEP>` on the `run` subcommand.
+
+### Step 1: `prep`  (`phylofoundry prep`)
 -   **Input**: Directory of `.faa` files (genomes) and `.hmm` files.
 -   **Action**:
     -   Concatenates all proteomes into `combined_proteomes.faa`.
     -   Concatenates all HMMs into `combined.hmm` and runs `hmmpress`.
 -   **Output**: `combined_proteomes.faa`, `combined.hmm` indices.
 
-### Step 2: `hmmer`
+### Step 2: `hmmer`  (`phylofoundry hmmer [--diamond_mode]`)
 -   **Action**: 
     -   Runs `hmmscan` (Proteins query vs HMM db) for each genome.
     -   Runs `hmmsearch` (HMM query vs Protein db) for each HMM.
@@ -250,68 +368,68 @@ The pipeline runs as a series of sequential **Steps**. You can control execution
 -   **Resolution**: If a protein hits multiple HMMs, the specific HMM with the highest bitscore wins.
 -   **Output**: `summary/best_hits.competitive.tsv`.
 
-### Step 3: `extract`
+### Step 3: `extract`  (`phylofoundry extract`)
 -   **Action**: extracting sequences for the "best hits" identified in the previous step.
 -   **Output**: `fasta_per_hmm/<hmm_name>.faa` (unaligned sequences).
 
-### Step 4: `embed` (Optional)
+### Step 4: `embed` (Optional)  (`phylofoundry embed [--model MODEL] [--device DEVICE]`)
 -   **Action**: Uses Protein Language Models (ESM-2, etc.) to embed sequences.
 -   **Analysis**: Performs PCA on the embeddings to reduce dimensionality, and UMAP (2D or 3D, visualization only) for scatter plots.
 -   **Clustering**: Runs HDBSCAN or Leiden on PCA-reduced or raw embedding vectors to auto-discover functional clusters.
 -   **Output**: `embeddings/<hmm_name>.pca.tsv`, `.umap.tsv`, `.umap.png`, `.umap.clustered.png`, `summary/clade_assignment.tsv`.
 -   **Cluster Subworkflow** (optional): When `embeddings.cluster_subworkflow.enabled=true`, runs an additional per-cluster analysis for each HMM hit set (see [Cluster Subworkflow](#-cluster-aware-subworkflow-optional) below).
 
-### Step 5: `phylo`
+### Step 5: `phylo`  (`phylofoundry phylo [--mafft] [--combined] [--iqtree_bin BIN]`)
 -   **Action**:
     1.  **Align**: Runs `mafft` (or `hmmalign`) on per-HMM FASTAs.
     2.  **Trim**: Runs `clipkit` to remove poor alignment sites.
     3.  **Tree**: Runs `iqtree` (ModelFinder + Tree search + Bootstrap).
 -   **Output**: `trees_iqtree/<hmm_name>.treefile`.
 
-### Step 6: `curate` (Optional)
+### Step 6: `curate` (Optional)  (`phylofoundry curate`)
 -   **Action**: Prunes outlier branches using TreeShrink and/or ESM-based sequence filtering. Writes curated artifacts to a `curated/` overlay directory without overwriting raw pipeline outputs.
 -   **Output**: `curated/trees/`, `curated/fasta_per_hmm/`, `curated/alignments_clipkit/`.
 
-### Step 7: `taxonomy_integrate` (Optional)
+### Step 7: `taxonomy_integrate` (Optional)  (`phylofoundry taxonomy [--gtdb_dir DIR] [--taxonomy_file FILE]`)
 -   **Action**: Loads taxonomy from a GTDB-Tk summary directory (`inputs.gtdb_dir`) or a custom genome→lineage TSV (`inputs.taxonomy_file`) and annotates best-hit results.
 -   **Output**: `summary/genome_taxonomy.tsv`, `summary/best_hits.with_taxonomy.tsv`.
 
-### Step 8: `conservation_metrics` (Optional)
+### Step 8: `conservation_metrics` (Optional)  (`phylofoundry conservation [--clades_tsv FILE]`)
 -   **Action**: Calculates per-site conservation scores and KL divergence using scikit-bio.
 -   **Output**: `summary/post_scikitbio/`.
 
-### Step 9: `detect_clades` (Optional)
+### Step 9: `detect_clades` (Optional)  (`phylofoundry detect-clades [--detect_method METHOD]`)
 -   **Action**: Detects clades via taxonomy rank, TreeCluster, or tree+embedding strategies. Writes the clade table consumed by `hyphy` and `discover_motifs`.
 -   **Output**: `summary/detected_clades.tsv`, `clade_assignments/`.
 
-### Step 10: `post` (Optional, Legacy)
+### Step 10: `post` (Optional, Legacy)  (`phylofoundry post`)
 -   **Action**: Backward-compatibility shim combining conservation metrics, KL divergence, and clade detection in a single step. New workflows should prefer the dedicated `taxonomy_integrate`, `conservation_metrics`, and `detect_clades` steps.
 -   **Output**: `summary/post_scikitbio/`, `clade_assignments/`.
 
-### Step 11: `synteny` (Optional)
+### Step 11: `synteny` (Optional)  (`phylofoundry synteny [--gbk_dir DIR] [--gff_dir DIR]`)
 -   **Action**: Extracts gene neighborhoods (configurable window), computes similarity (DIAMOND/MMseqs2), and plots synteny tracks ordered by phylogeny.
 -   **Output**: `synteny/<hmm_name>/synteny.<hmm_name>.pdf`.
 
-### Step 12: `codon` (Optional)
+### Step 12: `codon` (Optional)  (`phylofoundry codon [--pal2nal_cmd CMD]`)
 -   **Action**: 
     -   Matches protein sequences to their CDS (nucleotide) sequences.
     -   **Strips terminal stop codons** (`*` from AA, TAA/TAG/TGA from CDS) before running `pal2nal.pl`.
     -   Uses `pal2nal.pl` with `-nogap -nomismatch` flags for robust codon alignment.
 -   **Output**: `codon_alignments/<hmm_name>.codon.fasta`.
 
-### Step 13: `hyphy` (Optional)
+### Step 13: `hyphy` (Optional)  (`phylofoundry hyphy [--hyphy_bin BIN] [--hyphy_tests TESTS]`)
 -   **Action**: Runs selection tests (e.g., RELAX, aBSREL, MEME) on codon alignments and trees. If `summary/detected_clades.tsv` exists and `hyphy.use_detected_clades=true`, HyPhy automatically builds labeled trees and runs per-clade analyses (no manual RELAX labeling required).
 -   **Output**: Legacy `summary/hyphy/<hmm_name>.<test>.json` plus clade-aware outputs under `summary/hyphy/<hmm_name>/<TEST>/<clade_name>.json` and labeled trees under `trees_labeled/<hmm_name>/`.
 
-### Step 14: `score_motifs` (Optional)
+### Step 14: `score_motifs` (Optional)  (`phylofoundry score-motifs --motifs MOTIF1,MOTIF2`)
 -   **Action**: Passes sequences through ESM-2 with `output_attentions=True`, extracts attention weights at user-specified motif positions.
--   **CLI**: `--motifs HPEVY,HPEVF`
+-   **CLI**: `phylofoundry score-motifs --motifs HPEVY,HPEVF --outdir ./results`
 -   **Output**: `summary/motif_attention_scores.tsv` — columns: `seq_id`, `motif`, `start_pos`, `end_pos`, `attention_score`, `clade_id`, `type`.
 -   **HA Output (optional)**: `attention/<HMM>.ha_sites.tsv` + `summary/ha_summary.tsv` when `ha.enabled=true` and `motifs.use_ha=true`.
 
-### Step 15: `discover_motifs` (Optional)
+### Step 15: `discover_motifs` (Optional)  (`phylofoundry discover-motifs`)
 -   **Action**: Iterates over all HDBSCAN clades, comparing the 1D attention profiles of each clade against the combined average of all others. Finds peaks in the attention delta and extracts k-mers as candidate novel structural hubs for that specific clade.
--   **CLI**: N/A, runs automatically if `discover.enabled` is `true`.
+-   **CLI**: `phylofoundry discover-motifs --outdir ./results` (or set `discover.enabled=true` in config).
 -   **Output**: `summary/discovered_motifs.tsv` — columns: `kmer`, `n_sequences`, `mean_attention_delta`, `source_clade`, `reference_clade`.
 -   **HA Outputs (optional)**: `discover/<HMM>.ha_enrichment.tsv` and `discover/<HMM>.ha_hubs.tsv` when `ha.enabled=true` and `discover.use_ha=true`.
 -   **Candidate residue outputs (optional)**: `discover/<HMM>.candidate_residues.tsv` and `discover/<HMM>.candidate_regions.tsv` when `discover.candidates.enabled=true`.
@@ -730,21 +848,32 @@ If the pipeline crashes or is cancelled (e.g., walltime limit reached on HPC):
 
 #### Scenario B: Adding Analysis (e.g., Embeddings)
 You ran the pipeline without embeddings, but now want to add them:
+
+Option 1 — subcommand style (recommended):
+```bash
+phylofoundry embed --outdir ./results --cpu 8
+```
+
+Option 2 — using `run` with `--start_at`:
 1.  Enable embeddings in your config (`"embeddings": { "enabled": true }`).
 2.  Run with `--start_at embed`.
     ```bash
-    phylofoundry --config config.json --start_at embed
+    phylofoundry run --config config.json --start_at embed
     ```
 3.  This skips `prep`, `hmmer`, and `extract`, loading the necessary data to run `embed`.
 
 #### Scenario C: Force Re-run
 To overwrite existing results (e.g., if you changed parameters like `mafft_mode`):
 ```bash
-phylofoundry --config config.json --force
+phylofoundry run --config config.json --force
 ```
-*Note*: This forces **all** steps in the workflow range. To force only one step, use:
+*Note*: This forces **all** steps in the workflow range. To force only one step, use the subcommand:
 ```bash
-phylofoundry --config config.json --start_at phylo --stop_after phylo --force
+phylofoundry phylo --config config.json --force
+```
+Or with the `run` form:
+```bash
+phylofoundry run --config config.json --start_at phylo --stop_after phylo --force
 ```
 
 ---
@@ -753,7 +882,8 @@ phylofoundry --config config.json --start_at phylo --stop_after phylo --force
 
 Generate a template config:
 ```bash
-phylofoundry --dump_default_config > config.json
+phylofoundry dump-config > config.json
+# or: phylofoundry run --dump_default_config > config.json  (legacy form)
 ```
 
 ### Key Options
@@ -835,7 +965,16 @@ PhyloFoundry supports an alternative search mode using [DIAMOND](https://github.
 ### CLI Usage
 
 ```bash
-phylofoundry \
+# Subcommand style (recommended)
+phylofoundry hmmer \
+  --faa_dir /path/to/genomes/ \
+  --diamond_query /path/to/queries/ \
+  --diamond_mode \
+  --outdir /path/to/output/ \
+  --cpu 16
+
+# Or with the full 'run' form
+phylofoundry run \
   --faa_dir /path/to/genomes/ \
   --diamond_query /path/to/queries/ \
   --diamond_mode \
@@ -874,7 +1013,7 @@ Add this to your `config.json`:
 Then run:
 
 ```bash
-phylofoundry --config config.json --outdir /path/to/output/
+phylofoundry run --config config.json --outdir /path/to/output/
 ```
 
 ### DIAMOND Configuration Options
