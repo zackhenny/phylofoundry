@@ -225,7 +225,8 @@ def run_diamond(cfg, genomes, combined_faa, outdir, summary_dir, force=False):
 
     Steps
     -----
-    1. Build DIAMOND DB from *combined_faa*.
+    1. Build DIAMOND DB from *combined_faa*, or use a prebuilt DB when
+       ``cfg["inputs"]["diamond_db"]`` is set.
     2. Load query FASTAs from ``cfg["inputs"]["diamond_query"]``.
     3. Run parallel blastp searches (one per query, ``--threads 1`` each).
     4. Load cached results for queries not re-run.
@@ -237,11 +238,14 @@ def run_diamond(cfg, genomes, combined_faa, outdir, summary_dir, force=False):
     Parameters
     ----------
     cfg : dict
-        Resolved PhyloFoundry configuration dictionary.
+        Resolved PhyloFoundry configuration dictionary.  When
+        ``cfg["inputs"]["diamond_db"]`` is set, that prebuilt ``.dmnd`` file
+        is used and ``make_diamond_db`` is skipped.
     genomes : list[str]
         List of genome filenames (not used directly, kept for API parity).
     combined_faa : str
-        Path to the combined proteomes FASTA built by the prep step.
+        Path to the combined proteomes FASTA (used only when no prebuilt DB is
+        configured).
     outdir : str
         Pipeline output directory.
     summary_dir : str
@@ -264,9 +268,15 @@ def run_diamond(cfg, genomes, combined_faa, outdir, summary_dir, force=False):
     diamond_dir = os.path.join(outdir, "diamond")
     safe_mkdir(diamond_dir)
 
-    # Build or reuse DIAMOND DB
-    db_path = os.path.join(diamond_dir, "combined_proteomes")
-    make_diamond_db(combined_faa, db_path, force)
+    # Use a prebuilt DIAMOND DB if provided; otherwise build one from combined_faa.
+    prebuilt_db = cfg["inputs"].get("diamond_db")
+    if prebuilt_db:
+        from ..utils.helpers import resolve_dmnd_path
+        db_path = resolve_dmnd_path(prebuilt_db)
+        print(f"[diamond] Using prebuilt DIAMOND database: {prebuilt_db}")
+    else:
+        db_path = os.path.join(diamond_dir, "combined_proteomes")
+        make_diamond_db(combined_faa, db_path, force)
 
     # Resolve query FASTAs
     query_input = cfg["inputs"]["diamond_query"]

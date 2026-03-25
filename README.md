@@ -331,6 +331,9 @@ phylofoundry run \
 | :--- | :--- |
 | `--diamond_query <path>` | Override `inputs.diamond_query` (FASTA file or directory for DIAMOND mode). |
 | `--diamond_mode` | Enable DIAMOND search mode (use protein FASTA queries instead of HMMs). |
+| `--diamond_db <path>` | Path to a prebuilt DIAMOND `.dmnd` database (skips the `makedb` build step). |
+| `--combined_faa <path>` | Path to a prebuilt combined proteomes FASTA (skips the `prep` FAA build step). |
+| `--globdb_taxonomy <path>` | Path to a GlobDB-style headerless taxonomy TSV (col 1 = genome ID, col 2 = GTDB lineage). |
 | `--start_at <step>` | Override `workflow.start_at`. |
 | `--stop_after <step>` | Override `workflow.stop_after`. |
 | `--combined` | Enable combined tree from all HMMs (`phylo.combined_tree`). |
@@ -1041,6 +1044,87 @@ phylofoundry run --config config.json --outdir /path/to/output/
 
 ---
 
+## 🌐 GlobDB Compatibility — Prebuilt Inputs
+
+PhyloFoundry can consume pre-built artifacts from [GlobDB](https://portal.nersc.gov/GLOB/GlobDB) (or any equivalent resource), dramatically reducing startup time and resource requirements. Instead of building `combined_proteomes.faa` and the DIAMOND database from genome files, you can supply these directly.
+
+### Supported prebuilt inputs
+
+| Option | Config key | Description |
+| :--- | :--- | :--- |
+| `--diamond_db <path>` | `inputs.diamond_db` | Path to a prebuilt `.dmnd` DIAMOND database. Skips the `makedb` sub-step. |
+| `--combined_faa <path>` | `inputs.combined_faa` | Path to a prebuilt combined proteomes FASTA. Skips the `prep` FAA-build step. |
+| `--globdb_taxonomy <path>` | `inputs.globdb_taxonomy_file` | Path to a GlobDB-style **headerless** taxonomy TSV (col 1 = genome ID, col 2 = GTDB taxonomy). |
+
+> **Header format**: GlobDB taxonomy files are headerless (no column names). Each row is `<genome_id>\t<taxonomy_string>`. If the first row looks like an accidental header (e.g. `genome_id\ttaxonomy`), a warning is printed.
+
+### Example CLI usage
+
+```bash
+# Use prebuilt DIAMOND DB and GlobDB taxonomy — no genome files needed
+phylofoundry run \
+  --diamond_db /globdb/releases/v1/combined.dmnd \
+  --diamond_query /path/to/queries/ \
+  --globdb_taxonomy /globdb/releases/v1/tax.tsv \
+  --outdir ./results \
+  --diamond_mode
+
+# Use prebuilt combined.faa only (DIAMOND DB built automatically)
+phylofoundry run \
+  --combined_faa /globdb/releases/v1/combined.faa \
+  --diamond_query /path/to/queries/ \
+  --diamond_mode \
+  --outdir ./results
+
+# Use all three — fastest possible startup with GlobDB
+phylofoundry run \
+  --diamond_db /globdb/releases/v1/combined.dmnd \
+  --combined_faa /globdb/releases/v1/combined.faa \
+  --globdb_taxonomy /globdb/releases/v1/tax.tsv \
+  --diamond_query /path/to/queries/ \
+  --diamond_mode \
+  --outdir ./results
+```
+
+### Config-based usage
+
+```json
+{
+    "inputs": {
+        "diamond_db": "/globdb/releases/v1/combined.dmnd",
+        "combined_faa": "/globdb/releases/v1/combined.faa",
+        "globdb_taxonomy_file": "/globdb/releases/v1/tax.tsv",
+        "diamond_query": "/path/to/queries/"
+    },
+    "diamond": {
+        "enabled": true
+    },
+    "output": {
+        "outdir": "/path/to/results/"
+    }
+}
+```
+
+### Pipeline behaviour with prebuilt inputs
+
+| Condition | Effect |
+| :--- | :--- |
+| `diamond_db` provided | `makedb` step is skipped; the prebuilt database is used directly for DIAMOND searches. |
+| `combined_faa` provided | `prep` step skips building `combined_proteomes.faa`; protein sequences for the `extract` step are read from this file when `faa_dir` is not set. |
+| `globdb_taxonomy_file` provided | Taxonomy entries are loaded and override any GTDB-Tk or custom `taxonomy_file` entries for the same genome. |
+| `faa_dir` omitted with prebuilt inputs | Allowed when `combined_faa` is set (and, in DIAMOND mode, when `diamond_db` is also set). |
+
+### Input validation
+
+The pipeline performs **fail-fast** validation of all prebuilt file paths before any work begins:
+-   `inputs.combined_faa` — file must exist.
+-   `inputs.diamond_db` — the `.dmnd` file must exist (extension is added automatically if omitted).
+-   `inputs.globdb_taxonomy_file` — file must exist.
+
+A clear error message is printed and the pipeline aborts if any path is missing or incompatible.
+
+---
+
 
 ```text
 results/
@@ -1069,11 +1153,15 @@ This section explains every key option in `config.json`.
 
 ### `inputs`
 Defines your raw data.
--   `faa_dir`: (Required) Path to directory containing protein FASTA files (`.faa`), or a single merged `.faa` file.
--   `hmm_input`: (Required) Path to directory containing HMM profiles (`.hmm`), or a single `.hmm` file.
+-   `faa_dir`: Path to directory containing protein FASTA files (`.faa`), or a single merged `.faa` file. **Required** unless `combined_faa` (and, in DIAMOND mode, `diamond_db`) is supplied.
+-   `hmm_input`: Path to directory containing HMM profiles (`.hmm`), or a single `.hmm` file. **Required** for HMM mode.
+-   `diamond_query`: (Optional / required in DIAMOND mode) FASTA file or directory of FASTA files used as DIAMOND blastp queries.
+-   `diamond_db`: (Optional) Path to a prebuilt DIAMOND `.dmnd` database. When set, the `makedb` sub-step is skipped. Enables rapid plug-and-play with [GlobDB](https://portal.nersc.gov/GLOB/GlobDB) or other prebuilt databases.
+-   `combined_faa`: (Optional) Path to a prebuilt combined proteomes FASTA (e.g. `combined.faa` from GlobDB). When set, the `prep` step skips building `combined_proteomes.faa` from individual genomes. Protein sequences are read from this file during the `extract` step when `faa_dir` is not set.
 -   `cds_dir`: (Optional) Directory of nucleotide coding sequences (`.fna`). Only needed for `codon` / `hyphy` steps.
 -   `gtdb_dir`: (Optional) Directory containing GTDB-Tk summary files (e.g. `gtdbtk.bac120.summary.tsv`). Used to add taxonomy to summary tables.
 -   `taxonomy_file`: (Optional) Custom TSV (columns: `genome`, `lineage`) if not using GTDB.
+-   `globdb_taxonomy_file`: (Optional) Path to a GlobDB-style **headerless** taxonomy TSV (column 1 = genome ID, column 2 = GTDB taxonomy string). Entries override any GTDB or custom taxonomy for the same genome.
 
 ### `output`
 -   `outdir`: (Required) Where all results go.
@@ -1226,8 +1314,9 @@ High-Attention (HA) site calling.
 -   `loc_break_adjust`: (Default: `-1`) Optional adjustment applied to the PWLF breakpoint-derived site count.
 
 ### `taxonomy_integrate`
-GTDB / custom taxonomy annotation.
--   `enabled`: (Default: `false`) Set to `true` to run. Reads `inputs.gtdb_dir` or `inputs.taxonomy_file` and writes `summary/genome_taxonomy.tsv` and `summary/best_hits.with_taxonomy.tsv`.
+GTDB / custom / GlobDB taxonomy annotation.
+-   `enabled`: (Default: `false`) Set to `true` to run. Reads taxonomy from one or more of `inputs.gtdb_dir`, `inputs.taxonomy_file`, or `inputs.globdb_taxonomy_file` and writes `summary/genome_taxonomy.tsv` and `summary/best_hits.with_taxonomy.tsv`.
+-   Entries from `inputs.globdb_taxonomy_file` (GlobDB-style headerless TSV) override GTDB-Tk and custom taxonomy for the same genome.
 
 ### `conservation_metrics`
 Per-site conservation and KL divergence.

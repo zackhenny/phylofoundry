@@ -107,6 +107,16 @@ def _build_parser() -> argparse.ArgumentParser:
     p_run.add_argument("--diamond_mode", action="store_true",
                        help="Enable DIAMOND search mode "
                             "(use protein FASTA queries instead of HMMs)")
+    p_run.add_argument("--diamond_db", default=None,
+                       help="Path to a prebuilt DIAMOND .dmnd database "
+                            "(overrides inputs.diamond_db; skips makedb step)")
+    p_run.add_argument("--combined_faa", default=None,
+                       help="Path to a prebuilt combined proteomes FASTA "
+                            "(overrides inputs.combined_faa; skips prep build)")
+    p_run.add_argument("--globdb_taxonomy", default=None,
+                       help="Path to a GlobDB-style headerless taxonomy TSV "
+                            "(col1=genome_id, col2=GTDB taxonomy; overrides "
+                            "inputs.globdb_taxonomy_file)")
     p_run.add_argument("--combined", action="store_true",
                        help="Enable combined tree from all HMMs "
                             "(phylo.combined_tree)")
@@ -134,8 +144,9 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     _add_common_args(p_prep)
-
-    # ── hmmer ──────────────────────────────────────────────────────────────
+    p_prep.add_argument("--combined_faa", default=None,
+                        help="Path to a prebuilt combined proteomes FASTA "
+                             "(overrides inputs.combined_faa; skips prep build)")
     p_hmmer = sub.add_parser(
         "hmmer",
         help="Run HMM scan/search (or DIAMOND blastp) against proteomes",
@@ -150,6 +161,12 @@ def _build_parser() -> argparse.ArgumentParser:
                               "(FASTA file/dir for DIAMOND blastp)")
     p_hmmer.add_argument("--diamond_mode", action="store_true",
                          help="Enable DIAMOND search mode")
+    p_hmmer.add_argument("--diamond_db", default=None,
+                         help="Path to a prebuilt DIAMOND .dmnd database "
+                              "(overrides inputs.diamond_db; skips makedb step)")
+    p_hmmer.add_argument("--combined_faa", default=None,
+                         help="Path to a prebuilt combined proteomes FASTA "
+                              "(overrides inputs.combined_faa)")
 
     # ── extract ────────────────────────────────────────────────────────────
     p_extract = sub.add_parser(
@@ -239,6 +256,10 @@ def _build_parser() -> argparse.ArgumentParser:
     p_tax.add_argument("--taxonomy_file", default=None,
                        help="Override inputs.taxonomy_file "
                             "(TSV with columns: genome, lineage)")
+    p_tax.add_argument("--globdb_taxonomy", default=None,
+                       help="Path to a GlobDB-style headerless taxonomy TSV "
+                            "(col1=genome_id, col2=GTDB taxonomy; overrides "
+                            "inputs.globdb_taxonomy_file)")
 
     # ── conservation ───────────────────────────────────────────────────────
     p_cons = sub.add_parser(
@@ -436,6 +457,8 @@ def _apply_step_args(args: argparse.Namespace, cfg: dict) -> None:
             cfg["inputs"]["gtdb_dir"] = args.gtdb_dir
         if getattr(args, "taxonomy_file", None):
             cfg["inputs"]["taxonomy_file"] = args.taxonomy_file
+        if getattr(args, "globdb_taxonomy", None):
+            cfg["inputs"]["globdb_taxonomy_file"] = args.globdb_taxonomy
 
     elif subcmd == "conservation":
         if getattr(args, "clades_tsv", None):
@@ -450,6 +473,10 @@ def _apply_step_args(args: argparse.Namespace, cfg: dict) -> None:
             cfg["inputs"]["diamond_query"] = args.diamond_query
         if getattr(args, "diamond_mode", False):
             cfg.setdefault("diamond", {})["enabled"] = True
+        if getattr(args, "diamond_db", None):
+            cfg["inputs"]["diamond_db"] = args.diamond_db
+        if getattr(args, "combined_faa", None):
+            cfg["inputs"]["combined_faa"] = args.combined_faa
 
     elif subcmd == "synteny":
         if getattr(args, "gbk_dir", None):
@@ -486,6 +513,16 @@ def _apply_step_args(args: argparse.Namespace, cfg: dict) -> None:
             cfg["inputs"]["diamond_query"] = args.diamond_query
         if getattr(args, "diamond_mode", False):
             cfg.setdefault("diamond", {})["enabled"] = True
+        if getattr(args, "diamond_db", None):
+            cfg["inputs"]["diamond_db"] = args.diamond_db
+        if getattr(args, "combined_faa", None):
+            cfg["inputs"]["combined_faa"] = args.combined_faa
+        if getattr(args, "globdb_taxonomy", None):
+            cfg["inputs"]["globdb_taxonomy_file"] = args.globdb_taxonomy
+
+    elif subcmd == "prep":
+        if getattr(args, "combined_faa", None):
+            cfg["inputs"]["combined_faa"] = args.combined_faa
 
 
 # ── Dependency-list builder ────────────────────────────────────────────────────
