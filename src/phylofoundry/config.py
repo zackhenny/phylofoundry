@@ -55,6 +55,14 @@ def resolve_config(args: argparse.Namespace) -> dict:
     if args.force:
         cfg["workflow"]["force"] = True
 
+    # GlobDB / prebuilt-file overrides
+    if getattr(args, "diamond_db", None) is not None:
+        cfg["inputs"]["diamond_db"] = args.diamond_db
+    if getattr(args, "combined_faa", None) is not None:
+        cfg["inputs"]["combined_faa"] = args.combined_faa
+    if getattr(args, "globdb_taxonomy", None) is not None:
+        cfg["inputs"]["globdb_taxonomy_file"] = args.globdb_taxonomy
+
     # Auto-detect IQ-TREE binary if default "iqtree" is not found but v2/v3 are
     # Only if user hasn't overridden it in config file (we check if it's still default)
     # Note: merge logic might have overwritten it. If it's still "iqtree", we check.
@@ -74,14 +82,44 @@ def validate_config(cfg: dict):
     hmm_arg = cfg["inputs"].get("hmm_input")
     outdir = cfg["output"]["outdir"]
     use_diamond = cfg.get("diamond", {}).get("enabled", False)
+    prebuilt_combined_faa = cfg["inputs"].get("combined_faa")
+    prebuilt_diamond_db = cfg["inputs"].get("diamond_db")
+
+    # Validate prebuilt file paths if given
+    if prebuilt_combined_faa and not os.path.isfile(prebuilt_combined_faa):
+        raise SystemExit(
+            f"[config] inputs.combined_faa does not exist or is not a file: "
+            f"{prebuilt_combined_faa}"
+        )
+    if prebuilt_diamond_db:
+        from .utils.helpers import resolve_dmnd_path
+        dmnd_path = resolve_dmnd_path(prebuilt_diamond_db) + ".dmnd"
+        if not os.path.isfile(dmnd_path):
+            raise SystemExit(
+                f"[config] inputs.diamond_db does not exist: {dmnd_path}"
+            )
+    globdb_tax = cfg["inputs"].get("globdb_taxonomy_file")
+    if globdb_tax and not os.path.isfile(globdb_tax):
+        raise SystemExit(
+            f"[config] inputs.globdb_taxonomy_file does not exist: {globdb_tax}"
+        )
 
     if use_diamond:
         diamond_query = cfg["inputs"].get("diamond_query")
-        if not faa_arg or not diamond_query or not outdir:
+        # faa_dir is not required when a prebuilt combined_faa or diamond_db is provided
+        needs_faa = not prebuilt_combined_faa and not prebuilt_diamond_db
+        if (needs_faa and not faa_arg) or not diamond_query or not outdir:
             raise SystemExit(
-                "In DIAMOND mode, config must specify inputs.faa_dir, "
-                "inputs.diamond_query, and output.outdir."
+                "In DIAMOND mode, config must specify inputs.diamond_query "
+                "and output.outdir. Either inputs.faa_dir, inputs.combined_faa, "
+                "or inputs.diamond_db must also be provided."
             )
     else:
-        if not faa_arg or not hmm_arg or not outdir:
-            raise SystemExit("Config must specify inputs.faa_dir, inputs.hmm_input, output.outdir (or pass via CLI).")
+        # faa_dir is not required when a prebuilt combined_faa is provided
+        needs_faa = not prebuilt_combined_faa
+        if (needs_faa and not faa_arg) or not hmm_arg or not outdir:
+            raise SystemExit(
+                "Config must specify inputs.hmm_input and output.outdir. "
+                "Either inputs.faa_dir or inputs.combined_faa must also be provided "
+                "(or pass via CLI)."
+            )

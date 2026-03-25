@@ -22,6 +22,8 @@ DEFAULT_CONFIG = {
         "faa_dir": None,               # directory of *.faa OR a single .faa
         "hmm_input": None,             # directory of *.hmm OR a single .hmm
         "diamond_query": None,         # path to .faa/.fasta, multi-FASTA, or directory of .faa query files
+        "diamond_db": None,            # optional path to a prebuilt DIAMOND .dmnd database (skips makedb)
+        "combined_faa": None,          # optional path to a prebuilt combined proteomes FASTA (skips prep build)
         "cds_dir": None,               # optional directory of CDS nucleotide FASTAs (per genome)
         "gtdb_dir": None,              # optional directory of GTDB-Tk output
         "taxonomy_file": None,         # optional TSV with genome->lineage mapping (columns: genome, lineage)

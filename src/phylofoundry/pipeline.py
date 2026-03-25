@@ -49,11 +49,46 @@ def _load_proteomes_lazy(genomes, faa_dir):
     return proteome_seqs
 
 
+def _load_proteomes_from_combined_faa(combined_faa_path):
+    """Parse a combined proteomes FASTA to reconstruct per-genome protein dicts.
+
+    The combined FASTA produced by the prep step (or provided prebuilt) uses
+    headers of the form ``>genome~protein_id``.  This function rebuilds the
+    nested ``{genome: {protein_id: sequence}}`` mapping consumed by the
+    ``extract`` step.
+
+    Parameters
+    ----------
+    combined_faa_path : str
+        Path to the combined proteomes FASTA file.
+
+    Returns
+    -------
+    dict[str, dict[str, str]]
+        Mapping ``genome → {protein_id → sequence}``.
+    """
+    flat = read_fasta(combined_faa_path)
+    proteome_seqs: dict = {}
+    for header, seq in flat.items():
+        if "~" in header:
+            genome, protein = header.split("~", 1)
+        else:
+            # Fall back: treat entire header as protein under a synthetic genome key
+            genome = "unknown"
+            protein = header
+        proteome_seqs.setdefault(genome, {})[protein] = seq
+    return proteome_seqs
+
+
 def run_pipeline(cfg):
     # ── Setup ──────────────────────────────────────────────────────────────
     faa_arg = cfg["inputs"]["faa_dir"]
     hmm_arg = cfg["inputs"].get("hmm_input")
     outdir = cfg["output"]["outdir"]
+
+    # Prebuilt GlobDB-compatible inputs (all optional).
+    prebuilt_combined_faa = cfg["inputs"].get("combined_faa")
+    prebuilt_diamond_db = cfg["inputs"].get("diamond_db")
 
     # Optional working directory for large intermediate files.
     # When set, combined_proteomes.faa, combined.hmm, DIAMOND databases, and
@@ -167,19 +202,30 @@ def run_pipeline(cfg):
     hmm_keep = load_manifest(cfg["workflow"]["hmm_manifest"])
 
     # ── Input discovery ────────────────────────────────────────────────────
-    faa_abs = os.path.abspath(faa_arg)
-    if os.path.isfile(faa_abs):
-        if not faa_abs.endswith(".faa"):
-            raise SystemExit(f"inputs.faa_dir points to a file but not .faa: {faa_abs}")
-        faa_dir = os.path.dirname(faa_abs) or "."
-        genomes = [os.path.basename(faa_abs)]
-    else:
-        if not os.path.isdir(faa_abs):
-            raise SystemExit(f"inputs.faa_dir must be a directory or a single .faa file: {faa_abs}")
-        faa_dir = faa_abs
-        genomes = sorted(f for f in os.listdir(faa_dir) if f.endswith(".faa"))
-    if not genomes:
-        raise SystemExit("No .faa inputs found.")
+    # faa_dir is required unless a prebuilt combined_faa (or diamond_db in
+    # DIAMOND mode) has been supplied — in those cases genome FASTAs are
+    # not needed for the prep / DB-build steps.
+    faa_dir = None
+    genomes: list[str] = []
+    if faa_arg:
+        faa_abs = os.path.abspath(faa_arg)
+        if os.path.isfile(faa_abs):
+            if not faa_abs.endswith(".faa"):
+                raise SystemExit(f"inputs.faa_dir points to a file but not .faa: {faa_abs}")
+            faa_dir = os.path.dirname(faa_abs) or "."
+            genomes = [os.path.basename(faa_abs)]
+        else:
+            if not os.path.isdir(faa_abs):
+                raise SystemExit(f"inputs.faa_dir must be a directory or a single .faa file: {faa_abs}")
+            faa_dir = faa_abs
+            genomes = sorted(f for f in os.listdir(faa_dir) if f.endswith(".faa"))
+        if not genomes:
+            raise SystemExit("No .faa inputs found.")
+    elif not prebuilt_combined_faa and not (use_diamond and prebuilt_diamond_db):
+        raise SystemExit(
+            "inputs.faa_dir is not set and no prebuilt combined_faa or diamond_db "
+            "was provided. Supply --faa_dir, --combined_faa, or --diamond_db."
+        )
 
     # HMM input discovery — skipped when DIAMOND mode is active
     hmm_dir = None
@@ -206,13 +252,25 @@ def run_pipeline(cfg):
 
     # Large intermediate files go to work_base (may equal outdir when no
     # separate working directory is configured).
-    combined_faa = os.path.join(work_base, "combined_proteomes.faa")
+    # Use prebuilt combined_faa if provided; otherwise the pipeline builds it.
+    if prebuilt_combined_faa:
+        combined_faa = os.path.abspath(prebuilt_combined_faa)
+        print(f"[pipeline] Using prebuilt combined proteomes FASTA: {combined_faa}")
+    else:
+        combined_faa = os.path.join(work_base, "combined_proteomes.faa")
     combined_hmm = os.path.join(work_base, "combined.hmm")
 
     # ── STEP: prep ─────────────────────────────────────────────────────────
     if step_in_range("prep", start_at, stop_after):
         if _is_blocked("prep"):
             print("[pipeline] Skipping blocked step: prep")
+        elif prebuilt_combined_faa:
+            print(
+                "[pipeline] Skipping prep build: using prebuilt combined_faa "
+                f"({combined_faa})"
+            )
+            update_step_status(status_path, "prep", "success")
+            append_pipeline_log(logs_dir, "SKIPPED: prep (prebuilt combined_faa provided)")
         else:
             update_step_status(status_path, "prep", "running")
             append_pipeline_log(logs_dir, "START: prep")
@@ -305,7 +363,17 @@ def run_pipeline(cfg):
             append_pipeline_log(logs_dir, "START: extract")
             try:
                 _ensure_hit_dfs()
-                proteome_seqs = _load_proteomes_lazy(genomes, faa_dir)
+                # When per-genome FAA files are available, load proteins from
+                # them directly.  When only a prebuilt combined_faa was
+                # supplied (faa_dir is None), parse it instead.
+                if faa_dir and genomes:
+                    proteome_seqs = _load_proteomes_lazy(genomes, faa_dir)
+                else:
+                    print(
+                        "[pipeline] faa_dir not set; loading proteome sequences "
+                        f"from combined_faa: {combined_faa}"
+                    )
+                    proteome_seqs = _load_proteomes_from_combined_faa(combined_faa)
                 hmm_to_seqs = extract.run_extract(
                     cfg, scan_df, search_df, fasta_dir, hmm_keep, proteome_seqs, force
                 )
@@ -319,10 +387,12 @@ def run_pipeline(cfg):
 
     # ── Taxonomy map (used by embed + post) ──────────────────────────────
     tax_map = {}
-    if cfg["inputs"].get("gtdb_dir") or cfg["inputs"].get("taxonomy_file"):
+    if (cfg["inputs"].get("gtdb_dir") or cfg["inputs"].get("taxonomy_file")
+            or cfg["inputs"].get("globdb_taxonomy_file")):
         tax_map = post._load_taxonomy(
             cfg["inputs"].get("gtdb_dir"),
             cfg["inputs"].get("taxonomy_file"),
+            cfg["inputs"].get("globdb_taxonomy_file"),
         )
         if tax_map:
             print(f"[pipeline] Loaded taxonomy for {len(tax_map)} genomes.")

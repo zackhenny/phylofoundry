@@ -24,6 +24,30 @@ def run_cmd(cmd, quiet=False, shell=False):
             print(f"[run_cmd abort] Stderr output:\n{e.stderr}", file=sys.stderr)
         raise
 
+def resolve_dmnd_path(db_path: str) -> str:
+    """Return the DIAMOND database path without the ``.dmnd`` extension.
+
+    DIAMOND's ``--db`` flag expects a path prefix (without ``.dmnd``).  This
+    helper normalises a user-supplied path that may or may not already include
+    the extension, returning the prefix form used by DIAMOND.
+
+    Parameters
+    ----------
+    db_path : str
+        Path supplied by the user.  May end in ``.dmnd`` or not.
+
+    Returns
+    -------
+    str
+        Path with the ``.dmnd`` extension stripped (the prefix form expected
+        by DIAMOND's ``--db`` flag).
+    """
+    _DMND_EXT = ".dmnd"
+    if db_path.endswith(_DMND_EXT):
+        return db_path[: -len(_DMND_EXT)]
+    return db_path
+
+
 def normalize_genome_id(x: str) -> str:
     if x is None:
         return x
