@@ -165,8 +165,10 @@ phylofoundry \
 Or using a config file:
 
 ```bash
-phylofoundry run --config config.json
-# or: phylofoundry --config config.json  (legacy, still works)
+phylofoundry run --config config/config.yaml
+# or: phylofoundry --config config/config.yaml  (legacy, still works)
+# JSON configs are still accepted for backward compatibility:
+# phylofoundry run --config config.json
 ```
 
 ### 2. Running with Docker
@@ -283,17 +285,17 @@ Every module also accepts the **common flags** `--config`, `--faa_dir`, `--hmm_d
 phylofoundry list-steps
 
 # Show the execution plan for a config (no steps are run)
-phylofoundry plan --config config.json
+phylofoundry plan --config config/config.yaml
 phylofoundry plan --faa_dir ./proteomes --hmm_dir ./markers --outdir ./results
 
 # Validate configuration without running the pipeline
-phylofoundry validate --config config.json
+phylofoundry validate --config config/config.yaml
 
 # Check tool availability and Python-package health
 phylofoundry doctor
 
-# Print the default config JSON (useful as a starting template)
-phylofoundry dump-config > my_config.json
+# Print the default annotated YAML config (useful as a starting template)
+phylofoundry dump-config > config/config.yaml
 ```
 
 ### 6. `run` — Full Pipeline (explicit form)
@@ -307,7 +309,7 @@ phylofoundry run \
 
 # Run a range of steps
 phylofoundry run \
-  --config config.json \
+  --config config/config.yaml \
   --start_at embed \
   --stop_after phylo
 ```
@@ -318,7 +320,7 @@ phylofoundry run \
 
 | Flag | Description |
 | :--- | :--- |
-| `--config <path>` | JSON config file (merged with defaults and CLI overrides). |
+| `--config <path>` | YAML config file (`config/config.yaml`) or legacy JSON config file (merged with defaults and CLI overrides). |
 | `--faa_dir <path>` | Override `inputs.faa_dir`. |
 | `--hmm_dir <path>` | Override `inputs.hmm_input`. |
 | `--outdir <path>` | Override `output.outdir`. |
@@ -338,13 +340,13 @@ phylofoundry run \
 | `--stop_after <step>` | Override `workflow.stop_after`. |
 | `--combined` | Enable combined tree from all HMMs (`phylo.combined_tree`). |
 | `--motifs <list>` | Comma-separated motif list for attention scoring (e.g., `HPEVY,HPEVF`). |
-| `--dump_default_config` | Print the default config JSON and exit. |
+| `--dump_default_config` | Print the default annotated YAML config and exit. |
 | `--list-steps` | List all known workflow steps and exit. |
 | `--plan` | Show the execution plan for the given config and exit (no steps run). |
 | `--validate-config` | Validate the config without running the pipeline and exit. |
 | `--doctor` | Check tool availability and environment health, then exit. |
 
-> **Backward compatibility**: The old-style `phylofoundry --config config.json` (with no subcommand) continues to work and is automatically routed to `phylofoundry run`.
+> **Backward compatibility**: The old-style `phylofoundry --config config.json` (with no subcommand) continues to work and is automatically routed to `phylofoundry run`.  JSON config files are still accepted alongside the new YAML format.
 
 *Note*: Paths inside the container (`/data`) must match where you mounted them, or just map them 1:1 (e.g., `--bind /scratch/user/project:/scratch/user/project`).
 
@@ -780,57 +782,53 @@ Colour scheme:
 
 ### Example config snippet
 
-```json
-{
-  "embeddings": {
-    "enabled": true,
-    "cluster_embeddings": true,
-    "cluster_on": "PCA",
-    "cluster_method": "hdbscan",
-    "hdbscan_min_cluster_size": 5,
-    "knn_neighbors": 20,
-    "cluster_subworkflow": {
-      "enabled": true,
-      "build_cluster_msas": true,
-      "seed_membership": "core_only",
-      "build_cluster_hmms": true,
-      "classify_noise": true,
-      "generate_sequence_logos": true,
-      "logo_format": ["png", "svg"],
-      "kl_divergence": {
-        "enabled": true,
-        "min_cluster_size": 5,
-        "pseudocount": 1e-6,
-        "top_n_sites": 20
-      },
-      "jsd_analysis": {
-        "enabled": true,
-        "min_cluster_size": 5,
-        "pseudocount": 1e-6,
-        "top_n_sites": 20
-      },
-      "motif_heatmap": {
-        "enabled": true,
-        "metric": "jsd_vs_global",
-        "min_cluster_size": 5,
-        "pseudocount": 1e-6,
-        "figure_format": ["png", "svg"],
-        "colormap": "YlOrRd"
-      },
-      "change_point_detection": {
-        "enabled": true,
-        "signal": "mean_jsd",
-        "smoothing_window": 5,
-        "min_segment_len": 5,
-        "merge_distance": 10,
-        "threshold": 0.05,
-        "max_changepoints": 25,
-        "min_cluster_size": 5,
-        "pseudocount": 1e-6
-      }
-    }
-  }
-}
+```yaml
+embeddings:
+  enabled: true
+  cluster_embeddings: true
+  cluster_on: "PCA"
+  cluster_method: "hdbscan"
+  hdbscan_min_cluster_size: 5
+  knn_neighbors: 20
+  cluster_subworkflow:
+    enabled: true
+    build_cluster_msas: true
+    seed_membership: "core_only"
+    build_cluster_hmms: true
+    classify_noise: true
+    generate_sequence_logos: true
+    logo_format:
+      - "png"
+      - "svg"
+    kl_divergence:
+      enabled: true
+      min_cluster_size: 5
+      pseudocount: 1.0e-6
+      top_n_sites: 20
+    jsd_analysis:
+      enabled: true
+      min_cluster_size: 5
+      pseudocount: 1.0e-6
+      top_n_sites: 20
+    motif_heatmap:
+      enabled: true
+      metric: "jsd_vs_global"
+      min_cluster_size: 5
+      pseudocount: 1.0e-6
+      figure_format:
+        - "png"
+        - "svg"
+      colormap: "YlOrRd"
+    change_point_detection:
+      enabled: true
+      signal: "mean_jsd"
+      smoothing_window: 5
+      min_segment_len: 5
+      merge_distance: 10
+      threshold: 0.05
+      max_changepoints: 25
+      min_cluster_size: 5
+      pseudocount: 1.0e-6
 ```
 
 > **Note**: This subworkflow requires MAFFT (for MSAs) and optionally HMMER (`hmmbuild`, `hmmscan`) for profile HMM construction and noise scoring.  Both are already listed as core pipeline dependencies.  Sequence logos require only matplotlib, KL divergence analysis requires only the Python standard library, JSD analysis requires `scipy`, the cluster motif evolution heatmap requires only `matplotlib`, and change-point detection uses only NumPy and the Python standard library — all already included in the conda environment.
@@ -858,36 +856,63 @@ phylofoundry embed --outdir ./results --cpu 8
 ```
 
 Option 2 — using `run` with `--start_at`:
-1.  Enable embeddings in your config (`"embeddings": { "enabled": true }`).
+1.  Enable embeddings in your config (`embeddings.enabled: true`).
 2.  Run with `--start_at embed`.
     ```bash
-    phylofoundry run --config config.json --start_at embed
+    phylofoundry run --config config/config.yaml --start_at embed
     ```
 3.  This skips `prep`, `hmmer`, and `extract`, loading the necessary data to run `embed`.
 
 #### Scenario C: Force Re-run
 To overwrite existing results (e.g., if you changed parameters like `mafft_mode`):
 ```bash
-phylofoundry run --config config.json --force
+phylofoundry run --config config/config.yaml --force
 ```
 *Note*: This forces **all** steps in the workflow range. To force only one step, use the subcommand:
 ```bash
-phylofoundry phylo --config config.json --force
+phylofoundry phylo --config config/config.yaml --force
 ```
 Or with the `run` form:
 ```bash
-phylofoundry run --config config.json --start_at phylo --stop_after phylo --force
+phylofoundry run --config config/config.yaml --start_at phylo --stop_after phylo --force
 ```
 
 ---
 
 ## ⚙️ Configuration
 
-Generate a template config:
+PhyloFoundry uses an annotated YAML config file (`config/config.yaml`).  The
+YAML format supports inline comments, making it easy to document your run
+parameters and share reproducible configurations with collaborators.
+
+Generate an annotated template:
 ```bash
-phylofoundry dump-config > config.json
-# or: phylofoundry run --dump_default_config > config.json  (legacy form)
+phylofoundry dump-config > config/config.yaml
+# or: phylofoundry run --dump_default_config > config/config.yaml  (legacy form)
 ```
+
+Legacy JSON configs are still accepted for backward compatibility:
+```bash
+phylofoundry run --config config.json  # JSON still works
+```
+
+To migrate an existing `config.json` to annotated YAML:
+```bash
+python scripts/migrate_json_to_yaml.py config.json
+# Output: config/config.yaml (merged with the annotated template)
+```
+
+> **Programmatic editing**: Use `ruamel.yaml` to load and modify `config.yaml`
+> in Python — it preserves all inline comments, unlike `PyYAML` or `json`.
+> ```python
+> from ruamel.yaml import YAML
+> yml = YAML()
+> with open("config/config.yaml") as f:
+>     cfg = yml.load(f)
+> cfg["resources"]["cpu"] = 32
+> with open("config/config.yaml", "w") as f:
+>     yml.dump(cfg, f)
+> ```
 
 ### Key Options
 
@@ -991,32 +1016,28 @@ The `--diamond_query` argument accepts:
 
 ### Config-Based Usage
 
-Add this to your `config.json`:
+Add this to your `config/config.yaml`:
 
-```json
-{
-    "inputs": {
-        "faa_dir": "/path/to/genomes/",
-        "diamond_query": "/path/to/queries/",
-        "hmm_input": null
-    },
-    "diamond": {
-        "enabled": true,
-        "sensitivity": "sensitive",
-        "max_evalue": 1e-5,
-        "max_target_seqs": 500,
-        "min_identity": 30.0,
-        "min_coverage": 0.5,
-        "block_size": 2.0,
-        "index_chunks": 4
-    }
-}
+```yaml
+inputs:
+  faa_dir: /path/to/genomes/
+  diamond_query: /path/to/queries/
+  hmm_input: null
+diamond:
+  enabled: true
+  sensitivity: "sensitive"
+  max_evalue: 1.0e-5
+  max_target_seqs: 500
+  min_identity: 30.0
+  min_coverage: 0.5
+  block_size: 2.0
+  index_chunks: 4
 ```
 
 Then run:
 
 ```bash
-phylofoundry run --config config.json --outdir /path/to/output/
+phylofoundry run --config config/config.yaml --outdir /path/to/output/
 ```
 
 ### DIAMOND Configuration Options
@@ -1088,21 +1109,16 @@ phylofoundry run \
 
 ### Config-based usage
 
-```json
-{
-    "inputs": {
-        "diamond_db": "/globdb/releases/v1/combined.dmnd",
-        "combined_faa": "/globdb/releases/v1/combined.faa",
-        "globdb_taxonomy_file": "/globdb/releases/v1/tax.tsv",
-        "diamond_query": "/path/to/queries/"
-    },
-    "diamond": {
-        "enabled": true
-    },
-    "output": {
-        "outdir": "/path/to/results/"
-    }
-}
+```yaml
+inputs:
+  diamond_db: /globdb/releases/v1/combined.dmnd
+  combined_faa: /globdb/releases/v1/combined.faa
+  globdb_taxonomy_file: /globdb/releases/v1/tax.tsv
+  diamond_query: /path/to/queries/
+diamond:
+  enabled: true
+output:
+  outdir: /path/to/results/
 ```
 
 ### Pipeline behaviour with prebuilt inputs
@@ -1149,7 +1165,8 @@ results/
 
 ## 📘 Detailed Configuration Guide
 
-This section explains every key option in `config.json`.
+This section explains every key option in `config/config.yaml`.  The YAML file
+ships with inline comments; refer to the file itself for complete annotation.
 
 ### `inputs`
 Defines your raw data.
@@ -1168,8 +1185,8 @@ Defines your raw data.
 
 ### `workflow`
 Controls execution flow.
--   `start_at`: Start pipeline at a specific step (e.g., `"phylo"`).
--   `stop_after`: Stop after a specific step (e.g., `"hmmer"`).
+-   `start_at`: Start pipeline at a specific step (e.g., `phylo`).
+-   `stop_after`: Stop after a specific step (e.g., `hmmer`).
 -   `force`: (Default: `false`) Overwrite existing output files for the active steps.
 -   `hmm_manifest`: (Default: `null`) Path to a text file listing specific HMM names to process (one per line).
 
@@ -1184,8 +1201,8 @@ Input preparation.
 
 ### `phylo`
 Phylogenetic inference.
--   `mafft_mode`: (Default: `"auto"`) alignment strategy. `auto`, `linsi` (accurate), `ginsi`, `fftnsi` (fast).
--   `iqtree_bin`: (Default: `"iqtree"`) Name/path of IQ-TREE executable.
+-   `mafft_mode`: (Default: `auto`) alignment strategy. `auto`, `linsi` (accurate), `ginsi`, `fftnsi` (fast).
+-   `iqtree_bin`: (Default: `iqtree`) Name/path of IQ-TREE executable.
 -   `iq_boot`: (Default: `1000`) Bootstrap replicates.
 -   `no_asr`: (Default: `false`) Skip Ancestral Sequence Reconstruction (saves memory).
 -   `skip_clipkit`: (Default: `false`) Skip alignment trimming.
@@ -1198,16 +1215,16 @@ Gene neighborhood analysis.
 -   `gff_dir`: (Optional) Directory of GFF3 files. If both GBK and GFF are provided, GBK is tried first, then GFF as fallback.
 -   `window_genes`: (Default: `10`) Number of genes to extract upstream and downstream of the hit. May be fewer at contig boundaries.
 -   `similarity`: homology search settings.
-    -   `method`: `"diamond"` (default) or `"mmseqs"`.
+    -   `method`: `diamond` (default) or `mmseqs`.
     -   `min_identity`: (Default: `30`) % identity cutoff.
 -   `include_tree`: (Default: `true`) Plot tree alongside synteny tracks.
--   `output_format`: (Default: `"pdf"`) `pdf` or `png` or `html`.
+-   `output_format`: (Default: `pdf`) `pdf` or `png` or `html`.
 
 ### `embeddings`
 Protein Language Model analysis.
 -   `enabled`: Set to `true` to run.
--   `model`: (Default: `"esm2_t33_650M_UR50D"`) ESM2 model.
--   `device`: `"cuda"` (GPU) or `"cpu"`.
+-   `model`: (Default: `esm2_t33_650M_UR50D`) ESM2 model.
+-   `device`: `cuda` (GPU) or `cpu`.
 -   `write_full_vectors`: (Default: `false`) Must be `true` for HA attention-based methods.
     - Attention-driven analyses include HA/LoC calling, motif HA scoring, HA enrichment/hubs, and candidate residues.
 -   `cluster_embeddings`: (Default: `true`) Run HDBSCAN clustering on embeddings.
@@ -1382,23 +1399,26 @@ Post-processing metrics (combined legacy step).
 > If HA is enabled while `write_full_vectors` is false, the pipeline exits with a clear error.
 
 Example HA config:
-```json
-{
-  "embeddings": { "write_full_vectors": true },
-  "ha": {
-    "enabled": true,
-    "method": "loc",
-    "loc_norm_mode": "max"
-  },
-  "motifs": { "use_ha": true },
-  "discover": { "enabled": true, "use_ha": true, "candidates": { "enabled": true } }
-}
+```yaml
+embeddings:
+  write_full_vectors: true
+ha:
+  enabled: true
+  method: "loc"
+  loc_norm_mode: "max"
+motifs:
+  use_ha: true
+discover:
+  enabled: true
+  use_ha: true
+  candidates:
+    enabled: true
 ```
 
 ### `codon`
 Codon alignments.
 -   `enabled`: Set to `true` to run.
--   `pal2nal_cmd`: (Default: `"pal2nal.pl"`) Path to PAL2NAL script.
+-   `pal2nal_cmd`: (Default: `pal2nal.pl`) Path to PAL2NAL script.
 
 ### `motifs`
 Targeted motif scoring.

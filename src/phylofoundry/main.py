@@ -2,6 +2,39 @@ import argparse
 import sys
 from .config import resolve_config, validate_config, STEPS
 
+
+# ── Helpers ────────────────────────────────────────────────────────────────────
+
+def _print_default_config_yaml() -> None:
+    """Print the bundled annotated default config YAML to stdout.
+
+    Searches for config/config.yaml starting from the repository root
+    (resolved relative to this file's location) then falls back to a plain
+    YAML dump of DEFAULT_CONFIG when the template cannot be located.
+    """
+    import io
+    from copy import deepcopy
+    from pathlib import Path
+    from ruamel.yaml import YAML
+    from .constants import DEFAULT_CONFIG
+
+    # The source tree layout is: src/phylofoundry/main.py → repo root is 3 levels up.
+    # The installed-package layout may differ, so we try both.
+    _this = Path(__file__).resolve()
+    _candidates = [
+        _this.parents[3] / "config" / "config.yaml",  # editable / source install
+        _this.parents[2] / "config" / "config.yaml",  # flat installed layout
+    ]
+    for _template in _candidates:
+        if _template.exists():
+            print(_template.read_text())
+            return
+    # Fallback: dump DEFAULT_CONFIG as plain YAML (no comments)
+    yml = YAML()
+    buf = io.StringIO()
+    yml.dump(deepcopy(DEFAULT_CONFIG), buf)
+    print(buf.getvalue())
+
 # ── Constants ──────────────────────────────────────────────────────────────────
 
 # Maps CLI subcommand names to internal pipeline step names.
@@ -51,7 +84,8 @@ _ALL_SUBCMDS: frozenset[str] = frozenset(
 def _add_common_args(parser: argparse.ArgumentParser) -> None:
     """Add shared arguments used by most subparsers."""
     parser.add_argument("--config", default=None,
-                        help="JSON config file")
+                        help="Path to a YAML config file (config/config.yaml) or "
+                             "legacy JSON config file")
     parser.add_argument("--faa_dir", default=None,
                         help="Override inputs.faa_dir")
     parser.add_argument("--hmm_dir", default=None,
@@ -79,8 +113,8 @@ def _build_parser() -> argparse.ArgumentParser:
             "  phylofoundry phylo --outdir ./results --cpu 16\n\n"
             "Inspect and validate:\n"
             "  phylofoundry list-steps\n"
-            "  phylofoundry plan  --config config.json\n"
-            "  phylofoundry validate --config config.json\n"
+            "  phylofoundry plan  --config config/config.yaml\n"
+            "  phylofoundry validate --config config/config.yaml\n"
             "  phylofoundry doctor"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -420,7 +454,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser(
         "dump-config",
-        help="Print the default config JSON to stdout and exit",
+        help="Print the default annotated YAML config to stdout and exit",
     )
 
     return ap
@@ -594,7 +628,7 @@ def main() -> None:
     and the legacy flag-style interface (automatically routed to the ``run``
     subcommand for backward compatibility)::
 
-        phylofoundry --config config.json
+        phylofoundry --config config/config.yaml
         phylofoundry --faa_dir ./proteomes --hmm_dir ./markers --outdir ./results
     """
     argv = sys.argv[1:]
@@ -615,9 +649,7 @@ def main() -> None:
         sys.exit(0)
 
     if args.subcommand == "dump-config":
-        import json
-        from .constants import DEFAULT_CONFIG
-        print(json.dumps(DEFAULT_CONFIG, indent=2, sort_keys=True))
+        _print_default_config_yaml()
         sys.exit(0)
 
     # Legacy --list-steps flag on 'run' subcommand
@@ -667,9 +699,7 @@ def main() -> None:
 
     # dump_default_config on the 'run' subcommand
     if getattr(args, "dump_default_config", False):
-        import json
-        from .constants import DEFAULT_CONFIG
-        print(json.dumps(DEFAULT_CONFIG, indent=2, sort_keys=True))
+        _print_default_config_yaml()
         sys.exit(0)
 
     # ── Normal pipeline / single-step execution ────────────────────────────

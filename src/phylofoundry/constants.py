@@ -2,7 +2,7 @@ from pathlib import Path
 
 # Paths
 ROOT_DIR = Path(__file__).parent
-DEFAULT_CONFIG_FILE = "config.json"
+DEFAULT_CONFIG_FILE = "config/config.yaml"
 
 # Bio
 AA_ALPHABET = set(list("ACDEFGHIKLMNPQRSTVWY"))

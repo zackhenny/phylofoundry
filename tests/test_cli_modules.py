@@ -11,12 +11,21 @@ Verifies that:
 from __future__ import annotations
 
 import argparse
+import io
 import json
 import sys
 from copy import deepcopy
 from unittest.mock import patch
 
 import pytest
+from ruamel.yaml import YAML as _YAML
+
+
+def _yaml_loads(text: str) -> dict:
+    """Parse a YAML string (also accepts plain JSON as YAML is a superset)."""
+    yml = _YAML()
+    return yml.load(io.StringIO(text)) or {}
+
 
 from phylofoundry.constants import DEFAULT_CONFIG, STEPS
 from phylofoundry.main import (
@@ -130,7 +139,7 @@ class TestLegacyFlagBackwardCompat:
         code = _run_main(["--dump_default_config"])
         assert code == 0
         out = capsys.readouterr().out
-        parsed = json.loads(out)
+        parsed = _yaml_loads(out)
         assert "inputs" in parsed
 
 
@@ -148,7 +157,7 @@ class TestUtilitySubcommands:
     def test_dump_config_subcommand(self, capsys):
         code = _run_main(["dump-config"])
         assert code == 0
-        parsed = json.loads(capsys.readouterr().out)
+        parsed = _yaml_loads(capsys.readouterr().out)
         assert "inputs" in parsed
         assert "output" in parsed
 
@@ -544,5 +553,5 @@ class TestRunSubcommand:
     def test_run_dump_default_config(self, capsys):
         code = _run_main(["run", "--dump_default_config"])
         assert code == 0
-        parsed = json.loads(capsys.readouterr().out)
+        parsed = _yaml_loads(capsys.readouterr().out)
         assert "inputs" in parsed

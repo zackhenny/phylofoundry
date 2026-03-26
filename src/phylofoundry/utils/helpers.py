@@ -84,10 +84,35 @@ def check_dependencies(executables: list):
     if missing:
         print(f"WARNING: The following executables are not found in PATH: {', '.join(missing)}")
 
+def load_yaml_config(path: str) -> dict:
+    """Load a YAML config file using ruamel.yaml.
+
+    Comments in the source file are preserved in memory when the returned
+    object is a ``ruamel.yaml.comments.CommentedMap``, but downstream code
+    can treat it as a plain ``dict``.
+    """
+    from ruamel.yaml import YAML
+    yml = YAML()
+    yml.preserve_quotes = True
+    with open(path) as f:
+        data = yml.load(f)
+    if data is None:
+        return {}
+    return dict(data)
+
+
 def load_json_config(path: str) -> dict:
-    """Load JSON config from file."""
+    """Load a config file, auto-detecting YAML or JSON by file extension.
+
+    Files with a ``.yaml`` or ``.yml`` extension are loaded with
+    ruamel.yaml; all other files are loaded as JSON for backward
+    compatibility.
+    """
+    if path.endswith((".yaml", ".yml")):
+        return load_yaml_config(path)
     with open(path) as f:
         return json.load(f)
+
 
 def write_json(obj: dict, out_fp: str):
     """Write dictionary to JSON file."""

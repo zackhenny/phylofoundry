@@ -17,6 +17,7 @@ dependencies = [
   "pandas",
   "numpy",
   "pyhmmer",
+  "ruamel.yaml",
 ]
 
 [project.optional-dependencies]
