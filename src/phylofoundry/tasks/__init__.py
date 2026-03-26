@@ -19,4 +19,5 @@ __all__ = [
     "score_motifs",
     "discover_motifs",
     "curate",
+    "aa_composition",
 ]

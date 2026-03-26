@@ -15,6 +15,7 @@
 -   **Motif Scoring** (Optional): Uses ESM-2 attention weights to score structurally important motifs (e.g., `--motifs HPEVY,HPEVF`).
 -   **Motif Discovery** (Optional): Compares attention profiles across all HDBSCAN clades to discover novel structural hubs natively in a 1-vs-All manner.
 -   **Synteny Analysis** (Optional): Extracts gene neighborhoods (configurable window), computes similarity (DIAMOND/MMseqs2), and plots synteny tracks ordered by phylogeny.
+-   **AA Composition Analysis** (Optional): Computes per-gene amino acid fractional composition and biochemical metrics (Zc, GRAVY, nH2O, pI, S/N content, thermostable-residue frequency) for all selected gene hits after the phylo stage. Outputs a gene × metric TSV matrix, clade-level Kruskal-Wallis + BH-FDR comparative statistics, and per-AA boxplot / heatmap visualisations.
 -   **HDBSCAN Clustering** (Optional): Clusters protein embeddings and outputs `clade_assignment.tsv` with taxonomy.
 -   **GTDB Taxonomy Integration**: Merges GTDB-Tk taxonomy into summary tables and cluster assignments.
 -   **Fully Resumable (Two-Tier)**: Robust production-grade `--resume` support at both the pipeline step level and sub-task level (per-HMM, per-genome).  NDJSON+SQLite checkpointing survives OOM, SIGKILL, scheduler wall-time, and node failures.  Long-running steps (`embed`, `phylo`, `hmmer`) pick up from exactly the last completed sub-task — no wasted compute on already-finished work.  Works with `run --resume`, single-step subcommands (`embed --resume`), and any HPC/Slurm workflow.
@@ -270,6 +271,7 @@ Optional pipeline steps (`embed`, `curate`, `synteny`, `hyphy`, etc.) are **auto
 | `taxonomy` | GTDB-Tk / custom taxonomy integration | `--gtdb_dir`, `--taxonomy_file` |
 | `conservation` | Per-site conservation & KL divergence | `--clades_tsv` |
 | `detect-clades` | Clade detection (taxonomy / TreeCluster / tree+embed) | `--detect_method` |
+| `aa-composition` | Per-gene AA composition, Zc, GRAVY, pI, stats & plots | `--no_plots`, `--no_pi` |
 | `post` | Legacy combined post-processing | — |
 | `synteny` | Synteny neighbourhood plots | `--gbk_dir`, `--gff_dir` |
 | `codon` | Codon-aware alignments (pal2nal) | `--pal2nal_cmd` |
@@ -644,32 +646,64 @@ Control execution range with `--start_at <STEP>` and `--stop_after <STEP>` on th
 -   **Action**: Detects clades via taxonomy rank, TreeCluster, or tree+embedding strategies. Writes the clade table consumed by `hyphy` and `discover_motifs`.
 -   **Output**: `summary/detected_clades.tsv`, `clade_assignments/`.
 
-### Step 10: `post` (Optional, Legacy)  (`phylofoundry post`)
+### Step 10: `aa_composition` (Optional)  (`phylofoundry aa-composition`)
+-   **Action**: Computes per-gene amino acid composition and biochemical metrics for all **selected gene hits** (from `fasta_per_hmm/` or the curated overlay). Outputs a gene × metric matrix as a TSV, optionally runs Kruskal-Wallis + Benjamini-Hochberg FDR tests across clade groups, and generates boxplot/heatmap PNGs.
+-   **Metrics computed per gene**:
+    | Column | Description |
+    |--------|-------------|
+    | `aa_A_comp` … `aa_Y_comp` | Fractional composition of each of the 20 standard amino acids (count / gene length) |
+    | `Zc` | Average oxidation state of carbon (weighted Zc per residue, summed and divided by total carbon atoms; *genomeSPOT* convention) |
+    | `gravy` | Grand average of hydropathicity (Kyte-Doolittle scale) |
+    | `nH2O` | Water demand per residue (QEC thermodynamic scale) |
+    | `pi` | Isoelectric point (BioPython `ProteinAnalysis`; set `compute_pi: false` to skip) |
+    | `S_content` | Sulfur-containing residue fraction (C + M) |
+    | `N_content` | Average nitrogen atoms per residue |
+    | `thermo_freq` | Thermostable-residue frequency (I, V, Y, W, R, E, L) |
+-   **Output files** (all under `summary/aa_composition/`):
+    -   `aa_comp_per_gene.tsv` — rows = genes, columns = gene_id, hmm, len, tip_or_clade, all AA/metric columns above
+    -   `aa_comp_stats.tsv` — per-metric Kruskal-Wallis H-statistic, raw p-value, BH-corrected q-value, group count (written only when ≥2 clade groups exist)
+    -   `plots/boxplot_aa_*.png` — per-AA composition boxplots by clade/tip
+    -   `plots/boxplot_Zc.png`, `plots/boxplot_gravy.png`, etc. — biochemical metric boxplots
+    -   `plots/heatmap_aa_composition.png` — heatmap of mean AA composition across clades (top-N variable AAs)
+-   **Configuration**:
+    ```yaml
+    aa_composition:
+      enabled: true
+      remove_initial_met: true      # strip leading Met before computing
+      compute_pi: true              # requires BioPython
+      generate_plots: true          # requires matplotlib + seaborn
+      top_n_aas_heatmap: 10         # AAs shown in heatmap (by inter-clade variance)
+    ```
+-   **CLI flags**:
+    -   `--no_plots` — suppress plot generation
+    -   `--no_pi` — skip isoelectric point calculation
+
+### Step 11: `post` (Optional, Legacy)  (`phylofoundry post`)
 -   **Action**: Backward-compatibility shim combining conservation metrics, KL divergence, and clade detection in a single step. New workflows should prefer the dedicated `taxonomy_integrate`, `conservation_metrics`, and `detect_clades` steps.
 -   **Output**: `summary/post_scikitbio/`, `clade_assignments/`.
 
-### Step 11: `synteny` (Optional)  (`phylofoundry synteny [--gbk_dir DIR] [--gff_dir DIR]`)
+### Step 12: `synteny` (Optional)  (`phylofoundry synteny [--gbk_dir DIR] [--gff_dir DIR]`)
 -   **Action**: Extracts gene neighborhoods (configurable window), computes similarity (DIAMOND/MMseqs2), and plots synteny tracks ordered by phylogeny.
 -   **Output**: `synteny/<hmm_name>/synteny.<hmm_name>.pdf`.
 
-### Step 12: `codon` (Optional)  (`phylofoundry codon [--pal2nal_cmd CMD]`)
+### Step 13: `codon` (Optional)  (`phylofoundry codon [--pal2nal_cmd CMD]`)
 -   **Action**: 
     -   Matches protein sequences to their CDS (nucleotide) sequences.
     -   **Strips terminal stop codons** (`*` from AA, TAA/TAG/TGA from CDS) before running `pal2nal.pl`.
     -   Uses `pal2nal.pl` with `-nogap -nomismatch` flags for robust codon alignment.
 -   **Output**: `codon_alignments/<hmm_name>.codon.fasta`.
 
-### Step 13: `hyphy` (Optional)  (`phylofoundry hyphy [--hyphy_bin BIN] [--hyphy_tests TESTS]`)
+### Step 14: `hyphy` (Optional)  (`phylofoundry hyphy [--hyphy_bin BIN] [--hyphy_tests TESTS]`)
 -   **Action**: Runs selection tests (e.g., RELAX, aBSREL, MEME) on codon alignments and trees. If `summary/detected_clades.tsv` exists and `hyphy.use_detected_clades=true`, HyPhy automatically builds labeled trees and runs per-clade analyses (no manual RELAX labeling required).
 -   **Output**: Legacy `summary/hyphy/<hmm_name>.<test>.json` plus clade-aware outputs under `summary/hyphy/<hmm_name>/<TEST>/<clade_name>.json` and labeled trees under `trees_labeled/<hmm_name>/`.
 
-### Step 14: `score_motifs` (Optional)  (`phylofoundry score-motifs --motifs MOTIF1,MOTIF2`)
+### Step 15: `score_motifs` (Optional)  (`phylofoundry score-motifs --motifs MOTIF1,MOTIF2`)
 -   **Action**: Passes sequences through ESM-2 with `output_attentions=True`, extracts attention weights at user-specified motif positions.
 -   **CLI**: `phylofoundry score-motifs --motifs HPEVY,HPEVF --outdir ./results`
 -   **Output**: `summary/motif_attention_scores.tsv` — columns: `seq_id`, `motif`, `start_pos`, `end_pos`, `attention_score`, `clade_id`, `type`.
 -   **HA Output (optional)**: `attention/<HMM>.ha_sites.tsv` + `summary/ha_summary.tsv` when `ha.enabled=true` and `motifs.use_ha=true`.
 
-### Step 15: `discover_motifs` (Optional)  (`phylofoundry discover-motifs`)
+### Step 16: `discover_motifs` (Optional)  (`phylofoundry discover-motifs`)
 -   **Action**: Iterates over all HDBSCAN clades, comparing the 1D attention profiles of each clade against the combined average of all others. Finds peaks in the attention delta and extracts k-mers as candidate novel structural hubs for that specific clade.
 -   **CLI**: `phylofoundry discover-motifs --outdir ./results` (or set `discover.enabled=true` in config).
 -   **Output**: `summary/discovered_motifs.tsv` — columns: `kmer`, `n_sequences`, `mean_attention_delta`, `source_clade`, `reference_clade`.
@@ -1948,6 +1982,41 @@ Automated clade detection.
 -   `embedtree_allow_nested`: (Default: `false`) If `true`, descendants of selected splits may also be emitted.
 -   `embedtree_require_monophyly`: (Default: `true`) Enforces clades to be internal tree nodes (monophyletic by construction).
 -   `embedtree_emit_all`: (Default: `false`) If `true`, emit all accepted nodes instead of truncating at `embedtree_top_k`.
+
+### `aa_composition`
+Per-gene amino acid composition analysis and comparative statistics (runs after phylo/curate and optionally detect_clades).
+-   `enabled`: (Default: `false`) Set to `true` to run, or use the `aa-composition` subcommand.
+-   `remove_initial_met`: (Default: `true`) Strip the N-terminal methionine (if present) from each sequence before counting residues — consistent with the *genomeSPOT* convention.
+-   `compute_pi`: (Default: `true`) Compute the isoelectric point for each gene using BioPython `ProteinAnalysis.isoelectric_point()`. Set to `false` to skip if BioPython is not installed.
+-   `generate_plots`: (Default: `true`) Write boxplot PNGs (per-AA and per-biochemical-metric) and a heatmap of mean AA composition across clade groups. Requires `matplotlib` and `seaborn`. Set to `false` to skip plots.
+-   `top_n_aas_heatmap`: (Default: `10`) Number of amino acids (selected by highest inter-clade variance of mean frequency) to include in the summary heatmap.
+
+**Output structure**:
+```
+summary/aa_composition/
+    aa_comp_per_gene.tsv      – gene × metric matrix (rows=genes, cols=gene_id, hmm, len,
+                                  tip_or_clade, aa_A_comp…aa_Y_comp, Zc, gravy, nH2O,
+                                  pi, S_content, N_content, thermo_freq)
+    aa_comp_stats.tsv         – per-metric Kruskal-Wallis H, p-value, BH q-value, n_groups
+                                  (written only when ≥2 clade groups are present)
+    plots/
+        boxplot_aa_A.png      – per-AA composition distribution by clade/tip
+        …
+        boxplot_Zc.png        – biochemical metric distributions by clade/tip
+        heatmap_aa_composition.png
+```
+
+**Metric definitions**:
+| Metric | Description |
+|--------|-------------|
+| `aa_X_comp` | Fraction of residue X in the gene (count_X / gene_length) |
+| `Zc` | Average carbon oxidation state: Σ(weighted_Zc_per_residue) / Σ(carbon_atoms_per_residue) |
+| `gravy` | Grand average of hydropathicity (Kyte-Doolittle scale): mean hydrophobicity per residue |
+| `nH2O` | Water demand per residue (QEC thermodynamic scale) |
+| `pi` | Isoelectric point (BioPython `ProteinAnalysis`) |
+| `S_content` | Sulfur-containing residue fraction (C + M) |
+| `N_content` | Average nitrogen atoms per residue |
+| `thermo_freq` | Thermostable-residue frequency (I, V, Y, W, R, E, L) |
 
 ### `post`
 > ⚠️ **Legacy / backward-compatibility shim.** New workflows should use the dedicated `taxonomy_integrate`, `conservation_metrics`, and `detect_clades` steps instead.

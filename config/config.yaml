@@ -332,6 +332,25 @@ detect_clades:
   embedtree_emit_all: false  # (bool) Emit all candidate clades, not just the best split.
 
 # ─────────────────────────────────────────────────────────────────────────────
+# MODULE: aa_composition
+# Per-gene amino acid composition analysis and clade-level comparative tests.
+# Runs after phylo (and curate/detect_clades when enabled) so that only
+# selected gene hits are analysed.
+# ─────────────────────────────────────────────────────────────────────────────
+aa_composition:
+  enabled: false             # (bool) Enable AA composition analysis.  Also auto-enabled
+                             #   by the `aa-composition` subcommand.
+  remove_initial_met: true   # (bool) Strip the leading methionine (if present) before
+                             #   computing composition — mirrors convention in genomeSPOT.
+  compute_pi: true           # (bool) Compute the isoelectric point for each gene using
+                             #   BioPython ProteinAnalysis.  Disable to skip the optional
+                             #   BioPython dependency.
+  generate_plots: true       # (bool) Generate per-AA boxplots and a heatmap PNG.
+                             #   Requires matplotlib and seaborn.
+  top_n_aas_heatmap: 10      # (int) Number of amino acids displayed in the summary heatmap
+                             #   (selected by highest inter-clade variance of mean frequency).
+
+# ─────────────────────────────────────────────────────────────────────────────
 # MODULE: post
 # Legacy backward-compatibility shim that combines conservation and clade
 # detection into a single step.  Prefer the dedicated subcommands for new runs.

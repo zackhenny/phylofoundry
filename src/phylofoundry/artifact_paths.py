@@ -71,6 +71,7 @@ BEST_HITS_WITH_TAXONOMY_TSV = "summary/best_hits.with_taxonomy.tsv"
 DETECTED_CLADES_TSV = "summary/detected_clades.tsv"
 CONSERVATION_METRICS_DIR = "summary/post_scikitbio"
 HYPHY_DIR = "summary/hyphy"
+AA_COMPOSITION_DIR = "summary/aa_composition"
 RESOLVED_CONFIG_JSON = "summary/resolved_config.json"
 
 # Logs directory
@@ -199,6 +200,11 @@ class ArtifactPaths:
     def hyphy_dir(self) -> str:
         """Directory containing HyPhy JSON result files."""
         return os.path.join(self.outdir, HYPHY_DIR)
+
+    @property
+    def aa_composition_dir(self) -> str:
+        """Directory containing per-gene AA composition outputs."""
+        return os.path.join(self.outdir, AA_COMPOSITION_DIR)
 
     @property
     def resolved_config_json(self) -> str:

@@ -6,7 +6,7 @@ from .constants import STEPS
 from .utils.helpers import safe_mkdir, write_json
 from .utils.bio import read_fasta
 from .tasks import prep, hmmer, extract, embed, phylo, curate, post, synteny, codon, hyphy, asr
-from .tasks import taxonomy_integrate, conservation_metrics, detect_clades
+from .tasks import taxonomy_integrate, conservation_metrics, detect_clades, aa_composition
 from .execution_planner import build_execution_plan
 from .execution_schema import StepState
 from .failure_policy import apply_failure_policy, build_reverse_dependency_map
@@ -126,6 +126,7 @@ def run_pipeline(cfg):
     tax_int_cfg = cfg.get("taxonomy_integrate", {})
     cons_met_cfg = cfg.get("conservation_metrics", {})
     det_cla_cfg = cfg.get("detect_clades", {})
+    aa_comp_cfg = cfg.get("aa_composition", {})
     synteny_cfg = cfg["synteny"]
     codon_cfg = cfg["codon"]
     hyphy_cfg = cfg["hyphy"]
@@ -719,6 +720,35 @@ def run_pipeline(cfg):
             except Exception as exc:
                 _on_step_failure("detect_clades", exc)
     if stop_after == "detect_clades":
+        checkpointer.end_run(run_id, success=True)
+        return
+
+    # ── STEP: aa_composition ───────────────────────────────────────────────
+    if step_in_range("aa_composition", start_at, stop_after) and aa_comp_cfg.get("enabled", False):
+        if _is_blocked("aa_composition"):
+            print("[pipeline] Skipping blocked step: aa_composition")
+        elif _is_resume_skip("aa_composition"):
+            print("[pipeline] SKIP: aa_composition (checkpoint match)")
+            update_step_status(status_path, "aa_composition", "success")
+            checkpointer.record_step_skipped(run_id, "aa_composition", "fingerprint match")
+        else:
+            checkpointer.record_step_pending(run_id, "aa_composition")
+            update_step_status(status_path, "aa_composition", "running")
+            append_pipeline_log(logs_dir, "START: aa_composition")
+            checkpointer.record_step_running(run_id, "aa_composition")
+            try:
+                aa_composition.run_aa_composition(
+                    cfg, fasta_dir, summary_dir,
+                    hmm_keep=hmm_keep,
+                    clade_assign_dir=clade_assign_dir,
+                    force=force,
+                )
+                update_step_status(status_path, "aa_composition", "success")
+                append_pipeline_log(logs_dir, "SUCCESS: aa_composition")
+                checkpointer.record_step_success(run_id, "aa_composition")
+            except Exception as exc:
+                _on_step_failure("aa_composition", exc)
+    if stop_after == "aa_composition":
         checkpointer.end_run(run_id, success=True)
         return
 

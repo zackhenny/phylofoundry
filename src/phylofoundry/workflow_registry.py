@@ -277,6 +277,44 @@ REGISTRY.register(StepDefinition(
 ))
 
 REGISTRY.register(StepDefinition(
+    name="aa_composition",
+    description=(
+        "Compute per-gene amino acid composition (fractional AA counts, Zc, "
+        "GRAVY, nH2O, pI, S/N content, thermostable-residue frequency) for all "
+        "selected gene hits after phylo/curate; optionally run clade-level "
+        "Kruskal-Wallis + BH-FDR statistics and generate visualisation plots. "
+        "Outputs are written to summary/aa_composition/."
+    ),
+    outputs=[
+        ArtifactSpec(
+            "aa_comp_per_gene",
+            ArtifactKind.TABLE,
+            "summary/aa_composition/aa_comp_per_gene.tsv",
+        ),
+        ArtifactSpec(
+            "aa_comp_stats",
+            ArtifactKind.TABLE,
+            "summary/aa_composition/aa_comp_stats.tsv",
+            optional=True,
+        ),
+        ArtifactSpec(
+            "aa_comp_plots",
+            ArtifactKind.DIRECTORY,
+            "summary/aa_composition/plots/",
+            optional=True,
+        ),
+    ],
+    dependencies=["phylo"],
+    optional=True,
+    enabled_config_key="aa_composition.enabled",
+    notes=(
+        "Runs after curate when that step is enabled so that only curated "
+        "(selected) gene hits are analysed.  Comparative statistics require "
+        "≥2 clade groups; plots require matplotlib and seaborn."
+    ),
+))
+
+REGISTRY.register(StepDefinition(
     name="post",
     description=(
         "Backward-compatibility shim: conservation metrics, KL divergence, and "
