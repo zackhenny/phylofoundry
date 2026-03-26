@@ -193,6 +193,18 @@ def run_pipeline(cfg):
     checkpointer.start_run(run_id, cfg)
     print(f"[checkpoint] Run ID: {run_id}")
 
+    # ── Input provenance (--input-run) ────────────────────────────────────
+    # When --input-run is set, validate that the prior run produced the
+    # artifacts needed by the active step(s) and record full provenance.
+    _input_run_dir: "str | None" = ckpt_cfg.get("input_run")
+    if _input_run_dir:
+        from .provenance import apply_input_run, InputRunError
+        _active_step = cfg["workflow"].get("start_at")
+        try:
+            apply_input_run(cfg, step_name=_active_step)
+        except InputRunError as exc:
+            raise SystemExit(f"\n[input-run] ERROR: {exc}") from exc
+
     # Helper: should this step be skipped due to resume?
     def _is_resume_skip(step_name: str) -> bool:
         return resume_plan.get(step_name) == "skip"
@@ -250,21 +262,26 @@ def run_pipeline(cfg):
     # ── Output structure ───────────────────────────────────────────────────
     paths = ArtifactPaths(outdir)
 
-    hmmscan_dir = paths.hmmscan_dir
-    hmmsearch_dir = paths.hmmsearch_dir
-    fasta_dir = paths.fasta_dir
-    aln_dir = paths.alignments_hmm_dir
-    clipkit_dir = paths.alignments_clipkit_dir
-    tree_dir = paths.trees_dir
-    summary_dir = paths.summary_dir
-    post_dir = paths.conservation_metrics_dir
-    codon_dir = paths.codon_dir
-    hyphy_dir = paths.hyphy_dir
+    # When --input-run is specified, read upstream artifacts from the prior
+    # run directory instead of the current outdir.
+    _input_run_dir_abs = cfg.get("_input_paths", {}).get("input_run_dir")
+    input_paths = ArtifactPaths(_input_run_dir_abs) if _input_run_dir_abs else paths
+
+    hmmscan_dir = input_paths.hmmscan_dir
+    hmmsearch_dir = input_paths.hmmsearch_dir
+    fasta_dir = input_paths.fasta_dir
+    aln_dir = input_paths.alignments_hmm_dir
+    clipkit_dir = input_paths.alignments_clipkit_dir
+    tree_dir = input_paths.trees_dir
+    summary_dir = input_paths.summary_dir
+    post_dir = input_paths.conservation_metrics_dir
+    codon_dir = input_paths.codon_dir
+    hyphy_dir = paths.hyphy_dir  # always write hyphy output to new outdir
     # Embedding vectors can be large; place them in work_base when a separate
     # working directory is configured.
     emb_dir = os.path.join(work_base, "embeddings")
-    clade_assign_dir = paths.clade_assign_dir
-    curated_dir = paths.curated_dir
+    clade_assign_dir = input_paths.clade_assign_dir
+    curated_dir = input_paths.curated_dir
 
     for d in paths.all_output_dirs():
         safe_mkdir(d)

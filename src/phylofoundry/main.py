@@ -74,7 +74,7 @@ _STEP_ENABLE_MAP: dict[str, tuple[str, str]] = {
 
 # All recognised top-level subcommand tokens (used for legacy routing).
 _ALL_SUBCMDS: frozenset[str] = frozenset(
-    {"run", "list-steps", "plan", "validate", "doctor", "dump-config"}
+    {"run", "list-steps", "list-runs", "plan", "validate", "doctor", "dump-config"}
     | set(_STEP_SUBCMD_MAP.keys())
 )
 
@@ -109,6 +109,17 @@ def _add_common_args(parser: argparse.ArgumentParser) -> None:
                              "config/checkpoint to resume from (overrides --resume)")
     parser.add_argument("--no-resume", dest="no_resume", action="store_true",
                         help="Disable resume even if checkpoints are present in outdir")
+    # ── Input provenance flag ──────────────────────────────────────────────
+    parser.add_argument("--input-run", dest="input_run", default=None,
+                        metavar="PRIOR_OUTDIR",
+                        help="Path to a prior run's output directory.  When set, "
+                             "the current module will look for its required input "
+                             "artifacts inside PRIOR_OUTDIR instead of --outdir.  "
+                             "This enables chaining separate pipeline stages "
+                             "(e.g. phylofoundry hyphy --input-run ./results/phylo "
+                             "--outdir ./results/hyphy).  The prior run's "
+                             "config snapshot and artifact hashes are recorded in "
+                             "the new run's provenance.")
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -470,6 +481,30 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Print the default annotated YAML config to stdout and exit",
     )
 
+    p_lr = sub.add_parser(
+        "list-runs",
+        help="List available prior runs in a directory and show their metadata",
+        description=(
+            "Scans a directory (default: current working directory) for "
+            "PhyloFoundry output directories and prints a table with run IDs, "
+            "timestamps, completed steps, and artifact paths.  Use this to "
+            "identify which directories can be passed to --input-run."
+        ),
+    )
+    p_lr.add_argument(
+        "search_dir",
+        nargs="?",
+        default=".",
+        metavar="DIR",
+        help="Directory to scan for prior runs (default: current working directory)",
+    )
+    p_lr.add_argument(
+        "--json",
+        action="store_true",
+        dest="list_runs_json",
+        help="Output run metadata as JSON instead of a human-readable table",
+    )
+
     return ap
 
 
@@ -661,6 +696,14 @@ def main() -> None:
         print_list_steps()
         sys.exit(0)
 
+    if args.subcommand == "list-runs":
+        from .provenance import list_runs
+        list_runs(
+            args.search_dir,
+            as_json=getattr(args, "list_runs_json", False),
+        )
+        sys.exit(0)
+
     if args.subcommand == "dump-config":
         _print_default_config_yaml()
         sys.exit(0)
@@ -744,6 +787,11 @@ def main() -> None:
     cfg["_checkpoint"]["resume"] = resume
     cfg["_checkpoint"]["resume_from"] = resume_from
     cfg["_checkpoint"]["no_resume"] = no_resume
+
+    # ── Input provenance (--input-run) ─────────────────────────────────────
+    input_run = getattr(args, "input_run", None)
+    if input_run is not None:
+        cfg["_checkpoint"]["input_run"] = input_run
 
     from .pipeline import run_pipeline
     run_pipeline(cfg)

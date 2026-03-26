@@ -365,13 +365,17 @@ class Checkpointer:
         """
         now = _now_iso()
         # Embed run metadata into the config snapshot
-        meta = {
+        meta: Dict[str, Any] = {
             "run_id": run_id,
             "start_time": now,
             "ndjson_path": self._ndjson_path,
             "sqlite_path": self._db_path,
             "outdir": self._outdir,
         }
+        # Include input provenance when --input-run was supplied.
+        input_run_record = cfg.get("_input_run")
+        if input_run_record:
+            meta["input_run"] = input_run_record
         self._write_config_snapshot(cfg, meta)
 
         # Register run in SQLite
@@ -390,13 +394,16 @@ class Checkpointer:
         )
         self._conn.commit()
 
-        # Write NDJSON entry
-        self._append({
+        # Write NDJSON entry — include input_run provenance for auditability.
+        ndjson_event: Dict[str, Any] = {
             "event": "run_start",
             "run_id": run_id,
             "timestamp": now,
             "outdir": self._outdir,
-        })
+        }
+        if input_run_record:
+            ndjson_event["input_run"] = input_run_record
+        self._append(ndjson_event)
 
     def end_run(self, run_id: str, success: bool) -> None:
         """Record the end of a pipeline run."""
