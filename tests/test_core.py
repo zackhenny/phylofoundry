@@ -233,6 +233,7 @@ class TestConfig:
         assert STEPS == [
             "prep", "hmmer", "extract", "embed", "phylo", "curate",
             "taxonomy_integrate", "conservation_metrics", "detect_clades",
+            "aa_composition",
             "post",
             "synteny", "codon", "hyphy", "score_motifs", "discover_motifs",
         ]

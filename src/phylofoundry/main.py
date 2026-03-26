@@ -49,6 +49,7 @@ _STEP_SUBCMD_MAP: dict[str, str] = {
     "taxonomy": "taxonomy_integrate",
     "conservation": "conservation_metrics",
     "detect-clades": "detect_clades",
+    "aa-composition": "aa_composition",
     "post": "post",
     "synteny": "synteny",
     "codon": "codon",
@@ -64,6 +65,7 @@ _STEP_ENABLE_MAP: dict[str, tuple[str, str]] = {
     "taxonomy_integrate": ("taxonomy_integrate", "enabled"),
     "conservation_metrics": ("conservation_metrics", "enabled"),
     "detect_clades": ("detect_clades", "enabled"),
+    "aa_composition": ("aa_composition", "enabled"),
     "post": ("post", "enabled"),
     "synteny": ("synteny", "enabled"),
     "codon": ("codon", "enabled"),
@@ -349,6 +351,26 @@ def _build_parser() -> argparse.ArgumentParser:
                       help="Clade detection method "
                            "(overrides detect_clades.detect_method)")
 
+    # ── aa-composition ─────────────────────────────────────────────────────
+    p_aac = sub.add_parser(
+        "aa-composition",
+        help="Compute per-gene amino acid composition and comparative statistics",
+        description=(
+            "Computes per-gene amino acid fractional composition and biochemical "
+            "metrics (Zc, GRAVY, nH2O, pI, S/N content) for all selected-gene "
+            "hits, optionally runs clade-level Kruskal-Wallis + BH-FDR tests, "
+            "and generates boxplots and heatmaps.  Outputs are written to "
+            "summary/aa_composition/."
+        ),
+    )
+    _add_common_args(p_aac)
+    p_aac.add_argument("--no_plots", action="store_true",
+                       help="Suppress plot generation "
+                            "(overrides aa_composition.generate_plots=false)")
+    p_aac.add_argument("--no_pi", action="store_true",
+                       help="Skip isoelectric-point computation "
+                            "(overrides aa_composition.compute_pi=false)")
+
     # ── post ───────────────────────────────────────────────────────────────
     p_post = sub.add_parser(
         "post",
@@ -549,6 +571,12 @@ def _apply_step_args(args: argparse.Namespace, cfg: dict) -> None:
     elif subcmd == "detect-clades":
         if getattr(args, "detect_method", None):
             cfg["detect_clades"]["detect_method"] = args.detect_method
+
+    elif subcmd == "aa-composition":
+        if getattr(args, "no_plots", False):
+            cfg.setdefault("aa_composition", {})["generate_plots"] = False
+        if getattr(args, "no_pi", False):
+            cfg.setdefault("aa_composition", {})["compute_pi"] = False
 
     elif subcmd == "hmmer":
         if getattr(args, "diamond_query", None):

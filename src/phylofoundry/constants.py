@@ -12,6 +12,7 @@ GAP_CHARS = set(["-", ".", "X", "x", "?", "*"])
 STEPS = [
     "prep", "hmmer", "extract", "embed", "phylo", "curate",
     "taxonomy_integrate", "conservation_metrics", "detect_clades",
+    "aa_composition",  # per-gene AA composition analysis (after gene selection)
     "post",  # backward-compatibility shim — new code should prefer the three steps above
     "synteny", "codon", "hyphy", "score_motifs", "discover_motifs",
 ]
@@ -153,6 +154,13 @@ DEFAULT_CONFIG = {
         "embedtree_allow_nested": False,
         "embedtree_require_monophyly": True,
         "embedtree_emit_all": False
+    },
+    "aa_composition": {
+        "enabled": False,
+        "remove_initial_met": True,    # strip N-terminal Met before computing composition
+        "compute_pi": True,            # compute isoelectric point (requires BioPython)
+        "generate_plots": True,        # generate boxplot/heatmap PNGs (requires matplotlib)
+        "top_n_aas_heatmap": 10,       # number of AAs (by variance) shown in heatmap
     },
     "synteny": {
         "enabled": False,
