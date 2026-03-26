@@ -155,6 +155,133 @@ def file_sha256(path: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Per-subtask progress tracker
+# ---------------------------------------------------------------------------
+
+
+class SubtaskProgressTracker:
+    """Track fine-grained per-subtask progress within a pipeline step.
+
+    Long-running steps (e.g. ``embed``, ``phylo``) iterate over many
+    independent sub-tasks (one per HMM profile, genome, etc.).  When a step
+    is interrupted mid-way—due to OOM, SIGKILL, scheduler wall-time, or any
+    other reason—this tracker lets the step resume from exactly where it
+    stopped on the next ``--resume`` run.
+
+    Progress is persisted in a hidden NDJSON file (e.g.
+    ``.embed_progress.ndjson``) inside the step's output directory.  Each
+    line is a JSON record with at minimum ``{"subtask": "<id>",
+    "state": "running"|"success"|"failed", "timestamp": "..."}``.
+
+    **Typical usage**::
+
+        tracker = SubtaskProgressTracker(
+            os.path.join(emb_dir, ".embed_progress.ndjson"),
+            resume=resume,
+        )
+        for hmm in hmms:
+            if tracker.is_done(hmm):
+                print(f"[embed] RESUME: skipping {hmm}")
+                continue
+            tracker.record_running(hmm)
+            try:
+                process(hmm)
+                tracker.record_success(hmm)
+            except Exception as exc:
+                tracker.record_failure(hmm, error=str(exc))
+                raise
+        tracker.cleanup()  # remove progress file on full success
+
+    Parameters
+    ----------
+    log_path:
+        Path to the NDJSON progress file.  The file is created automatically
+        on first write; its containing directory must already exist.
+    resume:
+        When ``True`` (default), load any existing progress from *log_path*
+        so that already-completed sub-tasks can be skipped.  When ``False``
+        (e.g. ``--force`` mode) the tracker starts fresh and ignores any
+        existing file.
+    """
+
+    def __init__(self, log_path: str, resume: bool = True) -> None:
+        self.log_path = log_path
+        self._done: set = set()
+        if resume:
+            self._load()
+
+    # ── Loading ──────────────────────────────────────────────────────────────
+
+    def _load(self) -> None:
+        """Populate *_done* from any existing progress log."""
+        if not os.path.exists(self.log_path):
+            return
+        try:
+            with open(self.log_path) as fh:
+                for line in fh:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        rec = json.loads(line)
+                        if rec.get("state") == "success":
+                            self._done.add(rec["subtask"])
+                    except (json.JSONDecodeError, KeyError):
+                        pass
+        except OSError:
+            pass
+
+    # ── Queries ──────────────────────────────────────────────────────────────
+
+    def is_done(self, subtask_id: str) -> bool:
+        """Return ``True`` if *subtask_id* was previously recorded as successful."""
+        return subtask_id in self._done
+
+    def completed_count(self) -> int:
+        """Return the number of successfully completed sub-tasks."""
+        return len(self._done)
+
+    # ── Recording ────────────────────────────────────────────────────────────
+
+    def record_running(self, subtask_id: str, **extra: Any) -> None:
+        """Append a ``running`` record for *subtask_id*."""
+        self._append({"subtask": subtask_id, "state": "running", **extra})
+
+    def record_success(self, subtask_id: str, **extra: Any) -> None:
+        """Append a ``success`` record and mark *subtask_id* as done."""
+        self._done.add(subtask_id)
+        self._append({"subtask": subtask_id, "state": "success", **extra})
+
+    def record_failure(self, subtask_id: str, error: str = "", **extra: Any) -> None:
+        """Append a ``failed`` record for *subtask_id*."""
+        self._append({"subtask": subtask_id, "state": "failed", "error": error, **extra})
+
+    def record_skipped(self, subtask_id: str, reason: str = "", **extra: Any) -> None:
+        """Append a ``skipped`` record (e.g. output already exists) and mark done."""
+        self._done.add(subtask_id)
+        self._append({"subtask": subtask_id, "state": "skipped", "reason": reason, **extra})
+
+    # ── Cleanup ──────────────────────────────────────────────────────────────
+
+    def cleanup(self) -> None:
+        """Remove the progress log file after the full step completes successfully.
+
+        Idempotent — does nothing when the file does not exist.
+        """
+        try:
+            if os.path.exists(self.log_path):
+                os.remove(self.log_path)
+        except OSError:
+            pass
+
+    # ── Internal ─────────────────────────────────────────────────────────────
+
+    def _append(self, record: dict) -> None:
+        record["timestamp"] = _now_iso()
+        _atomic_append_ndjson(self.log_path, record)
+
+
+# ---------------------------------------------------------------------------
 # SQLite schema
 # ---------------------------------------------------------------------------
 

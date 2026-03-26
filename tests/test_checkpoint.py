@@ -471,3 +471,148 @@ class TestCLIResumeFlags:
         assert args.resume is False
         assert args.no_resume is False
         assert args.resume_from is None
+
+
+# ---------------------------------------------------------------------------
+# SubtaskProgressTracker
+# ---------------------------------------------------------------------------
+
+
+class TestSubtaskProgressTracker:
+    """Tests for per-subtask NDJSON progress tracking within pipeline steps."""
+
+    def test_fresh_tracker_nothing_done(self, tmp_path):
+        from phylofoundry.checkpoint import SubtaskProgressTracker
+
+        log = str(tmp_path / ".progress.ndjson")
+        tracker = SubtaskProgressTracker(log, resume=True)
+        assert not tracker.is_done("hmm_A")
+        assert tracker.completed_count() == 0
+
+    def test_record_and_query_success(self, tmp_path):
+        from phylofoundry.checkpoint import SubtaskProgressTracker
+
+        log = str(tmp_path / ".progress.ndjson")
+        tracker = SubtaskProgressTracker(log, resume=False)
+        tracker.record_running("hmm_A")
+        assert not tracker.is_done("hmm_A")
+        tracker.record_success("hmm_A")
+        assert tracker.is_done("hmm_A")
+        assert tracker.completed_count() == 1
+
+    def test_record_failure_not_marked_done(self, tmp_path):
+        from phylofoundry.checkpoint import SubtaskProgressTracker
+
+        log = str(tmp_path / ".progress.ndjson")
+        tracker = SubtaskProgressTracker(log, resume=False)
+        tracker.record_running("hmm_B")
+        tracker.record_failure("hmm_B", error="OOM")
+        assert not tracker.is_done("hmm_B")
+
+    def test_record_skipped_marks_done(self, tmp_path):
+        from phylofoundry.checkpoint import SubtaskProgressTracker
+
+        log = str(tmp_path / ".progress.ndjson")
+        tracker = SubtaskProgressTracker(log, resume=False)
+        tracker.record_skipped("hmm_C", reason="output exists")
+        assert tracker.is_done("hmm_C")
+
+    def test_persist_and_reload_on_resume(self, tmp_path):
+        from phylofoundry.checkpoint import SubtaskProgressTracker
+
+        log = str(tmp_path / ".progress.ndjson")
+
+        # First run: complete hmm_A and hmm_B; hmm_C interrupted
+        t1 = SubtaskProgressTracker(log, resume=False)
+        t1.record_running("hmm_A")
+        t1.record_success("hmm_A")
+        t1.record_running("hmm_B")
+        t1.record_success("hmm_B")
+        t1.record_running("hmm_C")
+        # hmm_C interrupted — no success record
+
+        # Second run: resume=True should see A and B done, C not
+        t2 = SubtaskProgressTracker(log, resume=True)
+        assert t2.is_done("hmm_A")
+        assert t2.is_done("hmm_B")
+        assert not t2.is_done("hmm_C")
+        assert t2.completed_count() == 2
+
+    def test_no_resume_ignores_existing_log(self, tmp_path):
+        from phylofoundry.checkpoint import SubtaskProgressTracker
+
+        log = str(tmp_path / ".progress.ndjson")
+
+        # Pre-populate with a successful subtask
+        t1 = SubtaskProgressTracker(log, resume=False)
+        t1.record_success("hmm_X")
+
+        # resume=False → should NOT see hmm_X as done
+        t2 = SubtaskProgressTracker(log, resume=False)
+        assert not t2.is_done("hmm_X")
+
+    def test_cleanup_removes_log(self, tmp_path):
+        from phylofoundry.checkpoint import SubtaskProgressTracker
+
+        log = str(tmp_path / ".progress.ndjson")
+        tracker = SubtaskProgressTracker(log, resume=False)
+        tracker.record_success("hmm_A")
+        assert os.path.exists(log)
+        tracker.cleanup()
+        assert not os.path.exists(log)
+
+    def test_cleanup_idempotent_no_file(self, tmp_path):
+        from phylofoundry.checkpoint import SubtaskProgressTracker
+
+        log = str(tmp_path / ".progress.ndjson")
+        tracker = SubtaskProgressTracker(log, resume=False)
+        # No records written — file may not exist
+        tracker.cleanup()  # should not raise
+
+    def test_ndjson_format_correct(self, tmp_path):
+        from phylofoundry.checkpoint import SubtaskProgressTracker
+
+        log = str(tmp_path / ".progress.ndjson")
+        tracker = SubtaskProgressTracker(log, resume=False)
+        tracker.record_running("hmm_A")
+        tracker.record_success("hmm_A", n_sequences=42)
+
+        lines = Path(log).read_text().splitlines()
+        assert len(lines) == 2
+        rec_run = json.loads(lines[0])
+        rec_ok = json.loads(lines[1])
+        assert rec_run["subtask"] == "hmm_A"
+        assert rec_run["state"] == "running"
+        assert rec_ok["subtask"] == "hmm_A"
+        assert rec_ok["state"] == "success"
+        assert rec_ok["n_sequences"] == 42
+        assert "timestamp" in rec_ok
+
+    def test_multiple_subtasks(self, tmp_path):
+        from phylofoundry.checkpoint import SubtaskProgressTracker
+
+        log = str(tmp_path / ".progress.ndjson")
+        tracker = SubtaskProgressTracker(log, resume=False)
+        hmms = [f"hmm_{i}" for i in range(10)]
+        for h in hmms:
+            tracker.record_running(h)
+            tracker.record_success(h)
+
+        assert tracker.completed_count() == 10
+        for h in hmms:
+            assert tracker.is_done(h)
+
+    def test_corrupted_log_line_tolerated(self, tmp_path):
+        from phylofoundry.checkpoint import SubtaskProgressTracker
+
+        log = tmp_path / ".progress.ndjson"
+        # Write one valid line and one corrupted line
+        log.write_text(
+            '{"subtask":"hmm_A","state":"success","timestamp":"2024-01-01T00:00:00Z"}\n'
+            'NOT VALID JSON !!!\n'
+            '{"subtask":"hmm_B","state":"success","timestamp":"2024-01-01T00:00:00Z"}\n'
+        )
+        tracker = SubtaskProgressTracker(str(log), resume=True)
+        assert tracker.is_done("hmm_A")
+        assert tracker.is_done("hmm_B")
+        assert tracker.completed_count() == 2

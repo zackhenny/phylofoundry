@@ -4,6 +4,7 @@ import glob
 from concurrent.futures import ProcessPoolExecutor
 from ..utils.bio import write_fasta, read_fasta
 from ..utils.helpers import run_cmd
+from ..checkpoint import SubtaskProgressTracker
 
 def worker_phylo(args_pack):
     (hmm_name, seqs, fasta_dir, aln_dir, clipkit_dir, tree_dir,
@@ -98,7 +99,7 @@ def worker_phylo(args_pack):
 
     return hmm_name
 
-def run_phylo(cfg, hmm_to_seqs, fasta_dir, aln_dir, clipkit_dir, tree_dir, name_to_hmm_path, hmm_keep, force=False):
+def run_phylo(cfg, hmm_to_seqs, fasta_dir, aln_dir, clipkit_dir, tree_dir, name_to_hmm_path, hmm_keep, force=False, resume=False):
     print("\n[phylo] Per-HMM alignment + trimming + IQ-TREE...")
 
     phy_cfg = cfg.get("phylo", {})
@@ -114,11 +115,25 @@ def run_phylo(cfg, hmm_to_seqs, fasta_dir, aln_dir, clipkit_dir, tree_dir, name_
     threads_per = max(1, min(4, cpu // 2))
     workers = max(1, cpu // threads_per)
 
+    # Sub-task progress tracker: tracks per-HMM tree-building progress.
+    # On resume, HMMs whose tree file already exists are pre-recorded as done
+    # (matching the existing file-based caching in worker_phylo).
+    progress_log = os.path.join(tree_dir, ".phylo_progress.ndjson")
+    tracker = SubtaskProgressTracker(progress_log, resume=(resume and not force))
+
     tasks = []
     for hmm, seqs in hmm_to_seqs.items():
         if hmm_keep is not None and hmm not in hmm_keep:
             continue
-        
+
+        # Record pre-existing trees as done (file-based resume)
+        tree_prefix = os.path.join(tree_dir, hmm)
+        treefile = tree_prefix + ".treefile"
+        if os.path.exists(treefile) and not force:
+            if not tracker.is_done(hmm):
+                tracker.record_skipped(hmm, reason="treefile exists")
+            continue
+
         hmm_path = None
         if not phy_cfg.get("mafft", False):
             if hmm not in name_to_hmm_path:
@@ -131,8 +146,18 @@ def run_phylo(cfg, hmm_to_seqs, fasta_dir, aln_dir, clipkit_dir, tree_dir, name_
 
         tasks.append((hmm, seqs, fasta_dir, aln_dir, clipkit_dir, tree_dir, hmm_path, threads_per, phy_cfg, force))
 
-    with ProcessPoolExecutor(max_workers=workers) as exe:
-        list(exe.map(worker_phylo, tasks))
+    if tasks:
+        with ProcessPoolExecutor(max_workers=workers) as exe:
+            for hmm_result in exe.map(worker_phylo, tasks):
+                if hmm_result is not None:
+                    tracker.record_success(hmm_result)
+                # Failures are logged by worker_phylo; we don't raise here to
+                # allow other HMMs to continue.
+    else:
+        print("[phylo] All per-HMM trees already complete — nothing to do.")
+
+    # Clean up progress log after all per-HMM trees are done
+    tracker.cleanup()
 
     # Combined tree mapping
     if phy_cfg.get("combined_tree", False):

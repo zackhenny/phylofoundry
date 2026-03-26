@@ -8,6 +8,7 @@ import pandas as pd
 import numpy as np
 from ..utils.bio import read_fasta, write_fasta
 from ..utils.helpers import safe_mkdir, write_json
+from ..checkpoint import SubtaskProgressTracker
 
 def _pca_fit_transform(X, n_components=3):
     from sklearn.decomposition import PCA
@@ -2683,7 +2684,7 @@ def compute_embeddings_for_hmm(hmm_name: str, seqs: dict, emb_cfg: dict, outdir_
     return cluster_assignments
 
 def run_embed(cfg, hmm_to_seqs, clades, emb_dir, fasta_dir, hmm_keep,
-              force=False, summary_dir=None, tax_map=None):
+              force=False, summary_dir=None, tax_map=None, resume=False):
     print("\n[embed] Computing per-HMM embeddings...")
     emb_cfg = cfg.get("embeddings", {})
 
@@ -2707,17 +2708,38 @@ def run_embed(cfg, hmm_to_seqs, clades, emb_dir, fasta_dir, hmm_keep,
 
     all_cluster_assignments = []
 
+    # Sub-task progress tracker: tracks per-HMM embedding progress.
+    # On resume, HMMs whose output files already exist are pre-recorded as done.
+    progress_log = os.path.join(emb_dir, ".embed_progress.ndjson")
+    tracker = SubtaskProgressTracker(progress_log, resume=(resume and not force))
+
+    skipped = 0
     for hmm, seqs in hmm_to_seqs.items():
         if hmm_keep is not None and hmm not in hmm_keep:
             continue
-        assignments = compute_embeddings_for_hmm(
-            hmm, seqs, emb_cfg, emb_dir, force=force,
-            clades=clades, tax_map=tax_map,
-            outdir=outdir, summary_dir=summary_dir,
-            threads=threads,
-        )
+
+        if tracker.is_done(hmm):
+            print(f"[embed] RESUME: skipping {hmm} (already completed)")
+            skipped += 1
+            continue
+
+        tracker.record_running(hmm)
+        try:
+            assignments = compute_embeddings_for_hmm(
+                hmm, seqs, emb_cfg, emb_dir, force=force,
+                clades=clades, tax_map=tax_map,
+                outdir=outdir, summary_dir=summary_dir,
+                threads=threads,
+            )
+            tracker.record_success(hmm, n_sequences=len(seqs))
+        except Exception as exc:
+            tracker.record_failure(hmm, error=str(exc))
+            raise
         if assignments:
             all_cluster_assignments.extend(assignments)
+
+    if skipped:
+        print(f"[embed] Resumed: {skipped} HMM(s) already complete, skipped.")
 
     # Write combined clade_assignment.tsv
     if all_cluster_assignments and summary_dir:
@@ -2726,6 +2748,9 @@ def run_embed(cfg, hmm_to_seqs, clades, emb_dir, fasta_dir, hmm_keep,
         out_fp = os.path.join(summary_dir, "clade_assignment.tsv")
         pd.DataFrame(all_cluster_assignments).to_csv(out_fp, sep="\t", index=False)
         print(f"[embed] Wrote cluster assignments: {out_fp}  ({len(all_cluster_assignments)} proteins)")
+
+    # Clean up progress log on full success
+    tracker.cleanup()
 
 
 def embed_combined_with_ancestors(cfg, hmm_to_seqs, ancestral_seqs, clades,
