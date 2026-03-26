@@ -95,7 +95,20 @@ def _add_common_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--cpu", type=int, default=None,
                         help="Override resources.cpu")
     parser.add_argument("--force", action="store_true",
-                        help="Override workflow.force=True")
+                        help="Override workflow.force=True (re-run all steps, "
+                             "ignore existing checkpoints)")
+    # ── Resume / checkpoint flags ──────────────────────────────────────────
+    parser.add_argument("--resume", action="store_true",
+                        help="Resume from an existing run in --outdir: reads the "
+                             "saved config.yaml / config.json, connects to the "
+                             "NDJSON+SQLite checkpoint, and skips steps whose "
+                             "fingerprint matches a prior successful run")
+    parser.add_argument("--resume-from", dest="resume_from", default=None,
+                        metavar="RUN_ID_OR_PATH",
+                        help="Explicitly specify a run ID or path to a saved "
+                             "config/checkpoint to resume from (overrides --resume)")
+    parser.add_argument("--no-resume", dest="no_resume", action="store_true",
+                        help="Disable resume even if checkpoints are present in outdir")
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -719,6 +732,18 @@ def main() -> None:
 
     from .utils.helpers import check_dependencies
     check_dependencies(_build_deps(cfg, step_internal))
+
+    # ── Resume / checkpoint resolution ────────────────────────────────────
+    resume_from = getattr(args, "resume_from", None)
+    resume = getattr(args, "resume", False)
+    no_resume = getattr(args, "no_resume", False)
+    force = getattr(args, "force", False)
+
+    # Embed resume flags into cfg so run_pipeline can use them
+    cfg.setdefault("_checkpoint", {})
+    cfg["_checkpoint"]["resume"] = resume
+    cfg["_checkpoint"]["resume_from"] = resume_from
+    cfg["_checkpoint"]["no_resume"] = no_resume
 
     from .pipeline import run_pipeline
     run_pipeline(cfg)
