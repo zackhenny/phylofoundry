@@ -5,7 +5,7 @@ import shutil
 from copy import deepcopy
 from pathlib import Path
 from .constants import DEFAULT_CONFIG, STEPS
-from .utils.helpers import load_json_config, write_json
+from .utils.helpers import load_json_config, load_yaml_config, write_json
 
 def deep_update(base: dict, updates: dict) -> dict:
     """Recursively update a dictionary."""
@@ -17,9 +17,10 @@ def deep_update(base: dict, updates: dict) -> dict:
     return base
 
 def resolve_config(args: argparse.Namespace) -> dict:
-    """Combine default config, JSON config, and CLI overrides."""
+    """Combine default config, YAML/JSON config file, and CLI overrides."""
     
     if hasattr(args, 'dump_default_config') and args.dump_default_config:
+        # Handled in main.py; this path is kept for safety only
         print(json.dumps(DEFAULT_CONFIG, indent=2, sort_keys=True))
         return None
 

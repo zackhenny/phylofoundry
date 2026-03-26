@@ -13,14 +13,20 @@ st.set_page_config(page_title="Phylofoundry Curation", layout="wide")
 st.title("Phylofoundry Interactive Curation")
 st.markdown("Interactively prune phylogenetic trees and label branches for HyPhy testing.")
 
-config_path = st.sidebar.text_input("Path to project 'config.json'", value="")
+config_path = st.sidebar.text_input(
+    "Path to project config file (config/config.yaml or legacy config.json)",
+    value="",
+)
 
 if not config_path or not os.path.exists(config_path):
-    st.info("Waiting for config.json path... Enter the absolute path to your config file in the sidebar.")
+    st.info(
+        "Waiting for config path… Enter the absolute path to your "
+        "config/config.yaml (or legacy config.json) in the sidebar."
+    )
     st.stop()
 
-with open(config_path) as f:
-    cfg = json.load(f)
+from .utils.helpers import load_json_config
+cfg = load_json_config(config_path)
 
 outdir = cfg.get("output", {}).get("outdir", "")
 if not outdir or not os.path.exists(outdir):

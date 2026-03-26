@@ -1,0 +1,494 @@
+# PhyloFoundry Configuration File
+# Converted from config.json — use ruamel.yaml to edit programmatically so
+# that inline comments are preserved.
+#
+# Quick tips:
+#   - null means "auto-detect" or "not set"; the pipeline will infer paths or
+#     fetch defaults where possible.
+#   - Many toggles (enabled/run_*) allow you to enable or disable sub-workflows.
+#   - When tuning performance knobs (cpu, block_size, index_chunks) consider
+#     available memory, disk I/O, and GPU capacity.
+#   - For reproducible runs record the git commit hash used and avoid editing
+#     this file between resume attempts.
+#   - If you edit programmatically, use ruamel.yaml so inline comments survive.
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MODULE: inputs
+# Paths to raw data consumed by the pipeline.  Null values mean the pipeline
+# will look for sensible defaults or skip optional stages.
+# ─────────────────────────────────────────────────────────────────────────────
+inputs:
+  faa_dir: null              # (string|null) Directory containing one .faa protein FASTA per
+                             #   genome, OR a single combined .faa file.  Required unless
+                             #   inputs.combined_faa is given.
+  hmm_input: null            # (string|null) Path to a directory of .hmm profile files OR a
+                             #   single .hmm file.  Required for HMM-based searches.
+  diamond_query: null        # (string|null) Path to the FASTA file (or directory of .faa
+                             #   files) used as the DIAMOND query.  Only needed when
+                             #   diamond.enabled=true.
+  diamond_db: null           # (string|null) Path to a prebuilt DIAMOND .dmnd database
+                             #   (skips the makedb step).  The .dmnd extension may be
+                             #   omitted; DIAMOND will locate the file automatically.
+  combined_faa: null         # (string|null) Path to a prebuilt combined proteomes FASTA
+                             #   (skips the prep build step).  Useful when resuming a run
+                             #   after the prep step has already completed.
+  cds_dir: null              # (string|null) Directory of per-genome CDS nucleotide FASTAs
+                             #   (.fna/.ffn).  Required only for the codon and hyphy steps.
+  gtdb_dir: null             # (string|null) Directory containing GTDB-Tk output
+                             #   (e.g. gtdbtk.bac120.summary.tsv).  Used by taxonomy step.
+  taxonomy_file: null        # (string|null) Custom TSV with columns: genome, lineage.
+                             #   Overrides GTDB taxonomy when provided.
+  globdb_taxonomy_file: null # (string|null) GlobDB-style headerless taxonomy TSV
+                             #   (col1=genome_id, col2=GTDB taxonomy string).
+  pfam_dir: null             # (string|null) Directory of Pfam .dat and .hmm files for
+                             #   Pfam-based annotation steps.
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MODULE: output
+# Where the pipeline writes results and working files.
+# ─────────────────────────────────────────────────────────────────────────────
+output:
+  outdir: null               # (string|null) Root directory for final outputs and reports.
+                             #   Required at runtime (pass via CLI or set here).
+  workdir: null              # (string|null) Scratch directory for large intermediate files
+                             #   (combined_proteomes.faa, DIAMOND databases, embeddings).
+                             #   Falls back to outdir when null.
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MODULE: resources
+# Hardware resource limits shared across CPU-bound tasks.
+# ─────────────────────────────────────────────────────────────────────────────
+resources:
+  cpu: 8                     # (int) Default CPU core count.  Auto-upgraded from
+                             #   SLURM_CPUS_PER_TASK when running under Slurm.
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MODULE: workflow
+# High-level execution control for step ordering and resumability.
+# ─────────────────────────────────────────────────────────────────────────────
+workflow:
+  start_at: null             # (string|null) Named step at which to begin execution.
+                             #   Valid values: prep, hmmer, extract, embed, phylo, curate,
+                             #   taxonomy_integrate, conservation_metrics, detect_clades,
+                             #   post, synteny, codon, hyphy, score_motifs, discover_motifs.
+  stop_after: null           # (string|null) Named step after which execution halts.
+                             #   Same valid values as start_at.
+  force: false               # (bool) When true, ignore resume fingerprints and re-run all
+                             #   steps regardless of prior completion status.
+  hmm_manifest: null         # (string|null) Optional JSON/TSV manifest listing HMMs and
+                             #   metadata.  Used by advanced routing logic.
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MODULE: prep
+# Controls the input-preparation step that builds the combined proteome and
+# HMM database files consumed by downstream steps.
+# ─────────────────────────────────────────────────────────────────────────────
+prep:
+  cleanup_combined_faa: false  # (bool) Delete the combined_proteomes.faa intermediate
+                               #   after use to save disk space.
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MODULE: hmmer
+# Configuration for the HMMER-based search step (hmmscan / hmmsearch).
+# ─────────────────────────────────────────────────────────────────────────────
+hmmer:
+  run_scan: true             # (bool) Run hmmscan (profile DB vs. sequence query).
+  run_search: true           # (bool) Run hmmsearch (sequence query vs. profile DB).
+                             #   Both modes are used for competitive hit resolution.
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MODULE: diamond
+# DIAMOND-based protein search — an alternative to HMMER for very large
+# proteome collections.  Set enabled=true to activate.
+# ─────────────────────────────────────────────────────────────────────────────
+diamond:
+  enabled: false             # (bool) Enable DIAMOND-based searches.  When true, hmmscan/
+                             #   hmmsearch are replaced by DIAMOND blastp.
+  mode: "blastp"             # (string) DIAMOND alignment mode.
+                             #   Options: "blastp" (protein vs protein, default).
+  sensitivity: "sensitive"   # (string) DIAMOND sensitivity preset.
+                             #   Options: "fast" | "mid-sensitive" | "sensitive" |
+                             #            "more-sensitive" | "very-sensitive" | "ultra-sensitive"
+                             #   Higher sensitivity → slower but finds more distant hits.
+  max_evalue: 1.0e-5         # (float|null) E-value cutoff for reporting hits.
+  max_target_seqs: 500       # (int) Maximum number of target sequences reported per query.
+  min_identity: 30.0         # (float) Minimum percent identity to retain a hit.
+  min_coverage: 0.5          # (float) Minimum subject/query coverage fraction (0–1).
+  block_size: 2.0            # (float) DIAMOND memory block size in GB.
+                             #   Increase for large databases; reduce if RAM is limited.
+  index_chunks: 4            # (int) Number of index shards.  More shards → lower peak RAM
+                             #   at the cost of repeated passes through the reference.
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MODULE: filtering
+# Post-search hit filtering applied before sequence extraction.
+# ─────────────────────────────────────────────────────────────────────────────
+filtering:
+  scores_tsv: null           # (string|null) Path to a pre-computed scores TSV.  When set,
+                             #   the pipeline loads scores from this file instead of running
+                             #   HMMER/DIAMOND again.
+  global_min_score: 25.0     # (float) Minimum bitscore to retain any hit.  Increase to
+                             #   tighten specificity; decrease for more distant homologs.
+  min_coverage: 0.5          # (float) Minimum alignment coverage fraction (0–1).
+  keep_tbl: false            # (bool) Retain raw HMMER .tbl output files after parsing.
+  max_evalue: null           # (float|null) E-value ceiling applied in addition to bitscore.
+  use_evalue: false          # (bool) Filter by E-value instead of (or alongside) bitscore.
+  disable_bitscore_filter: false  # (bool) Skip the global_min_score bitscore filter.
+  disable_coverage_filter: false  # (bool) Skip the min_coverage alignment filter.
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MODULE: phylo
+# Multiple sequence alignment and maximum-likelihood tree inference.
+# ─────────────────────────────────────────────────────────────────────────────
+phylo:
+  mafft: false               # (bool) Use MAFFT alignment instead of hmmalign.
+                             #   Recommended when sequences are very diverse.
+  also_mafft: false          # (bool) Run MAFFT in addition to hmmalign (writes both).
+  mafft_for_tree: false      # (bool) Use the MAFFT alignment (not hmmalign) as IQ-TREE input.
+  mafft_mode: "auto"         # (string) MAFFT alignment strategy.
+                             #   Options: "auto" | "ginsi" | "linsi" | "einsi" |
+                             #            "fftns" | "fftnsi"
+  no_trim_hmmalign: false    # (bool) Skip ClipKit trimming of hmmalign output.
+  skip_clipkit: false        # (bool) Skip ClipKit trimming entirely (all aligners).
+  no_asr: false              # (bool) Skip ancestral sequence reconstruction (IQ-TREE --ancestral).
+  iq_boot: 1000              # (int) Number of IQ-TREE ultrafast bootstrap replicates.
+                             #   Set to 0 to disable bootstrapping.
+  use_hmmsearch_alignment: false  # (bool) Use the hmmsearch trimmed alignment column output
+                                  #   as the tree-building alignment.
+  keep_all_hits: false       # (bool) Include all hits (not just best competitive hits) in trees.
+  combined_tree: false       # (bool) Combine all HMM hits into a single large tree.
+                             #   Useful for cross-HMM evolutionary context.
+  iqtree_bin: "iqtree"       # (string) IQ-TREE binary name or full path.
+                             #   Auto-detected: falls back to iqtree2 or iqtree3 if iqtree
+                             #   is not found on PATH.
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MODULE: embeddings
+# Protein language model (ESM-2 / HuggingFace) embedding generation,
+# dimensionality reduction, clustering, and the optional cluster subworkflow.
+# ─────────────────────────────────────────────────────────────────────────────
+embeddings:
+  enabled: false             # (bool) Enable embedding generation.  Also auto-enabled when
+                             #   the `embed` subcommand is used.
+  backend: "esm"             # (string) Embedding model backend.
+                             #   Options: "esm" (Facebook ESM-2) | "transformers" (HuggingFace)
+  model: "esm2_t33_650M_UR50D"  # (string) Model identifier.
+                             #   For backend=esm: ESM-2 model name (e.g. esm2_t6_8M_UR50D,
+                             #     esm2_t12_35M_UR50D, esm2_t30_150M_UR50D,
+                             #     esm2_t33_650M_UR50D, esm2_t36_3B_UR50D).
+                             #   For backend=transformers: HuggingFace model id or local path.
+  device: "cuda"             # (string) Compute device.
+                             #   Options: "cuda" (GPU, recommended) | "cpu"
+  batch_size: 8              # (int) Sequences per inference batch.  Reduce if GPU OOM.
+  repr_layer: null           # (int|null) Which transformer layer to extract.
+                             #   null → last layer (ESM) or last_hidden_state (transformers).
+  pooling: "mean"            # (string) How to pool per-token vectors to a single sequence vector.
+                             #   Options: "mean" (average across non-padding tokens)
+  pca_components: 50         # (int) Number of PCA dimensions before UMAP/clustering.
+  write_full_vectors: false  # (bool) Write full embedding vectors to a TSV (can be very large).
+                             #   The .npy binary is always written.
+  cluster_embeddings: true   # (bool) Run HDBSCAN clustering on PCA-reduced embeddings.
+  cluster_on: "PCA"          # (string) Input space for clustering.
+                             #   Options: "PCA" | "raw" (full embedding vectors)
+  cluster_method: "hdbscan"  # (string) Clustering algorithm.
+                             #   Options: "hdbscan" | "leiden"
+  hdbscan_min_cluster_size: 5  # (int) HDBSCAN minimum cluster size.  Larger values →
+                               #   fewer, broader clusters.
+  hdbscan_metric: "euclidean"  # (string) Distance metric for HDBSCAN.
+                               #   Options: "euclidean" | "cosine"
+  umap_dimensions: 2         # (int) UMAP output dimensionality.  2 for 2-D scatter plots,
+                             #   3 for 3-D visualisations.
+  knn_neighbors: 10          # (int) Number of nearest neighbours for k-NN graph construction.
+  run_knn: true              # (bool) Build a k-NN graph alongside UMAP/clustering.
+
+  # ── Cluster-Aware Subworkflow ───────────────────────────────────────────
+  # Extends the embedding step with per-cluster MSAs, profile HMMs, sequence
+  # logos, and optional divergence analysis.  All existing pipeline outputs
+  # are preserved; this subworkflow adds extra artefacts.
+  cluster_subworkflow:
+    enabled: false           # (bool) Enable the cluster subworkflow.
+    build_cluster_msas: true # (bool) Build a multiple sequence alignment for each cluster.
+    seed_membership: "core_only"  # (string) Which sequences seed the cluster MSAs.
+                             #   Options: "core_only" (HDBSCAN core points only) |
+                             #            "all" (all cluster members)
+    build_cluster_hmms: true # (bool) Build a profile HMM for each cluster MSA.
+    classify_noise: true     # (bool) Attempt to assign HDBSCAN noise points to clusters
+                             #   using profile HMM searches.
+    recover_affiliates: true # (bool) Recruit additional sequences via per-cluster HMM searches.
+    generate_sequence_logos: true  # (bool) Generate sequence logos for each cluster alignment.
+    logo_format:             # (list[string]) Output formats for sequence logos.
+      - "png"                #   Options: "png" | "svg" | "pdf"
+      - "svg"
+    compare_cluster_hmms: false  # (bool) Run pairwise HMM-HMM comparisons across clusters.
+
+    # ── KL Divergence analysis ──────────────────────────────────────────
+    # Per-site Kullback-Leibler divergence between each cluster and the global
+    # alignment background.
+    kl_divergence:
+      enabled: false         # (bool) Enable KL divergence computation.
+      min_cluster_size: 5    # (int) Skip clusters with fewer than this many sequences.
+      pseudocount: 1.0e-6    # (float) Pseudocount added to avoid log(0).
+      top_n_sites: 20        # (int) Number of top-divergence sites to report per cluster.
+
+    # ── Jensen-Shannon Divergence analysis ─────────────────────────────
+    # Pairwise JSD between cluster amino-acid frequency profiles.
+    jsd_analysis:
+      enabled: false         # (bool) Enable JSD analysis.
+      min_cluster_size: 5    # (int) Skip clusters smaller than this threshold.
+      pseudocount: 1.0e-6    # (float) Pseudocount for frequency smoothing.
+      top_n_sites: 20        # (int) Top sites to highlight in reports.
+
+    # ── Motif Heatmap ───────────────────────────────────────────────────
+    # Heatmap visualisation of per-cluster divergence scores across alignment
+    # columns.
+    motif_heatmap:
+      enabled: false         # (bool) Enable heatmap generation.
+      metric: "jsd_vs_global"  # (string) Divergence metric to display.
+                             #   Options: "jsd_vs_global" | "kl_vs_global"
+      min_cluster_size: 5    # (int) Minimum cluster size to include.
+      pseudocount: 1.0e-6    # (float) Pseudocount for frequency smoothing.
+      figure_format:         # (list[string]) Output image formats.
+        - "png"
+      colormap: "YlOrRd"     # (string) Matplotlib colormap name for the heatmap.
+
+    # ── Change-Point Detection ──────────────────────────────────────────
+    # Detects abrupt changes in divergence signals along the alignment using
+    # piecewise-linear fitting.
+    change_point_detection:
+      enabled: false         # (bool) Enable change-point detection.
+      signal: "mean_jsd"     # (string) Signal to analyse.
+                             #   Options: "mean_jsd" | "mean_kl"
+      smoothing_window: 0    # (int) Smoothing window (0 = no smoothing).
+      min_segment_len: 5     # (int) Minimum length (sites) of a detected segment.
+      merge_distance: 10     # (int) Merge change-points closer than this many sites.
+      threshold: 0.05        # (float) Minimum divergence delta to call a change-point.
+      max_changepoints: 25   # (int) Maximum number of change-points to report.
+      min_cluster_size: 5    # (int) Skip clusters smaller than this.
+      pseudocount: 1.0e-6    # (float) Pseudocount for frequency smoothing.
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MODULE: curate
+# Sequence curation — removes phylogenetic and embedding outliers.
+# ─────────────────────────────────────────────────────────────────────────────
+curate:
+  enabled: false             # (bool) Enable curation step.  Also auto-enabled by the
+                             #   `curate` subcommand.
+  use_treeshrink: true       # (bool) Remove branch-length outliers using TreeShrink.
+  use_esm_filter: true       # (bool) Remove embedding-space outliers using ESM distance.
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MODULE: taxonomy_integrate
+# Merge GTDB-Tk or custom taxonomy into summary tables.
+# ─────────────────────────────────────────────────────────────────────────────
+taxonomy_integrate:
+  enabled: false             # (bool) Enable taxonomy integration.  Also auto-enabled by
+                             #   the `taxonomy` subcommand.
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MODULE: conservation_metrics
+# Per-site conservation scoring and KL/JSD divergence between clade groups.
+# ─────────────────────────────────────────────────────────────────────────────
+conservation_metrics:
+  enabled: false             # (bool) Enable conservation analysis.  Also auto-enabled by
+                             #   the `conservation` subcommand.
+  compute_conservation: false  # (bool) Compute per-column conservation scores.
+  conservation_metric: "inverse_shannon_uncertainty"
+                             # (string) Conservation metric formula.
+                             #   Options: "inverse_shannon_uncertainty" |
+                             #            "shannon_entropy" | "property_entropy"
+  compute_kl: false          # (bool) Compute KL divergence between clade groups.
+  kl_pairs: null             # (string|null) Clade pairs for KL divergence, e.g.
+                             #   "A:B,A:background".  Requires clades_tsv.
+  clades_tsv: null           # (string|null) TSV with columns clade_name and tip mapping
+                             #   tip labels to named groups.
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MODULE: detect_clades
+# Automatic clade detection from taxonomy, tree topology, or embeddings.
+# ─────────────────────────────────────────────────────────────────────────────
+detect_clades:
+  enabled: false             # (bool) Enable clade detection.  Also auto-enabled by the
+                             #   `detect-clades` subcommand.
+  clades_tsv: null           # (string|null) Path to a pre-computed clade TSV (skips detection).
+  detect_method: null        # (string|null) Detection strategy.
+                             #   Options: null (disabled) | "taxonomy" | "treecluster" |
+                             #            "tree_embed"
+  taxonomy_clade_level: "genus"  # (string) GTDB taxonomy rank for taxonomy-based detection.
+                             #   Options: "phylum" | "class" | "order" | "family" |
+                             #            "genus" | "species"
+  treecluster_threshold: 0.045   # (float) Branch-length threshold for TreeCluster.
+  treecluster_method: "max_clade"  # (string) TreeCluster linkage method.
+                             #   Options: "max_clade" | "min_cluster" | "length" |
+                             #            "length_clade" | "med_clade" | "root_dist"
+  embedtree_support_min: 80  # (int) Minimum IQ-TREE bootstrap support to trust a split.
+  embedtree_min_size: 5      # (int) Minimum clade member count.
+  embedtree_max_size: 5000   # (int) Maximum clade member count.
+  embedtree_top_k: 10        # (int) Top-K candidate splits to evaluate.
+  embedtree_pcs: 10          # (int) Number of PCA components used by tree_embed method.
+  embedtree_distance: "euclidean"  # (string) Distance metric for embedding-space evaluation.
+                             #   Options: "euclidean" | "cosine"
+  embedtree_allow_nested: false    # (bool) Allow nested (non-exclusive) clades.
+  embedtree_require_monophyly: true  # (bool) Only accept monophyletic clades.
+  embedtree_emit_all: false  # (bool) Emit all candidate clades, not just the best split.
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MODULE: post
+# Legacy backward-compatibility shim that combines conservation and clade
+# detection into a single step.  Prefer the dedicated subcommands for new runs.
+# ─────────────────────────────────────────────────────────────────────────────
+post:
+  enabled: false             # (bool) Enable the legacy post step.
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MODULE: synteny
+# Gene-neighbourhood extraction and synteny plotting around HMM hits.
+# ─────────────────────────────────────────────────────────────────────────────
+synteny:
+  enabled: false             # (bool) Enable synteny analysis.  Also auto-enabled by the
+                             #   `synteny` subcommand.
+  gbk_dir: null              # (string|null) Directory of GenBank (.gbk / .gbff) annotation files.
+  gff_dir: null              # (string|null) Directory of GFF3 annotation files
+                             #   (paired with genome FASTAs in inputs.faa_dir).
+  genome_fasta_dir: null     # (string|null) Directory of genome nucleotide FASTAs
+                             #   (needed when using GFF annotations).
+  window_genes: 10           # (int) Number of flanking genes on each side of each hit
+                             #   to include in the neighbourhood window.
+  max_hits_per_hmm: 50       # (int) Maximum number of hits per HMM to process for synteny.
+  dedup_by_genome: true      # (bool) Keep only the best hit per genome per HMM.
+  prefer_best_hit: true      # (bool) When deduplicating, prefer the highest-scoring hit.
+  protein_id_field:          # (list[string]) GenBank/GFF feature qualifier names tried in
+    - "ID"                   #   order to resolve a protein identifier.
+    - "protein_id"
+    - "locus_tag"
+  gene_label_field:          # (list[string]) Feature qualifier names tried in order to
+    - "gene"                 #   obtain a human-readable gene label for plotting.
+    - "product"
+    - "Name"
+    - "locus_tag"
+  plot_width: 14             # (int/float) Width (inches) of synteny plot figures.
+  include_tree: true         # (bool) Order synteny tracks by phylogenetic tree when available.
+  annotation_evalue: 1.0e-5  # (float) E-value cutoff for neighbourhood annotation searches.
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MODULE: codon
+# Codon-aware alignment generation with pal2nal.
+# Requires nucleotide CDS sequences in inputs.cds_dir.
+# ─────────────────────────────────────────────────────────────────────────────
+codon:
+  enabled: false             # (bool) Enable codon-alignment step.  Also auto-enabled by
+                             #   the `codon` subcommand.
+  build_codon_alignments: false  # (bool) Actually generate codon alignments (redundant with
+                                 #   enabled; kept for backward compatibility).
+  cds_id_mode: "after_last_pipe"  # (string) How to derive a CDS sequence ID from the protein ID.
+                             #   Options: "same" (identical IDs) |
+                             #            "strip_pipe" (remove everything from first '|') |
+                             #            "after_last_pipe" (take text after the last '|')
+  pal2nal_cmd: "pal2nal.pl"  # (string) pal2nal script name or full path.
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MODULE: hyphy
+# Molecular-evolution selection tests via HyPhy.
+# Requires codon alignments (codon.enabled=true) and labeled trees.
+# ─────────────────────────────────────────────────────────────────────────────
+hyphy:
+  enabled: false             # (bool) Enable HyPhy step.  Also auto-enabled by the `hyphy`
+                             #   subcommand.
+  run_hyphy: false           # (bool) Actually execute HyPhy (redundant with enabled;
+                             #   kept for backward compatibility).
+  hyphy_bin: "hyphy"         # (string) HyPhy binary name or full path.
+  hyphy_tests: "RELAX,aBSREL,MEME"  # (string) Comma-separated list of HyPhy tests to run.
+                             #   Supported: "RELAX" | "aBSREL" | "MEME" | "FEL" | "SLAC"
+  hyphy_args:                # (dict) Extra command-line arguments per test.
+    MEME:                    #   Passed verbatim after the model-specific arguments.
+      - "--branches"
+      - "All"
+    aBSREL:
+      - "--branches"
+      - "All"
+    RELAX:
+      - "--test"
+      - "test"
+      - "--reference"
+      - "reference"
+  use_detected_clades: true  # (bool) Use clades from detect_clades output to label tree
+                             #   branches before running HyPhy.
+  min_clade_size: 4          # (int) Skip clades with fewer than this many members.
+  label_mode: "crown"        # (string) How to label branches on the tree for HyPhy.
+                             #   Options: "crown" (label crown group) | "stem" (include stem)
+  relax_label_reference: true  # (bool) Auto-label reference branches in RELAX runs.
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MODULE: motifs
+# ESM-2 attention-based scoring of known sequence motifs.
+# Requires embeddings to have been generated.
+# ─────────────────────────────────────────────────────────────────────────────
+motifs:
+  enabled: false             # (bool) Enable motif scoring.  Also auto-enabled when
+                             #   `--motifs` is passed on the CLI.
+  motif_list: []             # (list[string]) Motifs to score, e.g. ["HPEVY", "HPEVF"].
+                             #   Each motif is an exact amino-acid substring.
+  attention_layers: 4        # (int) Number of last ESM-2 attention layers to average.
+  use_ha: false              # (bool) Weight attention scores by the HA (High-Attention)
+                             #   profile before scoring motifs.
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MODULE: discover
+# ESM-2 attention + k-mer analysis for novel motif discovery.
+# Compares attention profiles across HDBSCAN clades in a 1-vs-All manner.
+# ─────────────────────────────────────────────────────────────────────────────
+discover:
+  enabled: false             # (bool) Enable motif discovery.  Also auto-enabled by the
+                             #   `discover-motifs` subcommand.
+  standard_clade: null       # (string|null) Reference clade ID/name (background).
+                             #   null → inferred automatically.
+  novel_clade: null          # (string|null) Focal clade ID/name to compare against reference.
+                             #   null → all clades tested in turn.
+  kmer_size: 5               # (int) k-mer length for sequence-based peak scoring.
+  top_n_peaks: 20            # (int) Number of top attention peaks to report per clade.
+  attention_layers: 4        # (int) Last N ESM-2 attention layers to average.
+  use_ha: false              # (bool) Apply HA weighting before discovery analysis.
+  ha_window: 9               # (int) Sliding window size for HA smoothing.
+  ha_delta_min: 0.2          # (float) Minimum HA delta to call a high-attention region.
+  ha_gap_frac_max: 0.6       # (float) Maximum gap fraction at a site to include it.
+  cross_hmm_comparison: true # (bool) Compare attention profiles across HMMs as well as
+                             #   within each HMM.
+  candidates:                # Scoring weights for ranking novel-motif candidates.
+    enabled: true            # (bool) Enable the candidate-scoring sub-step.
+    min_delta_ha: 0.1        # (float) Minimum HA delta for a candidate site.
+    min_cons_frac: 0.6       # (float) Minimum consensus fraction (most common AA frequency).
+    max_gap_frac: 0.6        # (float) Maximum allowed gap fraction at candidate sites.
+    w_delta_ha: 1.0          # (float) Weight for HA-delta in the composite score.
+    w_aa_shift: 1.0          # (float) Weight for amino-acid shift score.
+    w_js: 0.5                # (float) Weight for Jensen-Shannon divergence component.
+    top_n: 200               # (int) Number of top candidates to retain.
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MODULE: ha
+# High-Attention (HA) site calling from ESM-2 attention maps.
+# Controls how structural/functional sites are identified from attention patterns.
+# ─────────────────────────────────────────────────────────────────────────────
+ha:
+  enabled: false             # (bool) Enable HA site-calling step.
+  method: "middle"           # (string) Overall HA calling strategy.
+                             #   Options: "middle" (aggregate attention over a configured
+                             #     layer range) | "loc" (convergence-layer detection via PWLF)
+  layer_mode: "middle"       # (string) Which layers to aggregate for method="middle".
+                             #   Options: "middle" (central 50% of layers) |
+                             #            "range" (layers layer_start to layer_end)
+  layer_start: null          # (int|null) First layer index for layer_mode="range".
+  layer_end: null            # (int|null) Last layer index (exclusive) for layer_mode="range".
+  agg: "median"              # (string) Aggregation function across selected layers.
+                             #   Options: "median" | "mean"
+  call_mode: "percentile"    # (string) How to threshold attention scores into HA sites.
+                             #   Options: "percentile" (top fraction) | "topk" (top K sites)
+  percentile: 0.05           # (float) Fraction of sites called as HA for call_mode="percentile".
+                             #   E.g., 0.05 → top 5% of per-sequence attention scores.
+  topk: 20                   # (int) Fixed number of top HA sites for call_mode="topk".
+  min_sites: 8               # (int) Minimum number of HA sites to report per sequence.
+  max_sites: 60              # (int) Maximum number of HA sites to report per sequence.
+  loc_norm_mode: "max"       # (string) Per-layer normalization for method="loc".
+                             #   Options: "max" | "sum" | "none"
+  loc_theta_target_deg: 90   # (float) Target angle (degrees) for convergence-layer selection
+                             #   in method="loc".
+  loc_break_adjust: -1       # (int) Offset applied to the PWLF breakpoint index when
+                             #   deriving the HA site count.
