@@ -18,6 +18,7 @@
 -   **HDBSCAN Clustering** (Optional): Clusters protein embeddings and outputs `clade_assignment.tsv` with taxonomy.
 -   **GTDB Taxonomy Integration**: Merges GTDB-Tk taxonomy into summary tables and cluster assignments.
 -   **Resumable**: Smart checkpointing skips already completed steps. Full NDJSON+SQLite checkpoint logging with `--resume` CLI support for crash recovery and incremental re-runs.
+-   **Input Provenance & Artifact Linking**: `--input-run` flag allows any module to consume artifacts from a designated prior run directory, enabling staged workflows (e.g. run phylo, review trees, then run hyphy against those results). The `list-runs` command discovers available prior runs. Full input provenance (prior run ID, config snapshot, artifact hashes) is recorded in the new run's checkpoint.
 -   **HPC Ready**: Auto-detects Slurm CPU allocations.
 
 ---
@@ -296,6 +297,11 @@ phylofoundry doctor
 
 # Print the default annotated YAML config (useful as a starting template)
 phylofoundry dump-config > config/config.yaml
+
+# List prior PhyloFoundry runs in a directory (useful with --input-run)
+phylofoundry list-runs
+phylofoundry list-runs ./experiments
+phylofoundry list-runs ./experiments --json   # machine-readable JSON output
 ```
 
 ### 6. `run` — Full Pipeline (explicit form)
@@ -415,6 +421,7 @@ grep 'step_failed' results/logs/pipeline.ndjson
 | `--resume` | Resume from an existing checkpoint in `--outdir` (reads `OUTDIR/config.yaml` and the NDJSON+SQLite checkpoint, skips steps with matching fingerprints). |
 | `--resume-from <path>` | Explicitly specify a run ID or path to a saved config/checkpoint to resume from (overrides `--resume`). |
 | `--no-resume` | Disable resume even if checkpoints are present in `--outdir`. |
+| `--input-run <path>` | Path to a prior run's output directory.  The current module reads its required input artifacts from this directory instead of `--outdir`.  Enables chaining pipeline stages across separate runs (e.g., `phylofoundry hyphy --input-run ./stage1_phylo --outdir ./stage3_hyphy`).  Full provenance (prior run ID, config path, artifact hashes) is recorded in the new run's checkpoint. |
 
 #### `run`-only flags
 
@@ -1061,6 +1068,260 @@ phylofoundry run --config config/config.yaml --start_at phylo --stop_after phylo
 # Explicitly point to the config snapshot from a previous run
 phylofoundry run --resume-from /old/results/config.yaml --outdir /new/results
 ```
+
+---
+
+## 🔗 Input Provenance & Artifact Linking (`--input-run`)
+
+PhyloFoundry supports running individual modules in isolation and linking their inputs to the outputs of a **prior run** via the `--input-run` flag.  This enables staged, reviewable workflows — run phylogenetics, inspect the trees, then continue with selection-pressure analysis or post-processing — without repeating earlier computationally expensive steps.
+
+### Why use `--input-run`?
+
+| Scenario | Recommended approach |
+| :--- | :--- |
+| Stop after `phylo`, manually review trees, then run `hyphy` | `phylofoundry hyphy --input-run ./results --outdir ./hyphy_results` |
+| Re-run `post` with different parameters after reviewing hits | `phylofoundry post --input-run ./results --outdir ./post_v2` |
+| Run `discover-motifs` on embeddings from a long prior run | `phylofoundry discover-motifs --input-run ./embed_run --outdir ./motifs` |
+| Audit exactly which data a downstream module consumed | Inspect `OUTDIR/config.yaml` → `_run_meta.input_run` block |
+
+### Basic usage
+
+```bash
+# 1. Run the pipeline up through phylo
+phylofoundry run --config config/config.yaml --stop_after phylo --outdir ./results
+
+# 2. Review the trees in ./results/trees_iqtree/  (manually edit, annotate, etc.)
+
+# 3. Continue with hyphy, reading tree and codon-alignment inputs from ./results
+phylofoundry hyphy \
+    --input-run ./results \
+    --outdir    ./hyphy_results \
+    --config    config/config.yaml
+```
+
+The `--input-run` flag accepts the path to any prior PhyloFoundry output directory.  When set, the specified module reads its upstream artifacts from that directory while writing all new outputs to `--outdir`.
+
+### Step-by-step chaining examples
+
+#### Example 1: phylo → hyphy → post
+
+```bash
+# Stage 1 — alignment + tree building
+phylofoundry run \
+    --config config/config.yaml \
+    --stop_after phylo \
+    --outdir ./stage1_phylo
+
+# --- manual review of ./stage1_phylo/trees_iqtree/ ---
+
+# Stage 2 — codon alignment (reads trees from stage1)
+phylofoundry codon \
+    --input-run ./stage1_phylo \
+    --outdir    ./stage2_codon \
+    --config    config/config.yaml
+
+# Stage 3 — HyPhy selection tests (reads codon alignments + trees from stage2)
+phylofoundry hyphy \
+    --input-run ./stage2_codon \
+    --outdir    ./stage3_hyphy \
+    --config    config/config.yaml
+```
+
+#### Example 2: re-run post-processing with different parameters
+
+```bash
+# Original full run
+phylofoundry run --config config/config.yaml --outdir ./run_v1
+
+# Re-run conservation metrics with updated settings (reads hits from run_v1)
+phylofoundry conservation \
+    --input-run ./run_v1 \
+    --outdir    ./conservation_v2 \
+    --config    config_v2.yaml
+```
+
+#### Example 3: motif discovery from existing embeddings
+
+```bash
+# Embeddings were computed in an earlier long-running session
+phylofoundry discover-motifs \
+    --input-run ./embed_run \
+    --outdir    ./motifs_v1 \
+    --config    config/config.yaml
+```
+
+### Discovering available runs — `list-runs`
+
+The `list-runs` subcommand scans a directory for PhyloFoundry output directories and displays a summary table so you can choose which run to use as an input source.
+
+```bash
+# List runs in the current directory
+phylofoundry list-runs
+
+# List runs in a specific experiments directory
+phylofoundry list-runs ./experiments
+
+# Output raw JSON for scripting
+phylofoundry list-runs ./experiments --json
+```
+
+Example output:
+
+```
+PhyloFoundry runs found in './experiments':
+
+RUN ID                                  STARTED               STEPS DONE  OUTDIR
+--------------------------------------  --------------------  ----------  -----------------------------------------------
+a3f2c1d0-8b4e-4f2a-9e1b-0d5c3e7a1234  2024-03-15 09:12:43   6           ./experiments/run_20240315
+b9e4d2f1-7c3a-4d1b-8f2c-1e6a2b9d5678  2024-03-14 15:30:01   3           ./experiments/run_20240314
+
+Tip: pass any OUTDIR above to --input-run to use it as an input source.
+     e.g.  phylofoundry hyphy --input-run <OUTDIR> --outdir ./new_results
+```
+
+Use the JSON flag for scripting or integration:
+```bash
+phylofoundry list-runs ./experiments --json | python -c "
+import json, sys
+runs = json.load(sys.stdin)
+for r in runs:
+    print(r['run_id'], r['completed_steps'])
+"
+```
+
+### Artifact validation
+
+When `--input-run` is specified, PhyloFoundry automatically validates that all required input artifacts for the targeted module exist in the prior run directory **before** starting execution.  If any required artifact is missing, a clear error is printed and the run aborts:
+
+```
+[input-run] ERROR: --input-run './old_run' is missing required artifacts for step 'hyphy':
+  • trees_dir (./old_run/trees_iqtree)
+  • codon_dir (./old_run/codon_alignments)
+
+Ensure the prior run completed the upstream steps successfully before using it as an input source.
+```
+
+The artifact requirements per step are:
+
+| Step | Required input artifacts from prior run |
+| :--- | :--- |
+| `hmmer` | `combined_proteomes.faa`, `combined.hmm` |
+| `extract` | `hmmscan_tbl/`, `hmmsearch_tbl/` |
+| `embed` | `fasta_per_hmm/` |
+| `phylo` | `fasta_per_hmm/` |
+| `curate` | `trees_iqtree/`, `fasta_per_hmm/` |
+| `taxonomy` | `summary/best_hits.competitive.tsv` |
+| `conservation` | `summary/best_hits.competitive.tsv`, `trees_iqtree/` |
+| `detect-clades` | `summary/best_hits.competitive.tsv` |
+| `post` | `trees_iqtree/`, `summary/best_hits.competitive.tsv` |
+| `synteny` | `summary/best_hits.competitive.tsv` |
+| `codon` | `trees_iqtree/`, `alignments_clipkit/` |
+| `hyphy` | `trees_iqtree/`, `codon_alignments/` |
+| `score-motifs` | `embeddings/` |
+| `discover-motifs` | `embeddings/`, `clade_assignments/` |
+
+### Provenance recording
+
+Every run that uses `--input-run` records complete input provenance in its checkpoint files:
+
+**`OUTDIR/config.yaml`** — the `_run_meta` block contains an `input_run` sub-block:
+```yaml
+_run_meta:
+  run_id: "a3f2c1d0-..."
+  start_time: "2024-03-16T10:00:00Z"
+  outdir: "./hyphy_results"
+  input_run:
+    input_run_dir: "/abs/path/to/prior/results"
+    input_run_id:  "b9e4d2f1-..."
+    input_run_config: "/abs/path/to/prior/results/config.yaml"
+    artifact_hashes:
+      trees_dir: "<sha256 of per-tree files>"
+```
+
+**`OUTDIR/logs/pipeline.ndjson`** — the `run_start` event includes the same `input_run` block for full auditability:
+```json
+{
+  "event": "run_start",
+  "run_id": "a3f2c1d0-...",
+  "timestamp": "2024-03-16T10:00:00Z",
+  "outdir": "./hyphy_results",
+  "input_run": {
+    "input_run_dir": "/abs/path/to/prior/results",
+    "input_run_id": "b9e4d2f1-...",
+    "input_run_config": "/abs/path/to/prior/results/config.yaml"
+  }
+}
+```
+
+You can query the provenance programmatically:
+```python
+import json
+
+# Read NDJSON log
+with open("hyphy_results/logs/pipeline.ndjson") as fh:
+    for line in fh:
+        event = json.loads(line)
+        if event.get("event") == "run_start" and "input_run" in event:
+            print("Input run ID:", event["input_run"]["input_run_id"])
+            print("Input run dir:", event["input_run"]["input_run_dir"])
+```
+
+Or inspect the saved config snapshot:
+```bash
+python -c "
+from ruamel.yaml import YAML
+yml = YAML()
+with open('hyphy_results/config.yaml') as fh:
+    cfg = yml.load(fh)
+meta = cfg['_run_meta']
+print('This run:', meta['run_id'])
+print('Input run:', meta.get('input_run', {}).get('input_run_id', 'N/A'))
+"
+```
+
+### Combining `--input-run` with `--resume`
+
+`--input-run` and `--resume` / `--resume-from` serve different purposes and can be used together:
+
+| Flag | Purpose |
+| :--- | :--- |
+| `--resume` | Skip steps that already completed in the **current** run (crash recovery) |
+| `--resume-from PATH` | Resume from a specific prior config snapshot in a **different** directory |
+| `--input-run PATH` | Read **input artifacts** from a prior run while writing outputs to a **new** directory |
+
+```bash
+# Resume a partially-completed hyphy run that used --input-run
+phylofoundry hyphy \
+    --input-run ./stage1_phylo \
+    --outdir    ./stage3_hyphy \
+    --resume                       # skip any hyphy steps already done
+```
+
+### Manual annotation / intervention workflow
+
+A common use-case is to manually review or edit pipeline outputs before continuing:
+
+```bash
+# Step 1: Run up to phylo
+phylofoundry run --config config/config.yaml --stop_after phylo --outdir ./run1
+
+# Step 2: Manually edit or annotate trees
+#   e.g. prune outlier taxa in FigTree, rename tips, add annotations
+cp -r ./run1/trees_iqtree ./run1_edited/trees_iqtree
+# ... edit files in ./run1_edited/trees_iqtree/ ...
+
+# Step 3: Use your edited directory as the input source
+phylofoundry hyphy \
+    --input-run ./run1_edited \
+    --outdir    ./hyphy_edited \
+    --config    config/config.yaml
+```
+
+> **Note**: When pointing `--input-run` at a manually edited directory, PhyloFoundry
+> validates that the required files *exist* but cannot verify their content integrity
+> against the original run's checksums.  Include a `logs/checkpoint.db` in the
+> edited directory (copied from the original run) to enable full hash-based validation
+> in future tooling.
 
 ---
 
