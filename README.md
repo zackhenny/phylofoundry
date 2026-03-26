@@ -17,7 +17,7 @@
 -   **Synteny Analysis** (Optional): Extracts gene neighborhoods (configurable window), computes similarity (DIAMOND/MMseqs2), and plots synteny tracks ordered by phylogeny.
 -   **HDBSCAN Clustering** (Optional): Clusters protein embeddings and outputs `clade_assignment.tsv` with taxonomy.
 -   **GTDB Taxonomy Integration**: Merges GTDB-Tk taxonomy into summary tables and cluster assignments.
--   **Resumable**: Smart checkpointing skips already completed steps. Full NDJSON+SQLite checkpoint logging with `--resume` CLI support for crash recovery and incremental re-runs.
+-   **Fully Resumable (Two-Tier)**: Robust production-grade `--resume` support at both the pipeline step level and sub-task level (per-HMM, per-genome).  NDJSON+SQLite checkpointing survives OOM, SIGKILL, scheduler wall-time, and node failures.  Long-running steps (`embed`, `phylo`, `hmmer`) pick up from exactly the last completed sub-task — no wasted compute on already-finished work.  Works with `run --resume`, single-step subcommands (`embed --resume`), and any HPC/Slurm workflow.
 -   **Input Provenance & Artifact Linking**: `--input-run` flag allows any module to consume artifacts from a designated prior run directory, enabling staged workflows (e.g. run phylo, review trees, then run hyphy against those results). The `list-runs` command discovers available prior runs. Full input provenance (prior run ID, config snapshot, artifact hashes) is recorded in the new run's checkpoint.
 -   **HPC Ready**: Auto-detects Slurm CPU allocations.
 
@@ -322,7 +322,12 @@ phylofoundry run \
 
 ### 7. Resuming a Run — `--resume`
 
-PhyloFoundry writes a content-aware checkpoint after every step using an append-only **NDJSON log** and a **SQLite index** (`logs/pipeline.ndjson` and `logs/checkpoint.db` inside the output directory).  On each run start, the resolved config is also saved to `OUTDIR/config.yaml` with embedded run metadata.
+PhyloFoundry provides **fully dynamic, two-tier resume support** designed for production HPC/cloud environments where OOM errors, scheduler wall-time kills, node failures, and SIGKILL are routine:
+
+1. **Step-level resume** — individual pipeline stages (prep, hmmer, embed, phylo, …) are fingerprinted and cached in an NDJSON log + SQLite database.  Fully completed steps are skipped on re-run.
+2. **Sub-task-level resume** — long-running stages that iterate over many independent items (one per HMM profile, genome, etc.) use a per-step NDJSON progress log stored inside the step's own output directory.  When the stage is interrupted mid-way, only the incomplete items are retried on the next `--resume` run.
+
+Both levels survive OOM, user abort (SIGINT/SIGTERM), scheduler wall-time kills, and filesystem hiccups (atomic writes with `fsync`).
 
 Use `--resume` to restart an interrupted or partially completed run:
 
@@ -340,7 +345,17 @@ phylofoundry run --no-resume --outdir ./results
 phylofoundry run --force --outdir ./results
 ```
 
-#### How resume works
+`--resume` is also accepted on every individual subcommand for single-step recovery:
+
+```bash
+# Resume only the embedding step
+phylofoundry embed --resume --outdir ./results
+
+# Resume only the phylo step
+phylofoundry phylo --resume --outdir ./results
+```
+
+#### How step-level resume works
 
 When `--resume` is used:
 
@@ -348,16 +363,67 @@ When `--resume` is used:
 2. It opens `logs/checkpoint.db` and examines the latest state and fingerprint for each step.
 3. For each step in the pipeline plan:
    - **Fingerprint matches prior `success`** → step is **skipped** and recorded outputs are reused.
-   - **State is `running` or `pending`** → treat as interrupted; mark for **re-run** (or **resume** if the step supports it).
-   - **State is `failed`** or fingerprints differ → step is **re-run**.
+   - **State is `running` or `pending`** → treat as interrupted; the step is **resumed** (sub-task-level resume is activated inside the step).
+   - **State is `failed`** or fingerprints differ → step is **re-run** from scratch.
 4. A concise resume summary is printed before execution begins:
    ```
    [checkpoint] Resume plan:
      SKIP  (3): prep, hmmer, extract
-     RUN   (2): phylo, embed
+     RESUME(1): embed
+     RUN   (1): phylo
    ```
 
-#### Step fingerprinting
+#### How sub-task-level resume works
+
+For stages that iterate over many independent items (e.g. one embedding per HMM profile, one tree per HMM profile), each step maintains a hidden **sub-task progress log** inside its own output directory.  The log is a compact NDJSON file (one JSON object per line) that records the state of every sub-task.
+
+When a step is activated in `resume` mode (because its step-level state was `running` or `pending` at the time of interruption), it:
+
+1. Reads the sub-task progress log to identify which items completed before the crash.
+2. Skips those items and processes only the remaining ones.
+3. Appends to the same progress log as work proceeds.
+4. **Removes** the progress log file on full, successful completion of all sub-tasks (cleanup).
+
+This means:
+
+- An embedding step that was 70% through 100 HMM profiles when killed by OOM will resume from profile #71 on the next run — **no repeated GPU/CPU work**.
+- A phylogeny step whose IQ-TREE processes were half-done will only rebuild the missing trees.
+- A HMMER step that had completed hmmscan but not hmmsearch will skip the hmmscan phase entirely.
+
+#### Sub-task progress log files
+
+Each step writes its sub-task log inside its primary output directory:
+
+| Step | Progress log file | Sub-task granularity |
+| :--- | :--- | :--- |
+| `hmmer` | `summary/.hmmer_progress.ndjson` | Per-phase (hmmscan, hmmsearch, best_hits) |
+| `embed` | `embeddings/.embed_progress.ndjson` | Per-HMM profile |
+| `phylo` | `trees/.phylo_progress.ndjson` | Per-HMM profile (tree file) |
+
+**These files are automatically deleted** when the step completes successfully.  They persist only during an active run or after an interruption, at which point they serve as the resume index.
+
+#### NDJSON sub-task record format
+
+Each line in a sub-task progress log is a JSON object:
+
+```json
+{"subtask": "MarkerA", "state": "running", "timestamp": "2024-06-01T10:00:00Z"}
+{"subtask": "MarkerA", "state": "success", "n_sequences": 42, "timestamp": "2024-06-01T10:05:23Z"}
+{"subtask": "MarkerB", "state": "running", "timestamp": "2024-06-01T10:05:24Z"}
+{"subtask": "MarkerB", "state": "failed", "error": "CUDA OOM", "timestamp": "2024-06-01T10:06:01Z"}
+{"subtask": "MarkerC", "state": "skipped", "reason": "output exists", "timestamp": "2024-06-01T10:06:02Z"}
+```
+
+Possible `state` values:
+
+| State | Meaning |
+| :--- | :--- |
+| `running` | Sub-task started; not yet complete. |
+| `success` | Sub-task finished successfully. |
+| `failed` | Sub-task failed; will be retried on resume. |
+| `skipped` | Sub-task skipped because its output file already existed. |
+
+#### Step fingerprinting (step-level)
 
 Each step computes an **input fingerprint** (SHA-256) over:
 - Step parameters and workflow config
@@ -373,6 +439,55 @@ If any parameter or input file changes between runs, the fingerprint changes and
 | `OUTDIR/config.yaml` | Config snapshot written at run start; contains `_run_meta` with `run_id`, checkpoint paths, and timestamps. |
 | `OUTDIR/logs/pipeline.ndjson` | Append-only NDJSON log with one JSON record per event (`run_start`, `step_pending`, `step_running`, `step_success`, `step_failed`, `step_skipped`, `run_end`). |
 | `OUTDIR/logs/checkpoint.db` | SQLite database (WAL mode) with tables `runs`, `steps`, and `artifacts` for fast querying. |
+| `OUTDIR/embeddings/.embed_progress.ndjson` | Sub-task progress for the `embed` step (per-HMM). Deleted on success. |
+| `OUTDIR/trees/.phylo_progress.ndjson` | Sub-task progress for the `phylo` step (per-HMM). Deleted on success. |
+| `OUTDIR/summary/.hmmer_progress.ndjson` | Sub-task progress for the `hmmer` step (phases). Deleted on success. |
+
+#### Example: recovering from mid-run OOM during embedding
+
+Suppose you have 200 HMM profiles and your GPU runs out of memory after embedding 130 of them:
+
+```
+[embed] Computing per-HMM embeddings...
+[embed] MarkerA: 42 sequences -> embeddings saved
+...
+[embed] MarkerGZ: Killed (OOM)
+```
+
+The `embeddings/.embed_progress.ndjson` file now contains 130 `success` records.  On resume:
+
+```bash
+phylofoundry run --resume --outdir ./results
+```
+
+Output:
+```
+[checkpoint] Resuming run 'abc123' from './results'
+[checkpoint] Resume plan:
+  SKIP  (3): prep, hmmer, extract
+  RESUME(1): embed
+  RUN   (2): phylo, curate
+
+[embed] RESUME: skipping MarkerA (already completed)
+[embed] RESUME: skipping MarkerB (already completed)
+...
+[embed] RESUME: skipping Marker130 (already completed)
+[embed] Resumed: 130 HMM(s) already complete, skipped.
+[embed] MarkerGZ: 38 sequences -> embeddings saved
+...
+```
+
+Only the 70 remaining profiles are processed — **no repeated GPU compute**.
+
+#### Example: recovering a partial phylo run
+
+If IQ-TREE was killed after building 60 of 100 trees:
+
+```bash
+phylofoundry phylo --resume --outdir ./results
+```
+
+`run_phylo` checks for existing `.treefile` outputs and records them as done in the sub-task log.  Only the 40 missing trees are submitted to the `ProcessPoolExecutor`.
 
 #### Querying the checkpoint
 
@@ -404,6 +519,32 @@ grep '"event"' results/logs/pipeline.ndjson | python -m json.tool
 
 # Find failed steps
 grep 'step_failed' results/logs/pipeline.ndjson
+
+# Inspect sub-task progress for embed
+cat results/embeddings/.embed_progress.ndjson | python -m json.tool
+```
+
+#### HPC / Slurm recommendations
+
+For Slurm or other cluster schedulers:
+
+- Always set `--outdir` to a shared filesystem path visible from all nodes.
+- Use `--resume` in your job submission script so re-queued jobs continue seamlessly.
+- Set `resources.cpu` to match your allocated cores; sub-processes in `phylo` auto-scale.
+- Example SLURM wrapper:
+
+```bash
+#!/bin/bash
+#SBATCH --job-name=phylofoundry
+#SBATCH --time=24:00:00
+#SBATCH --mem=64G
+#SBATCH --cpus-per-task=16
+
+phylofoundry run \
+  --config config/config.yaml \
+  --outdir /scratch/$USER/results \
+  --cpu 16 \
+  --resume   # safely re-run; only missing work is done
 ```
 
 ### 8. CLI Reference

@@ -1,6 +1,7 @@
 import os
 import pandas as pd
 import pyhmmer
+from ..checkpoint import SubtaskProgressTracker
 
 def _run_pyhmmscan(genomes, faa_dir, combined_hmm, cpu):
     """Run hmmscan using PyHMMER for all genomes against the combined HMM database.
@@ -167,7 +168,7 @@ def best_hits(df, use_evalue=False):
         })
     return pd.DataFrame(rows)
 
-def run_hmmer(cfg, genomes, faa_dir, hmm_files, hmm_dir, combined_hmm, combined_faa, outdir, summary_dir, hmmscan_dir, hmmsearch_dir, hmm_keep, force=False):
+def run_hmmer(cfg, genomes, faa_dir, hmm_files, hmm_dir, combined_hmm, combined_faa, outdir, summary_dir, hmmscan_dir, hmmsearch_dir, hmm_keep, force=False, resume=False):
     print("\n[hmmer] Running hmmscan + hmmsearch with PyHMMER (with caching)...")
 
     cpu = int(cfg["resources"]["cpu"])
@@ -184,6 +185,12 @@ def run_hmmer(cfg, genomes, faa_dir, hmm_files, hmm_dir, combined_hmm, combined_
     hits_scan_tsv = os.path.join(summary_dir, "hmmscan_hits.filtered.tsv")
     hits_search_tsv = os.path.join(summary_dir, "hmmsearch_hits.filtered.tsv")
     best_hits_tsv = os.path.join(summary_dir, "best_hits.competitive.tsv")
+
+    # Sub-task progress tracker: tracks hmmscan / hmmsearch / best-hits phases
+    # so that a resume after interruption skips already-completed phases.
+    progress_log = os.path.join(summary_dir, ".hmmer_progress.ndjson")
+    tracker = SubtaskProgressTracker(progress_log, resume=(resume and not force))
+
 
     # Load custom score thresholds if provided
     thresholds_map = {}
@@ -203,42 +210,63 @@ def run_hmmer(cfg, genomes, faa_dir, hmm_files, hmm_dir, combined_hmm, combined_
     best_df = pd.DataFrame()
 
     # hmmscan
-    if os.path.exists(hits_scan_tsv) and not force:
-        scan_df = pd.read_csv(hits_scan_tsv, sep="\t")
+    if tracker.is_done("hmmscan") or (os.path.exists(hits_scan_tsv) and not force):
+        if os.path.exists(hits_scan_tsv):
+            scan_df = pd.read_csv(hits_scan_tsv, sep="\t")
+        if not tracker.is_done("hmmscan"):
+            tracker.record_skipped("hmmscan", reason="output exists")
     elif run_scan:
         print("  [hmmscan] Running with PyHMMER...")
-        scan_df = _run_pyhmmscan(genomes, faa_dir, combined_hmm, cpu)
-        scan_df = apply_filtering(
-            scan_df, thresholds_map,
-            float(filt_cfg["global_min_score"]),
-            float(filt_cfg["min_coverage"]),
-            max_evalue=max_evalue,
-            disable_bitscore_filter=disable_bitscore_filter,
-            disable_coverage_filter=disable_coverage_filter,
-        )
-        if not scan_df.empty:
-            scan_df.to_csv(hits_scan_tsv, sep="\t", index=False)
+        tracker.record_running("hmmscan")
+        try:
+            scan_df = _run_pyhmmscan(genomes, faa_dir, combined_hmm, cpu)
+            scan_df = apply_filtering(
+                scan_df, thresholds_map,
+                float(filt_cfg["global_min_score"]),
+                float(filt_cfg["min_coverage"]),
+                max_evalue=max_evalue,
+                disable_bitscore_filter=disable_bitscore_filter,
+                disable_coverage_filter=disable_coverage_filter,
+            )
+            if not scan_df.empty:
+                scan_df.to_csv(hits_scan_tsv, sep="\t", index=False)
+            tracker.record_success("hmmscan")
+        except Exception as exc:
+            tracker.record_failure("hmmscan", error=str(exc))
+            raise
 
     # hmmsearch
-    if os.path.exists(hits_search_tsv) and not force:
-        search_df = pd.read_csv(hits_search_tsv, sep="\t")
+    if tracker.is_done("hmmsearch") or (os.path.exists(hits_search_tsv) and not force):
+        if os.path.exists(hits_search_tsv):
+            search_df = pd.read_csv(hits_search_tsv, sep="\t")
+        if not tracker.is_done("hmmsearch"):
+            tracker.record_skipped("hmmsearch", reason="output exists")
     elif run_search:
         print("  [hmmsearch] Running with PyHMMER...")
-        search_df = _run_pyhmmsearch(hmm_files, hmm_dir, combined_faa, hmm_keep, cpu)
-        search_df = apply_filtering(
-            search_df, thresholds_map,
-            float(filt_cfg["global_min_score"]),
-            float(filt_cfg["min_coverage"]),
-            max_evalue=max_evalue,
-            disable_bitscore_filter=disable_bitscore_filter,
-            disable_coverage_filter=disable_coverage_filter,
-        )
-        if not search_df.empty:
-            search_df.to_csv(hits_search_tsv, sep="\t", index=False)
+        tracker.record_running("hmmsearch")
+        try:
+            search_df = _run_pyhmmsearch(hmm_files, hmm_dir, combined_faa, hmm_keep, cpu)
+            search_df = apply_filtering(
+                search_df, thresholds_map,
+                float(filt_cfg["global_min_score"]),
+                float(filt_cfg["min_coverage"]),
+                max_evalue=max_evalue,
+                disable_bitscore_filter=disable_bitscore_filter,
+                disable_coverage_filter=disable_coverage_filter,
+            )
+            if not search_df.empty:
+                search_df.to_csv(hits_search_tsv, sep="\t", index=False)
+            tracker.record_success("hmmsearch")
+        except Exception as exc:
+            tracker.record_failure("hmmsearch", error=str(exc))
+            raise
 
     # Competitive best per (genome, protein): prefer hmmscan if available else hmmsearch
-    if os.path.exists(best_hits_tsv) and not force:
-        best_df = pd.read_csv(best_hits_tsv, sep="\t")
+    if tracker.is_done("best_hits") or (os.path.exists(best_hits_tsv) and not force):
+        if os.path.exists(best_hits_tsv):
+            best_df = pd.read_csv(best_hits_tsv, sep="\t")
+        if not tracker.is_done("best_hits"):
+            tracker.record_skipped("best_hits", reason="output exists")
     else:
         if not scan_df.empty:
             best_df = best_hits(scan_df, use_evalue=use_evalue)
@@ -248,6 +276,7 @@ def run_hmmer(cfg, genomes, faa_dir, hmm_files, hmm_dir, combined_hmm, combined_
             best_df["source"] = "hmmsearch"
         else:
             best_df = pd.DataFrame()
+        tracker.record_success("best_hits")
 
     # Optional Taxonomy Integration
     gtdb_dir = cfg["inputs"].get("gtdb_dir")
@@ -273,5 +302,8 @@ def run_hmmer(cfg, genomes, faa_dir, hmm_files, hmm_dir, combined_hmm, combined_
     
     if not best_df.empty:
         best_df.to_csv(best_hits_tsv, sep="\t", index=False)
-    
+
+    # Clean up progress log on full success
+    tracker.cleanup()
+
     return scan_df, search_df, best_df

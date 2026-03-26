@@ -413,7 +413,8 @@ def run_pipeline(cfg):
                     scan_df, search_df, best_df = hmmer.run_hmmer(
                         cfg, genomes, faa_dir, hmm_files, hmm_dir, combined_hmm,
                         combined_faa, outdir, summary_dir, hmmscan_dir, hmmsearch_dir,
-                        hmm_keep, force
+                        hmm_keep, force,
+                        resume=(resume_plan.get("hmmer") == "resume"),
                     )
                 # Optional: clean up combined FAA to reclaim disk space
                 prep_cfg = cfg.get("prep", {})
@@ -534,7 +535,8 @@ def run_pipeline(cfg):
                     except Exception:
                         clades = None
                 embed.run_embed(cfg, hmm_to_seqs, clades, emb_dir, fasta_dir, hmm_keep,
-                                force, summary_dir=summary_dir, tax_map=tax_map)
+                                force, summary_dir=summary_dir, tax_map=tax_map,
+                                resume=(resume_plan.get("embed") == "resume"))
                 update_step_status(status_path, "embed", "success")
                 append_pipeline_log(logs_dir, "SUCCESS: embed")
                 checkpointer.record_step_success(run_id, "embed")
@@ -567,7 +569,8 @@ def run_pipeline(cfg):
             checkpointer.record_step_running(run_id, "phylo")
             try:
                 phylo.run_phylo(cfg, hmm_to_seqs, fasta_dir, aln_dir, clipkit_dir,
-                                tree_dir, name_to_hmm_path, hmm_keep, force)
+                                tree_dir, name_to_hmm_path, hmm_keep, force,
+                                resume=(resume_plan.get("phylo") == "resume"))
 
                 # ── ASR parsing (after phylo, if ASR was enabled) ─────────────────
                 if not phy_cfg.get("no_asr", False):
