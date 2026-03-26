@@ -127,7 +127,9 @@ def compute_fingerprint(params: Dict[str, Any], input_files: List[str]) -> str:
     Returns
     -------
     str
-        40-character hex SHA-256 digest (first 40 chars of full hash).
+        40-character hex prefix of the full SHA-256 digest.  This provides
+        ~160 bits of collision resistance, which is sufficient for step
+        deduplication.  Use :func:`file_sha256` for full-length artifact hashes.
     """
     h = hashlib.sha256()
     h.update(CHECKPOINT_VERSION.encode())
@@ -201,7 +203,14 @@ CREATE TABLE IF NOT EXISTS artifacts (
 
 
 def _open_db(db_path: str) -> sqlite3.Connection:
-    """Open (or create) the SQLite checkpoint database at *db_path*."""
+    """Open (or create) the SQLite checkpoint database at *db_path*.
+
+    ``check_same_thread=False`` is set so the connection can be used from
+    the main thread after being created in a constructor.  PhyloFoundry
+    pipeline steps run sequentially; concurrent multi-threaded access to
+    the same connection is not expected.  For parallel execution, callers
+    should open separate connections.
+    """
     os.makedirs(os.path.dirname(os.path.abspath(db_path)), exist_ok=True)
     conn = sqlite3.connect(db_path, timeout=30, check_same_thread=False)
     conn.row_factory = sqlite3.Row

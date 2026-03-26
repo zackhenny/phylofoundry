@@ -429,7 +429,7 @@ class TestCLIResumeFlags:
     """Verify that --resume, --resume-from, --no-resume are registered."""
 
     def test_resume_flag_parsed(self):
-        from phylofoundry.main import _build_parser, _ALL_SUBCMDS
+        from phylofoundry.main import _build_parser
 
         ap = _build_parser()
         args = ap.parse_args(["run", "--resume"])
