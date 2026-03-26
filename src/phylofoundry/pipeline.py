@@ -1,5 +1,6 @@
 import os
 import glob
+import traceback as _traceback
 from .artifact_paths import ArtifactPaths
 from .constants import STEPS
 from .utils.helpers import safe_mkdir, write_json
@@ -17,6 +18,15 @@ from .logging_utils import (
     step_status_path,
     update_step_status,
     write_execution_plan,
+)
+from .checkpoint import (
+    Checkpointer,
+    CheckpointMeta,
+    build_resume_plan,
+    compute_fingerprint,
+    load_checkpoint_meta,
+    new_run_id,
+    print_resume_summary,
 )
 
 
@@ -127,6 +137,66 @@ def run_pipeline(cfg):
         safe_mkdir(work_base)
         print(f"[pipeline] Working directory: {work_base}")
 
+    # ── Checkpoint / resume setup ─────────────────────────────────────────
+    ckpt_cfg = cfg.get("_checkpoint", {})
+    _resume = ckpt_cfg.get("resume", False)
+    _resume_from = ckpt_cfg.get("resume_from", None)
+    _no_resume = ckpt_cfg.get("no_resume", False)
+
+    checkpointer = Checkpointer(outdir)
+    resume_meta: "CheckpointMeta | None" = None
+    resume_plan: "dict[str, str]" = {}
+
+    if not _no_resume and not force:
+        if _resume_from:
+            resume_meta = load_checkpoint_meta(_resume_from)
+            if resume_meta is None:
+                print(
+                    f"[checkpoint] WARNING: --resume-from '{_resume_from}' could not "
+                    f"be loaded. Starting a fresh run."
+                )
+        elif _resume:
+            resume_meta = load_checkpoint_meta(outdir)
+            if resume_meta is None:
+                print(
+                    f"[checkpoint] WARNING: No checkpoint found in '{outdir}'. "
+                    f"Starting a fresh run."
+                )
+
+    if resume_meta is not None:
+        print(f"[checkpoint] Resuming run '{resume_meta.run_id}' from '{resume_meta.outdir}'")
+        run_id = resume_meta.run_id
+        # Open the previous checkpointer if the DB is in a different directory
+        if os.path.abspath(resume_meta.outdir) != os.path.abspath(outdir):
+            prev_checkpointer = Checkpointer(resume_meta.outdir)
+        else:
+            prev_checkpointer = checkpointer
+
+        # Build per-step fingerprints from current config
+        step_fps: dict = {}
+        for s in STEPS:
+            params_for_fp = {
+                "step": s,
+                "workflow": {k: v for k, v in cfg["workflow"].items()
+                             if k not in ("force",)},
+            }
+            step_fps[s] = compute_fingerprint(params_for_fp, [])
+
+        resume_plan = build_resume_plan(
+            prev_checkpointer, run_id, STEPS, step_fps, force=force
+        )
+        print_resume_summary(resume_plan)
+    else:
+        run_id = new_run_id()
+
+    # Start (or resume) the run and write a config snapshot to OUTDIR
+    checkpointer.start_run(run_id, cfg)
+    print(f"[checkpoint] Run ID: {run_id}")
+
+    # Helper: should this step be skipped due to resume?
+    def _is_resume_skip(step_name: str) -> bool:
+        return resume_plan.get(step_name) == "skip"
+
     # ── Execution planning and logging scaffold ────────────────────────────
     # Build the plan before any work begins so that the logs/ directory and
     # status files are always present even if an early step fails.
@@ -161,6 +231,10 @@ def run_pipeline(cfg):
         msg_fail = f"STEP FAILED: {step_name} — {exc}"
         print(f"\n[pipeline] {msg_fail}")
         append_pipeline_log(logs_dir, msg_fail)
+        checkpointer.record_step_failure(
+            run_id, step_name, error=str(exc),
+            trace=_traceback.format_exc()
+        )
         # Record which steps were already blocked before this failure so we
         # only log newly blocked steps.
         previously_blocked = {s.name for s in exec_plan.steps if s.state == StepState.BLOCKED}
@@ -264,6 +338,10 @@ def run_pipeline(cfg):
     if step_in_range("prep", start_at, stop_after):
         if _is_blocked("prep"):
             print("[pipeline] Skipping blocked step: prep")
+        elif _is_resume_skip("prep"):
+            print("[pipeline] SKIP: prep (checkpoint match)")
+            update_step_status(status_path, "prep", "success")
+            checkpointer.record_step_skipped(run_id, "prep", "fingerprint match")
         elif prebuilt_combined_faa:
             print(
                 "[pipeline] Skipping prep build: using prebuilt combined_faa "
@@ -271,9 +349,12 @@ def run_pipeline(cfg):
             )
             update_step_status(status_path, "prep", "success")
             append_pipeline_log(logs_dir, "SKIPPED: prep (prebuilt combined_faa provided)")
+            checkpointer.record_step_skipped(run_id, "prep", "prebuilt combined_faa provided")
         else:
+            checkpointer.record_step_pending(run_id, "prep")
             update_step_status(status_path, "prep", "running")
             append_pipeline_log(logs_dir, "START: prep")
+            checkpointer.record_step_running(run_id, "prep")
             try:
                 if use_diamond:
                     prep.run_prep_diamond_mode(cfg, genomes, faa_dir, combined_faa, force)
@@ -282,9 +363,11 @@ def run_pipeline(cfg):
                                   hmm_files, combined_faa, combined_hmm, force)
                 update_step_status(status_path, "prep", "success")
                 append_pipeline_log(logs_dir, "SUCCESS: prep")
+                checkpointer.record_step_success(run_id, "prep")
             except Exception as exc:
                 _on_step_failure("prep", exc)
     if stop_after == "prep":
+        checkpointer.end_run(run_id, success=True)
         return
 
     # ── STEP: hmmer (or diamond) ───────────────────────────────────────────
@@ -294,9 +377,15 @@ def run_pipeline(cfg):
     if step_in_range("hmmer", start_at, stop_after):
         if _is_blocked("hmmer"):
             print("[pipeline] Skipping blocked step: hmmer")
+        elif _is_resume_skip("hmmer"):
+            print("[pipeline] SKIP: hmmer (checkpoint match)")
+            update_step_status(status_path, "hmmer", "success")
+            checkpointer.record_step_skipped(run_id, "hmmer", "fingerprint match")
         else:
+            checkpointer.record_step_pending(run_id, "hmmer")
             update_step_status(status_path, "hmmer", "running")
             append_pipeline_log(logs_dir, "START: hmmer")
+            checkpointer.record_step_running(run_id, "hmmer")
             try:
                 if use_diamond:
                     from .tasks import diamond as diamond_task
@@ -316,9 +405,11 @@ def run_pipeline(cfg):
                     print("[pipeline] Removed combined_proteomes.faa (prep.cleanup_combined_faa=true).")
                 update_step_status(status_path, "hmmer", "success")
                 append_pipeline_log(logs_dir, "SUCCESS: hmmer")
+                checkpointer.record_step_success(run_id, "hmmer")
             except Exception as exc:
                 _on_step_failure("hmmer", exc)
     if stop_after == "hmmer":
+        checkpointer.end_run(run_id, success=True)
         return
 
     # ── Name mapping for hmmalign ──────────────────────────────────────────
@@ -358,9 +449,15 @@ def run_pipeline(cfg):
     if step_in_range("extract", start_at, stop_after):
         if _is_blocked("extract"):
             print("[pipeline] Skipping blocked step: extract")
+        elif _is_resume_skip("extract"):
+            print("[pipeline] SKIP: extract (checkpoint match)")
+            update_step_status(status_path, "extract", "success")
+            checkpointer.record_step_skipped(run_id, "extract", "fingerprint match")
         else:
+            checkpointer.record_step_pending(run_id, "extract")
             update_step_status(status_path, "extract", "running")
             append_pipeline_log(logs_dir, "START: extract")
+            checkpointer.record_step_running(run_id, "extract")
             try:
                 _ensure_hit_dfs()
                 # When per-genome FAA files are available, load proteins from
@@ -380,9 +477,11 @@ def run_pipeline(cfg):
                 del proteome_seqs  # free memory after extraction
                 update_step_status(status_path, "extract", "success")
                 append_pipeline_log(logs_dir, "SUCCESS: extract")
+                checkpointer.record_step_success(run_id, "extract")
             except Exception as exc:
                 _on_step_failure("extract", exc)
     if stop_after == "extract":
+        checkpointer.end_run(run_id, success=True)
         return
 
     # ── Taxonomy map (used by embed + post) ──────────────────────────────
@@ -401,9 +500,15 @@ def run_pipeline(cfg):
     if step_in_range("embed", start_at, stop_after) and emb_cfg.get("enabled", False):
         if _is_blocked("embed"):
             print("[pipeline] Skipping blocked step: embed")
+        elif _is_resume_skip("embed"):
+            print("[pipeline] SKIP: embed (checkpoint match)")
+            update_step_status(status_path, "embed", "success")
+            checkpointer.record_step_skipped(run_id, "embed", "fingerprint match")
         else:
+            checkpointer.record_step_pending(run_id, "embed")
             update_step_status(status_path, "embed", "running")
             append_pipeline_log(logs_dir, "START: embed")
+            checkpointer.record_step_running(run_id, "embed")
             try:
                 clades = None
                 if post_cfg.get("clades_tsv", None):
@@ -415,9 +520,11 @@ def run_pipeline(cfg):
                                 force, summary_dir=summary_dir, tax_map=tax_map)
                 update_step_status(status_path, "embed", "success")
                 append_pipeline_log(logs_dir, "SUCCESS: embed")
+                checkpointer.record_step_success(run_id, "embed")
             except Exception as exc:
                 _on_step_failure("embed", exc)
     if stop_after == "embed":
+        checkpointer.end_run(run_id, success=True)
         return
 
     # ── STEP: phylo ────────────────────────────────────────────────────────
@@ -432,9 +539,15 @@ def run_pipeline(cfg):
     if step_in_range("phylo", start_at, stop_after):
         if _is_blocked("phylo"):
             print("[pipeline] Skipping blocked step: phylo")
+        elif _is_resume_skip("phylo"):
+            print("[pipeline] SKIP: phylo (checkpoint match)")
+            update_step_status(status_path, "phylo", "success")
+            checkpointer.record_step_skipped(run_id, "phylo", "fingerprint match")
         else:
+            checkpointer.record_step_pending(run_id, "phylo")
             update_step_status(status_path, "phylo", "running")
             append_pipeline_log(logs_dir, "START: phylo")
+            checkpointer.record_step_running(run_id, "phylo")
             try:
                 phylo.run_phylo(cfg, hmm_to_seqs, fasta_dir, aln_dir, clipkit_dir,
                                 tree_dir, name_to_hmm_path, hmm_keep, force)
@@ -467,28 +580,38 @@ def run_pipeline(cfg):
 
                 update_step_status(status_path, "phylo", "success")
                 append_pipeline_log(logs_dir, "SUCCESS: phylo")
+                checkpointer.record_step_success(run_id, "phylo")
             except Exception as exc:
                 _on_step_failure("phylo", exc)
 
     if stop_after == "phylo":
+        checkpointer.end_run(run_id, success=True)
         return
 
     # ── STEP: curate ───────────────────────────────────────────────────────
     if step_in_range("curate", start_at, stop_after):
         if _is_blocked("curate"):
             print("[pipeline] Skipping blocked step: curate")
+        elif _is_resume_skip("curate"):
+            print("[pipeline] SKIP: curate (checkpoint match)")
+            update_step_status(status_path, "curate", "success")
+            checkpointer.record_step_skipped(run_id, "curate", "fingerprint match")
         else:
+            checkpointer.record_step_pending(run_id, "curate")
             update_step_status(status_path, "curate", "running")
             append_pipeline_log(logs_dir, "START: curate")
+            checkpointer.record_step_running(run_id, "curate")
             try:
                 curate.run_curate(cfg, tree_dir, fasta_dir, clipkit_dir, emb_dir,
                                   summary_dir, hmm_keep, force,
                                   curated_dir=curated_dir)
                 update_step_status(status_path, "curate", "success")
                 append_pipeline_log(logs_dir, "SUCCESS: curate")
+                checkpointer.record_step_success(run_id, "curate")
             except Exception as exc:
                 _on_step_failure("curate", exc)
     if stop_after == "curate":
+        checkpointer.end_run(run_id, success=True)
         return
 
     # ── Prefer curated overlay outputs for downstream steps ────────────────
@@ -507,69 +630,101 @@ def run_pipeline(cfg):
     if step_in_range("taxonomy_integrate", start_at, stop_after) and tax_int_cfg.get("enabled", False):
         if _is_blocked("taxonomy_integrate"):
             print("[pipeline] Skipping blocked step: taxonomy_integrate")
+        elif _is_resume_skip("taxonomy_integrate"):
+            print("[pipeline] SKIP: taxonomy_integrate (checkpoint match)")
+            update_step_status(status_path, "taxonomy_integrate", "success")
+            checkpointer.record_step_skipped(run_id, "taxonomy_integrate", "fingerprint match")
         else:
+            checkpointer.record_step_pending(run_id, "taxonomy_integrate")
             update_step_status(status_path, "taxonomy_integrate", "running")
             append_pipeline_log(logs_dir, "START: taxonomy_integrate")
+            checkpointer.record_step_running(run_id, "taxonomy_integrate")
             try:
                 taxonomy_integrate.run_taxonomy_integrate(cfg, summary_dir)
                 update_step_status(status_path, "taxonomy_integrate", "success")
                 append_pipeline_log(logs_dir, "SUCCESS: taxonomy_integrate")
+                checkpointer.record_step_success(run_id, "taxonomy_integrate")
             except Exception as exc:
                 _on_step_failure("taxonomy_integrate", exc)
     if stop_after == "taxonomy_integrate":
+        checkpointer.end_run(run_id, success=True)
         return
 
     # ── STEP: conservation_metrics ─────────────────────────────────────────
     if step_in_range("conservation_metrics", start_at, stop_after) and cons_met_cfg.get("enabled", False):
         if _is_blocked("conservation_metrics"):
             print("[pipeline] Skipping blocked step: conservation_metrics")
+        elif _is_resume_skip("conservation_metrics"):
+            print("[pipeline] SKIP: conservation_metrics (checkpoint match)")
+            update_step_status(status_path, "conservation_metrics", "success")
+            checkpointer.record_step_skipped(run_id, "conservation_metrics", "fingerprint match")
         else:
+            checkpointer.record_step_pending(run_id, "conservation_metrics")
             update_step_status(status_path, "conservation_metrics", "running")
             append_pipeline_log(logs_dir, "START: conservation_metrics")
+            checkpointer.record_step_running(run_id, "conservation_metrics")
             try:
                 conservation_metrics.run_conservation_metrics(
                     cfg, tree_dir, clipkit_dir, aln_dir, post_dir, hmm_keep
                 )
                 update_step_status(status_path, "conservation_metrics", "success")
                 append_pipeline_log(logs_dir, "SUCCESS: conservation_metrics")
+                checkpointer.record_step_success(run_id, "conservation_metrics")
             except Exception as exc:
                 _on_step_failure("conservation_metrics", exc)
     if stop_after == "conservation_metrics":
+        checkpointer.end_run(run_id, success=True)
         return
 
     # ── STEP: detect_clades ────────────────────────────────────────────────
     if step_in_range("detect_clades", start_at, stop_after) and det_cla_cfg.get("enabled", False):
         if _is_blocked("detect_clades"):
             print("[pipeline] Skipping blocked step: detect_clades")
+        elif _is_resume_skip("detect_clades"):
+            print("[pipeline] SKIP: detect_clades (checkpoint match)")
+            update_step_status(status_path, "detect_clades", "success")
+            checkpointer.record_step_skipped(run_id, "detect_clades", "fingerprint match")
         else:
+            checkpointer.record_step_pending(run_id, "detect_clades")
             update_step_status(status_path, "detect_clades", "running")
             append_pipeline_log(logs_dir, "START: detect_clades")
+            checkpointer.record_step_running(run_id, "detect_clades")
             try:
                 detect_clades.run_detect_clades(
                     cfg, tree_dir, emb_dir, summary_dir, hmm_keep, clade_assign_dir
                 )
                 update_step_status(status_path, "detect_clades", "success")
                 append_pipeline_log(logs_dir, "SUCCESS: detect_clades")
+                checkpointer.record_step_success(run_id, "detect_clades")
             except Exception as exc:
                 _on_step_failure("detect_clades", exc)
     if stop_after == "detect_clades":
+        checkpointer.end_run(run_id, success=True)
         return
 
     # ── STEP: post ─────────────────────────────────────────────────────────
     if step_in_range("post", start_at, stop_after) and post_cfg.get("enabled", False):
         if _is_blocked("post"):
             print("[pipeline] Skipping blocked step: post")
+        elif _is_resume_skip("post"):
+            print("[pipeline] SKIP: post (checkpoint match)")
+            update_step_status(status_path, "post", "success")
+            checkpointer.record_step_skipped(run_id, "post", "fingerprint match")
         else:
+            checkpointer.record_step_pending(run_id, "post")
             update_step_status(status_path, "post", "running")
             append_pipeline_log(logs_dir, "START: post")
+            checkpointer.record_step_running(run_id, "post")
             try:
                 post.run_post(cfg, tree_dir, clipkit_dir, aln_dir, post_dir, summary_dir, hmm_keep, force,
                               clade_assign_dir=clade_assign_dir)
                 update_step_status(status_path, "post", "success")
                 append_pipeline_log(logs_dir, "SUCCESS: post")
+                checkpointer.record_step_success(run_id, "post")
             except Exception as exc:
                 _on_step_failure("post", exc)
     if stop_after == "post":
+        checkpointer.end_run(run_id, success=True)
         return
 
     # ── STEP: synteny ──────────────────────────────────────────────────────
@@ -579,84 +734,124 @@ def run_pipeline(cfg):
     if step_in_range("synteny", start_at, stop_after) and synteny_cfg.get("enabled", False):
         if _is_blocked("synteny"):
             print("[pipeline] Skipping blocked step: synteny")
+        elif _is_resume_skip("synteny"):
+            print("[pipeline] SKIP: synteny (checkpoint match)")
+            update_step_status(status_path, "synteny", "success")
+            checkpointer.record_step_skipped(run_id, "synteny", "fingerprint match")
         else:
+            checkpointer.record_step_pending(run_id, "synteny")
             update_step_status(status_path, "synteny", "running")
             append_pipeline_log(logs_dir, "START: synteny")
+            checkpointer.record_step_running(run_id, "synteny")
             try:
                 _ensure_hit_dfs()
                 synteny.run_synteny(cfg, synteny_dir, tree_dir, scan_df, search_df, hmm_keep, force,
                                     clade_assign_dir=clade_assign_dir)
                 update_step_status(status_path, "synteny", "success")
                 append_pipeline_log(logs_dir, "SUCCESS: synteny")
+                checkpointer.record_step_success(run_id, "synteny")
             except Exception as exc:
                 _on_step_failure("synteny", exc)
     if stop_after == "synteny":
+        checkpointer.end_run(run_id, success=True)
         return
 
     # ── STEP: codon ────────────────────────────────────────────────────────
     if step_in_range("codon", start_at, stop_after) and codon_cfg.get("enabled", False):
         if _is_blocked("codon"):
             print("[pipeline] Skipping blocked step: codon")
+        elif _is_resume_skip("codon"):
+            print("[pipeline] SKIP: codon (checkpoint match)")
+            update_step_status(status_path, "codon", "success")
+            checkpointer.record_step_skipped(run_id, "codon", "fingerprint match")
         else:
+            checkpointer.record_step_pending(run_id, "codon")
             update_step_status(status_path, "codon", "running")
             append_pipeline_log(logs_dir, "START: codon")
+            checkpointer.record_step_running(run_id, "codon")
             try:
                 codon.run_codon(cfg, tree_dir, clipkit_dir, aln_dir, codon_dir, hmm_keep, force)
                 update_step_status(status_path, "codon", "success")
                 append_pipeline_log(logs_dir, "SUCCESS: codon")
+                checkpointer.record_step_success(run_id, "codon")
             except Exception as exc:
                 _on_step_failure("codon", exc)
     if stop_after == "codon":
+        checkpointer.end_run(run_id, success=True)
         return
 
     # ── STEP: hyphy ────────────────────────────────────────────────────────
     if step_in_range("hyphy", start_at, stop_after) and hyphy_cfg.get("enabled", False):
         if _is_blocked("hyphy"):
             print("[pipeline] Skipping blocked step: hyphy")
+        elif _is_resume_skip("hyphy"):
+            print("[pipeline] SKIP: hyphy (checkpoint match)")
+            update_step_status(status_path, "hyphy", "success")
+            checkpointer.record_step_skipped(run_id, "hyphy", "fingerprint match")
         else:
+            checkpointer.record_step_pending(run_id, "hyphy")
             update_step_status(status_path, "hyphy", "running")
             append_pipeline_log(logs_dir, "START: hyphy")
+            checkpointer.record_step_running(run_id, "hyphy")
             try:
                 hyphy.run_hyphy(cfg, codon_dir, tree_dir, hyphy_dir, hmm_keep, force,
                                 clade_assign_dir=clade_assign_dir)
                 update_step_status(status_path, "hyphy", "success")
                 append_pipeline_log(logs_dir, "SUCCESS: hyphy")
+                checkpointer.record_step_success(run_id, "hyphy")
             except Exception as exc:
                 _on_step_failure("hyphy", exc)
     if stop_after == "hyphy":
+        checkpointer.end_run(run_id, success=True)
         return
 
     # ── STEP: score_motifs ─────────────────────────────────────────────────
     if step_in_range("score_motifs", start_at, stop_after) and motif_cfg.get("enabled", False):
         if _is_blocked("score_motifs"):
             print("[pipeline] Skipping blocked step: score_motifs")
+        elif _is_resume_skip("score_motifs"):
+            print("[pipeline] SKIP: score_motifs (checkpoint match)")
+            update_step_status(status_path, "score_motifs", "success")
+            checkpointer.record_step_skipped(run_id, "score_motifs", "fingerprint match")
         else:
+            checkpointer.record_step_pending(run_id, "score_motifs")
             update_step_status(status_path, "score_motifs", "running")
             append_pipeline_log(logs_dir, "START: score_motifs")
+            checkpointer.record_step_running(run_id, "score_motifs")
             try:
                 from .tasks import score_motifs
                 score_motifs.score_motifs(cfg, fasta_dir, summary_dir, hmm_keep, force)
                 update_step_status(status_path, "score_motifs", "success")
                 append_pipeline_log(logs_dir, "SUCCESS: score_motifs")
+                checkpointer.record_step_success(run_id, "score_motifs")
             except Exception as exc:
                 _on_step_failure("score_motifs", exc)
     if stop_after == "score_motifs":
+        checkpointer.end_run(run_id, success=True)
         return
 
     # ── STEP: discover_motifs ──────────────────────────────────────────────
     if step_in_range("discover_motifs", start_at, stop_after) and discover_cfg.get("enabled", False):
         if _is_blocked("discover_motifs"):
             print("[pipeline] Skipping blocked step: discover_motifs")
+        elif _is_resume_skip("discover_motifs"):
+            print("[pipeline] SKIP: discover_motifs (checkpoint match)")
+            update_step_status(status_path, "discover_motifs", "success")
+            checkpointer.record_step_skipped(run_id, "discover_motifs", "fingerprint match")
         else:
+            checkpointer.record_step_pending(run_id, "discover_motifs")
             update_step_status(status_path, "discover_motifs", "running")
             append_pipeline_log(logs_dir, "START: discover_motifs")
+            checkpointer.record_step_running(run_id, "discover_motifs")
             try:
                 from .tasks import discover_motifs
                 discover_motifs.discover_motifs(cfg, fasta_dir, summary_dir, hmm_keep, force,
                                          clade_assign_dir=clade_assign_dir)
                 update_step_status(status_path, "discover_motifs", "success")
                 append_pipeline_log(logs_dir, "SUCCESS: discover_motifs")
+                checkpointer.record_step_success(run_id, "discover_motifs")
             except Exception as exc:
                 _on_step_failure("discover_motifs", exc)
 
+    checkpointer.end_run(run_id, success=True)
     print("\nPipeline complete.")

@@ -17,7 +17,7 @@
 -   **Synteny Analysis** (Optional): Extracts gene neighborhoods (configurable window), computes similarity (DIAMOND/MMseqs2), and plots synteny tracks ordered by phylogeny.
 -   **HDBSCAN Clustering** (Optional): Clusters protein embeddings and outputs `clade_assignment.tsv` with taxonomy.
 -   **GTDB Taxonomy Integration**: Merges GTDB-Tk taxonomy into summary tables and cluster assignments.
--   **Resumable**: Smart checkpointing skips already completed steps.
+-   **Resumable**: Smart checkpointing skips already completed steps. Full NDJSON+SQLite checkpoint logging with `--resume` CLI support for crash recovery and incremental re-runs.
 -   **HPC Ready**: Auto-detects Slurm CPU allocations.
 
 ---
@@ -314,7 +314,93 @@ phylofoundry run \
   --stop_after phylo
 ```
 
-### 7. CLI Reference
+### 7. Resuming a Run — `--resume`
+
+PhyloFoundry writes a content-aware checkpoint after every step using an append-only **NDJSON log** and a **SQLite index** (`logs/pipeline.ndjson` and `logs/checkpoint.db` inside the output directory).  On each run start, the resolved config is also saved to `OUTDIR/config.yaml` with embedded run metadata.
+
+Use `--resume` to restart an interrupted or partially completed run:
+
+```bash
+# Resume from the saved checkpoint in ./results
+phylofoundry run --resume --outdir ./results
+
+# Resume from an explicit run ID or path to a saved config
+phylofoundry run --resume-from ./results/config.yaml
+
+# Disable resume even if checkpoints are present (start a fresh run)
+phylofoundry run --no-resume --outdir ./results
+
+# Force re-run all steps, ignoring any existing checkpoint data
+phylofoundry run --force --outdir ./results
+```
+
+#### How resume works
+
+When `--resume` is used:
+
+1. PhyloFoundry looks for `OUTDIR/config.yaml` (or `OUTDIR/config.json` for legacy runs) and reads the embedded `_run_meta` block to find the `run_id` and checkpoint paths.
+2. It opens `logs/checkpoint.db` and examines the latest state and fingerprint for each step.
+3. For each step in the pipeline plan:
+   - **Fingerprint matches prior `success`** → step is **skipped** and recorded outputs are reused.
+   - **State is `running` or `pending`** → treat as interrupted; mark for **re-run** (or **resume** if the step supports it).
+   - **State is `failed`** or fingerprints differ → step is **re-run**.
+4. A concise resume summary is printed before execution begins:
+   ```
+   [checkpoint] Resume plan:
+     SKIP  (3): prep, hmmer, extract
+     RUN   (2): phylo, embed
+   ```
+
+#### Step fingerprinting
+
+Each step computes an **input fingerprint** (SHA-256) over:
+- Step parameters and workflow config
+- Content hashes of input files
+- Checkpoint schema version
+
+If any parameter or input file changes between runs, the fingerprint changes and the step is automatically re-run.
+
+#### Checkpoint files
+
+| File | Description |
+| :--- | :--- |
+| `OUTDIR/config.yaml` | Config snapshot written at run start; contains `_run_meta` with `run_id`, checkpoint paths, and timestamps. |
+| `OUTDIR/logs/pipeline.ndjson` | Append-only NDJSON log with one JSON record per event (`run_start`, `step_pending`, `step_running`, `step_success`, `step_failed`, `step_skipped`, `run_end`). |
+| `OUTDIR/logs/checkpoint.db` | SQLite database (WAL mode) with tables `runs`, `steps`, and `artifacts` for fast querying. |
+
+#### Querying the checkpoint
+
+You can inspect the checkpoint directly with any SQLite client or Python:
+
+```python
+import sqlite3
+conn = sqlite3.connect("results/logs/checkpoint.db")
+
+# Show all step states for the latest run
+for row in conn.execute(
+    "SELECT step_name, state, completed_at FROM steps "
+    "WHERE run_id=(SELECT run_id FROM runs ORDER BY start_time DESC LIMIT 1)"
+):
+    print(row)
+
+# List failed steps
+for row in conn.execute(
+    "SELECT step_name, error FROM steps WHERE state='failed'"
+):
+    print(row)
+```
+
+Or read the NDJSON log directly:
+
+```bash
+# Show all events for the last run
+grep '"event"' results/logs/pipeline.ndjson | python -m json.tool
+
+# Find failed steps
+grep 'step_failed' results/logs/pipeline.ndjson
+```
+
+### 8. CLI Reference
 
 #### Common flags (accepted by every subcommand)
 
@@ -325,7 +411,10 @@ phylofoundry run \
 | `--hmm_dir <path>` | Override `inputs.hmm_input`. |
 | `--outdir <path>` | Override `output.outdir`. |
 | `--cpu <N>` | Override `resources.cpu`. |
-| `--force` | Override `workflow.force=true` (re-run existing steps). |
+| `--force` | Override `workflow.force=true` (re-run all steps, ignore existing checkpoints). |
+| `--resume` | Resume from an existing checkpoint in `--outdir` (reads `OUTDIR/config.yaml` and the NDJSON+SQLite checkpoint, skips steps with matching fingerprints). |
+| `--resume-from <path>` | Explicitly specify a run ID or path to a saved config/checkpoint to resume from (overrides `--resume`). |
+| `--no-resume` | Disable resume even if checkpoints are present in `--outdir`. |
 
 #### `run`-only flags
 
@@ -837,18 +926,110 @@ embeddings:
 
 ## ⏯️ Resuming & Checkpoints
 
-PhyloFoundry is designed to be highly resilient. It uses a file-existence check to determine if a step needs to be run.
+PhyloFoundry includes a robust checkpointing system based on **append-only NDJSON logs** and a **SQLite index**.  Every step records `PENDING → RUNNING → SUCCESS/FAILED` state transitions with timestamps, content fingerprints, and artifact metadata.  This enables smart resumability: steps whose inputs haven't changed since the last successful run are automatically skipped.
+
+### Quick start
+
+```bash
+# Resume an interrupted run — picks up from the last checkpoint in ./results
+phylofoundry run --resume --outdir ./results
+
+# Same thing using the explicit path to the saved config snapshot
+phylofoundry run --resume-from ./results/config.yaml
+
+# Start fresh, ignoring any prior checkpoints
+phylofoundry run --no-resume --outdir ./results
+
+# Force re-run all steps regardless of checkpoint state
+phylofoundry run --force --outdir ./results
+```
+
+### How resume works
+
+When `--resume` is used:
+
+1. PhyloFoundry reads `OUTDIR/config.yaml` (the config snapshot written at run start).  If `config.yaml` is absent, it falls back to `OUTDIR/config.json` for legacy runs.
+2. The embedded `_run_meta` block identifies the `run_id` and checkpoint database path.
+3. For each step, the **current fingerprint** (hash of step params + input file contents + schema version) is compared to the fingerprint stored in the last successful checkpoint entry.
+4. Steps are classified as:
+   - **SKIP** — prior state is `success` and fingerprint matches → reuse previous outputs.
+   - **RUN** — no prior record, fingerprint mismatch, or prior state is `failed`.
+   - **RESUME** — prior state is `running` or `pending` (interrupted) → attempt to resume; falls back to re-run.
+5. A concise summary is printed before execution begins.
+
+### Checkpoint files
+
+| File | Description |
+| :--- | :--- |
+| `OUTDIR/config.yaml` | Config snapshot saved at run start; contains `_run_meta` with `run_id`, checkpoint paths, and start timestamp. |
+| `OUTDIR/logs/pipeline.ndjson` | Append-only NDJSON log (one JSON object per line) with events: `run_start`, `step_pending`, `step_running`, `step_success`, `step_failed`, `step_skipped`, `run_end`. |
+| `OUTDIR/logs/checkpoint.db` | SQLite database (WAL mode) with tables: `runs`, `steps`, and `artifacts`. Designed for fast queries and concurrent access. |
+
+### Querying the checkpoint
+
+**SQLite (Python)**:
+
+```python
+import sqlite3
+
+conn = sqlite3.connect("results/logs/checkpoint.db")
+
+# Show all step states for the latest run
+for row in conn.execute(
+    "SELECT step_name, state, completed_at, input_fingerprint "
+    "FROM steps "
+    "WHERE run_id=(SELECT run_id FROM runs ORDER BY start_time DESC LIMIT 1) "
+    "ORDER BY id"
+):
+    print(row)
+
+# List failed steps with error messages
+for row in conn.execute("SELECT step_name, error FROM steps WHERE state='failed'"):
+    print(row)
+
+# List all artifact paths for the latest run
+for row in conn.execute(
+    "SELECT step_name, path, sha256 FROM artifacts "
+    "WHERE run_id=(SELECT run_id FROM runs ORDER BY start_time DESC LIMIT 1)"
+):
+    print(row)
+```
+
+**NDJSON (shell)**:
+
+```bash
+# Pretty-print all events for the last run
+cat results/logs/pipeline.ndjson | python -c "
+import sys, json
+for line in sys.stdin:
+    obj = json.loads(line)
+    print(obj.get('event','?'), obj.get('step',''), obj.get('timestamp',''))
+"
+
+# Find all failed steps
+grep 'step_failed' results/logs/pipeline.ndjson | python -m json.tool
+```
+
+### Step fingerprinting
+
+Each step fingerprint is a SHA-256 hash of:
+
+- Step name and workflow parameters (sorted for stability)
+- SHA-256 content hash of every declared input file
+- `CHECKPOINT_VERSION` sentinel (bumped when the checkpoint schema changes)
+
+If any parameter or input file changes between runs, the fingerprint changes and the step is re-run automatically.
 
 ### Scenarios
 
-#### Scenario A: Pipeline Interrupted
-If the pipeline crashes or is cancelled (e.g., walltime limit reached on HPC):
-1.  Simply run the **exact same command** again.
-2.  It will detect existing output files (e.g., `hmmer` tables, `extract` FASTAs) and skip those steps.
-3.  It will pick up exactly where it left off (e.g., processing the remaining HMMs in `phylo`).
+#### Scenario A: Pipeline interrupted (crash or walltime)
 
-#### Scenario B: Adding Analysis (e.g., Embeddings)
-You ran the pipeline without embeddings, but now want to add them:
+```bash
+# Just re-run with --resume — steps already completed are skipped
+phylofoundry run --resume --outdir ./results
+```
+
+#### Scenario B: Adding an optional step (e.g., embeddings)
 
 Option 1 — subcommand style (recommended):
 ```bash
@@ -856,25 +1037,29 @@ phylofoundry embed --outdir ./results --cpu 8
 ```
 
 Option 2 — using `run` with `--start_at`:
-1.  Enable embeddings in your config (`embeddings.enabled: true`).
-2.  Run with `--start_at embed`.
-    ```bash
-    phylofoundry run --config config/config.yaml --start_at embed
-    ```
-3.  This skips `prep`, `hmmer`, and `extract`, loading the necessary data to run `embed`.
+```bash
+# Enable embeddings in config, then start from the embed step
+phylofoundry run --config config/config.yaml --start_at embed
+```
 
-#### Scenario C: Force Re-run
-To overwrite existing results (e.g., if you changed parameters like `mafft_mode`):
+#### Scenario C: Force re-run everything
+
 ```bash
 phylofoundry run --config config/config.yaml --force
 ```
-*Note*: This forces **all** steps in the workflow range. To force only one step, use the subcommand:
+
+To force only a single step:
 ```bash
 phylofoundry phylo --config config/config.yaml --force
-```
-Or with the `run` form:
-```bash
+# or
 phylofoundry run --config config/config.yaml --start_at phylo --stop_after phylo --force
+```
+
+#### Scenario D: Resume from a different output directory
+
+```bash
+# Explicitly point to the config snapshot from a previous run
+phylofoundry run --resume-from /old/results/config.yaml --outdir /new/results
 ```
 
 ---
