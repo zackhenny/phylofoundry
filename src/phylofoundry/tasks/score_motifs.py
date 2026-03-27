@@ -81,7 +81,7 @@ def _motif_ha_metrics(positions, motif_len, ha_scores, ha_mask):
     return len(positions), float(np.mean(overlaps)), float(np.max(overlaps)), float(np.mean(score_means)), float(np.mean(score_sums))
 
 
-def score_motifs(cfg, fasta_dir, summary_dir, hmm_keep, force=False):
+def score_motifs(cfg, fasta_dir, summary_dir, motifs_dir, hmm_keep, force=False):
     import glob
 
     motif_cfg = cfg.get("motifs", {})
@@ -103,8 +103,9 @@ def score_motifs(cfg, fasta_dir, summary_dir, hmm_keep, force=False):
             "per-residue vectors are available/reproducible."
         )
 
-    out_fp = os.path.join(summary_dir, "motif_attention_scores.tsv")
-    out_ha_fp = os.path.join(summary_dir, "motif_ha_scores.tsv")
+    os.makedirs(motifs_dir, exist_ok=True)
+    out_fp = os.path.join(motifs_dir, "motif_attention_scores.tsv")
+    out_ha_fp = os.path.join(motifs_dir, "motif_ha_scores.tsv")
     if os.path.exists(out_fp) and not force and (not use_ha or os.path.exists(out_ha_fp)):
         print(f"[motifs] Output exists: {out_fp}. Use --force to override.")
         return pd.read_csv(out_fp, sep="\t")

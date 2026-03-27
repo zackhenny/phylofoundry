@@ -74,6 +74,10 @@ HYPHY_DIR = "summary/hyphy"
 AA_COMPOSITION_DIR = "summary/aa_composition"
 RESOLVED_CONFIG_JSON = "summary/resolved_config.json"
 
+# Module-specific output directories
+MOTIFS_DIR = "motifs"
+DISCOVER_DIR = "discover"
+
 # Logs directory
 LOGS_DIR = "logs"
 
@@ -211,6 +215,16 @@ class ArtifactPaths:
         """Resolved pipeline configuration snapshot written at startup."""
         return os.path.join(self.outdir, RESOLVED_CONFIG_JSON)
 
+    @property
+    def motifs_dir(self) -> str:
+        """Directory containing motif-scoring outputs."""
+        return os.path.join(self.outdir, MOTIFS_DIR)
+
+    @property
+    def discover_dir(self) -> str:
+        """Directory containing motif-discovery outputs."""
+        return os.path.join(self.outdir, DISCOVER_DIR)
+
     # ── Logs ────────────────────────────────────────────────────────────────
 
     @property
@@ -312,4 +326,6 @@ class ArtifactPaths:
             self.embeddings_dir,
             self.clade_assign_dir,
             self.curated_dir,
+            self.motifs_dir,
+            self.discover_dir,
         ]

@@ -12,6 +12,7 @@ from .execution_schema import StepState
 from .failure_policy import apply_failure_policy, build_reverse_dependency_map
 from .logging_utils import (
     append_pipeline_log,
+    append_step_log,
     ensure_logs_dir,
     execution_plan_path,
     initialize_step_status,
@@ -233,6 +234,11 @@ def run_pipeline(cfg):
                 return s.state == StepState.BLOCKED
         return False
 
+    def _log_step_event(step_name: str, event: str) -> None:
+        """Write step-level and pipeline-level lifecycle messages."""
+        append_pipeline_log(logs_dir, f"{event}: {step_name}")
+        append_step_log(logs_dir, step_name, event)
+
     def _on_step_failure(step_name: str, exc: Exception) -> None:
         """Record failure and propagate BLOCKED state to downstream steps."""
         update_step_status(status_path, step_name, StepState.FAILED.value)
@@ -244,6 +250,7 @@ def run_pipeline(cfg):
         msg_fail = f"STEP FAILED: {step_name} — {exc}"
         print(f"\n[pipeline] {msg_fail}")
         append_pipeline_log(logs_dir, msg_fail)
+        append_step_log(logs_dir, step_name, f"FAILED: {exc}")
         checkpointer.record_step_failure(
             run_id, step_name, error=str(exc),
             trace=_traceback.format_exc()
@@ -271,10 +278,13 @@ def run_pipeline(cfg):
     hmmscan_dir = input_paths.hmmscan_dir
     hmmsearch_dir = input_paths.hmmsearch_dir
     fasta_dir = input_paths.fasta_dir
+    raw_fasta_dir = input_paths.fasta_dir
     aln_dir = input_paths.alignments_hmm_dir
     clipkit_dir = input_paths.alignments_clipkit_dir
     tree_dir = input_paths.trees_dir
     summary_dir = input_paths.summary_dir
+    motifs_dir = paths.motifs_dir
+    discover_dir = paths.discover_dir
     post_dir = input_paths.conservation_metrics_dir
     codon_dir = input_paths.codon_dir
     hyphy_dir = paths.hyphy_dir  # always write hyphy output to new outdir
@@ -366,12 +376,12 @@ def run_pipeline(cfg):
                 f"({combined_faa})"
             )
             update_step_status(status_path, "prep", "success")
-            append_pipeline_log(logs_dir, "SKIPPED: prep (prebuilt combined_faa provided)")
+            _log_step_event("prep", "SKIPPED (prebuilt combined_faa provided)")
             checkpointer.record_step_skipped(run_id, "prep", "prebuilt combined_faa provided")
         else:
             checkpointer.record_step_pending(run_id, "prep")
             update_step_status(status_path, "prep", "running")
-            append_pipeline_log(logs_dir, "START: prep")
+            _log_step_event("prep", "START")
             checkpointer.record_step_running(run_id, "prep")
             try:
                 if use_diamond:
@@ -380,7 +390,7 @@ def run_pipeline(cfg):
                     prep.run_prep(cfg, genomes, faa_dir, hmm_input_mode, hmm_dir,
                                   hmm_files, combined_faa, combined_hmm, force)
                 update_step_status(status_path, "prep", "success")
-                append_pipeline_log(logs_dir, "SUCCESS: prep")
+                _log_step_event("prep", "SUCCESS")
                 checkpointer.record_step_success(run_id, "prep")
             except Exception as exc:
                 _on_step_failure("prep", exc)
@@ -402,7 +412,7 @@ def run_pipeline(cfg):
         else:
             checkpointer.record_step_pending(run_id, "hmmer")
             update_step_status(status_path, "hmmer", "running")
-            append_pipeline_log(logs_dir, "START: hmmer")
+            _log_step_event("hmmer", "START")
             checkpointer.record_step_running(run_id, "hmmer")
             try:
                 if use_diamond:
@@ -423,7 +433,7 @@ def run_pipeline(cfg):
                     os.remove(combined_faa)
                     print("[pipeline] Removed combined_proteomes.faa (prep.cleanup_combined_faa=true).")
                 update_step_status(status_path, "hmmer", "success")
-                append_pipeline_log(logs_dir, "SUCCESS: hmmer")
+                _log_step_event("hmmer", "SUCCESS")
                 checkpointer.record_step_success(run_id, "hmmer")
             except Exception as exc:
                 _on_step_failure("hmmer", exc)
@@ -475,7 +485,7 @@ def run_pipeline(cfg):
         else:
             checkpointer.record_step_pending(run_id, "extract")
             update_step_status(status_path, "extract", "running")
-            append_pipeline_log(logs_dir, "START: extract")
+            _log_step_event("extract", "START")
             checkpointer.record_step_running(run_id, "extract")
             try:
                 _ensure_hit_dfs()
@@ -495,7 +505,7 @@ def run_pipeline(cfg):
                 )
                 del proteome_seqs  # free memory after extraction
                 update_step_status(status_path, "extract", "success")
-                append_pipeline_log(logs_dir, "SUCCESS: extract")
+                _log_step_event("extract", "SUCCESS")
                 checkpointer.record_step_success(run_id, "extract")
             except Exception as exc:
                 _on_step_failure("extract", exc)
@@ -526,7 +536,7 @@ def run_pipeline(cfg):
         else:
             checkpointer.record_step_pending(run_id, "embed")
             update_step_status(status_path, "embed", "running")
-            append_pipeline_log(logs_dir, "START: embed")
+            _log_step_event("embed", "START")
             checkpointer.record_step_running(run_id, "embed")
             try:
                 clades = None
@@ -539,7 +549,7 @@ def run_pipeline(cfg):
                                 force, summary_dir=summary_dir, tax_map=tax_map,
                                 resume=(resume_plan.get("embed") == "resume"))
                 update_step_status(status_path, "embed", "success")
-                append_pipeline_log(logs_dir, "SUCCESS: embed")
+                _log_step_event("embed", "SUCCESS")
                 checkpointer.record_step_success(run_id, "embed")
             except Exception as exc:
                 _on_step_failure("embed", exc)
@@ -566,7 +576,7 @@ def run_pipeline(cfg):
         else:
             checkpointer.record_step_pending(run_id, "phylo")
             update_step_status(status_path, "phylo", "running")
-            append_pipeline_log(logs_dir, "START: phylo")
+            _log_step_event("phylo", "START")
             checkpointer.record_step_running(run_id, "phylo")
             try:
                 phylo.run_phylo(cfg, hmm_to_seqs, fasta_dir, aln_dir, clipkit_dir,
@@ -600,7 +610,7 @@ def run_pipeline(cfg):
                             )
 
                 update_step_status(status_path, "phylo", "success")
-                append_pipeline_log(logs_dir, "SUCCESS: phylo")
+                _log_step_event("phylo", "SUCCESS")
                 checkpointer.record_step_success(run_id, "phylo")
             except Exception as exc:
                 _on_step_failure("phylo", exc)
@@ -620,14 +630,14 @@ def run_pipeline(cfg):
         else:
             checkpointer.record_step_pending(run_id, "curate")
             update_step_status(status_path, "curate", "running")
-            append_pipeline_log(logs_dir, "START: curate")
+            _log_step_event("curate", "START")
             checkpointer.record_step_running(run_id, "curate")
             try:
                 curate.run_curate(cfg, tree_dir, fasta_dir, clipkit_dir, emb_dir,
                                   summary_dir, hmm_keep, force,
                                   curated_dir=curated_dir)
                 update_step_status(status_path, "curate", "success")
-                append_pipeline_log(logs_dir, "SUCCESS: curate")
+                _log_step_event("curate", "SUCCESS")
                 checkpointer.record_step_success(run_id, "curate")
             except Exception as exc:
                 _on_step_failure("curate", exc)
@@ -658,12 +668,12 @@ def run_pipeline(cfg):
         else:
             checkpointer.record_step_pending(run_id, "taxonomy_integrate")
             update_step_status(status_path, "taxonomy_integrate", "running")
-            append_pipeline_log(logs_dir, "START: taxonomy_integrate")
+            _log_step_event("taxonomy_integrate", "START")
             checkpointer.record_step_running(run_id, "taxonomy_integrate")
             try:
                 taxonomy_integrate.run_taxonomy_integrate(cfg, summary_dir)
                 update_step_status(status_path, "taxonomy_integrate", "success")
-                append_pipeline_log(logs_dir, "SUCCESS: taxonomy_integrate")
+                _log_step_event("taxonomy_integrate", "SUCCESS")
                 checkpointer.record_step_success(run_id, "taxonomy_integrate")
             except Exception as exc:
                 _on_step_failure("taxonomy_integrate", exc)
@@ -682,14 +692,14 @@ def run_pipeline(cfg):
         else:
             checkpointer.record_step_pending(run_id, "conservation_metrics")
             update_step_status(status_path, "conservation_metrics", "running")
-            append_pipeline_log(logs_dir, "START: conservation_metrics")
+            _log_step_event("conservation_metrics", "START")
             checkpointer.record_step_running(run_id, "conservation_metrics")
             try:
                 conservation_metrics.run_conservation_metrics(
                     cfg, tree_dir, clipkit_dir, aln_dir, post_dir, hmm_keep
                 )
                 update_step_status(status_path, "conservation_metrics", "success")
-                append_pipeline_log(logs_dir, "SUCCESS: conservation_metrics")
+                _log_step_event("conservation_metrics", "SUCCESS")
                 checkpointer.record_step_success(run_id, "conservation_metrics")
             except Exception as exc:
                 _on_step_failure("conservation_metrics", exc)
@@ -708,14 +718,14 @@ def run_pipeline(cfg):
         else:
             checkpointer.record_step_pending(run_id, "detect_clades")
             update_step_status(status_path, "detect_clades", "running")
-            append_pipeline_log(logs_dir, "START: detect_clades")
+            _log_step_event("detect_clades", "START")
             checkpointer.record_step_running(run_id, "detect_clades")
             try:
                 detect_clades.run_detect_clades(
                     cfg, tree_dir, emb_dir, summary_dir, hmm_keep, clade_assign_dir
                 )
                 update_step_status(status_path, "detect_clades", "success")
-                append_pipeline_log(logs_dir, "SUCCESS: detect_clades")
+                _log_step_event("detect_clades", "SUCCESS")
                 checkpointer.record_step_success(run_id, "detect_clades")
             except Exception as exc:
                 _on_step_failure("detect_clades", exc)
@@ -734,17 +744,19 @@ def run_pipeline(cfg):
         else:
             checkpointer.record_step_pending(run_id, "aa_composition")
             update_step_status(status_path, "aa_composition", "running")
-            append_pipeline_log(logs_dir, "START: aa_composition")
+            _log_step_event("aa_composition", "START")
             checkpointer.record_step_running(run_id, "aa_composition")
             try:
+                # AA composition is computed on raw post-filter hits, not
+                # curate overlay outputs.
                 aa_composition.run_aa_composition(
-                    cfg, fasta_dir, summary_dir,
+                    cfg, raw_fasta_dir, summary_dir,
                     hmm_keep=hmm_keep,
                     clade_assign_dir=clade_assign_dir,
                     force=force,
                 )
                 update_step_status(status_path, "aa_composition", "success")
-                append_pipeline_log(logs_dir, "SUCCESS: aa_composition")
+                _log_step_event("aa_composition", "SUCCESS")
                 checkpointer.record_step_success(run_id, "aa_composition")
             except Exception as exc:
                 _on_step_failure("aa_composition", exc)
@@ -763,13 +775,13 @@ def run_pipeline(cfg):
         else:
             checkpointer.record_step_pending(run_id, "post")
             update_step_status(status_path, "post", "running")
-            append_pipeline_log(logs_dir, "START: post")
+            _log_step_event("post", "START")
             checkpointer.record_step_running(run_id, "post")
             try:
                 post.run_post(cfg, tree_dir, clipkit_dir, aln_dir, post_dir, summary_dir, hmm_keep, force,
                               clade_assign_dir=clade_assign_dir)
                 update_step_status(status_path, "post", "success")
-                append_pipeline_log(logs_dir, "SUCCESS: post")
+                _log_step_event("post", "SUCCESS")
                 checkpointer.record_step_success(run_id, "post")
             except Exception as exc:
                 _on_step_failure("post", exc)
@@ -791,14 +803,14 @@ def run_pipeline(cfg):
         else:
             checkpointer.record_step_pending(run_id, "synteny")
             update_step_status(status_path, "synteny", "running")
-            append_pipeline_log(logs_dir, "START: synteny")
+            _log_step_event("synteny", "START")
             checkpointer.record_step_running(run_id, "synteny")
             try:
                 _ensure_hit_dfs()
                 synteny.run_synteny(cfg, synteny_dir, tree_dir, scan_df, search_df, hmm_keep, force,
                                     clade_assign_dir=clade_assign_dir)
                 update_step_status(status_path, "synteny", "success")
-                append_pipeline_log(logs_dir, "SUCCESS: synteny")
+                _log_step_event("synteny", "SUCCESS")
                 checkpointer.record_step_success(run_id, "synteny")
             except Exception as exc:
                 _on_step_failure("synteny", exc)
@@ -817,12 +829,12 @@ def run_pipeline(cfg):
         else:
             checkpointer.record_step_pending(run_id, "codon")
             update_step_status(status_path, "codon", "running")
-            append_pipeline_log(logs_dir, "START: codon")
+            _log_step_event("codon", "START")
             checkpointer.record_step_running(run_id, "codon")
             try:
                 codon.run_codon(cfg, tree_dir, clipkit_dir, aln_dir, codon_dir, hmm_keep, force)
                 update_step_status(status_path, "codon", "success")
-                append_pipeline_log(logs_dir, "SUCCESS: codon")
+                _log_step_event("codon", "SUCCESS")
                 checkpointer.record_step_success(run_id, "codon")
             except Exception as exc:
                 _on_step_failure("codon", exc)
@@ -841,13 +853,13 @@ def run_pipeline(cfg):
         else:
             checkpointer.record_step_pending(run_id, "hyphy")
             update_step_status(status_path, "hyphy", "running")
-            append_pipeline_log(logs_dir, "START: hyphy")
+            _log_step_event("hyphy", "START")
             checkpointer.record_step_running(run_id, "hyphy")
             try:
                 hyphy.run_hyphy(cfg, codon_dir, tree_dir, hyphy_dir, hmm_keep, force,
                                 clade_assign_dir=clade_assign_dir)
                 update_step_status(status_path, "hyphy", "success")
-                append_pipeline_log(logs_dir, "SUCCESS: hyphy")
+                _log_step_event("hyphy", "SUCCESS")
                 checkpointer.record_step_success(run_id, "hyphy")
             except Exception as exc:
                 _on_step_failure("hyphy", exc)
@@ -866,13 +878,13 @@ def run_pipeline(cfg):
         else:
             checkpointer.record_step_pending(run_id, "score_motifs")
             update_step_status(status_path, "score_motifs", "running")
-            append_pipeline_log(logs_dir, "START: score_motifs")
+            _log_step_event("score_motifs", "START")
             checkpointer.record_step_running(run_id, "score_motifs")
             try:
                 from .tasks import score_motifs
-                score_motifs.score_motifs(cfg, fasta_dir, summary_dir, hmm_keep, force)
+                score_motifs.score_motifs(cfg, fasta_dir, summary_dir, motifs_dir, hmm_keep, force)
                 update_step_status(status_path, "score_motifs", "success")
-                append_pipeline_log(logs_dir, "SUCCESS: score_motifs")
+                _log_step_event("score_motifs", "SUCCESS")
                 checkpointer.record_step_success(run_id, "score_motifs")
             except Exception as exc:
                 _on_step_failure("score_motifs", exc)
@@ -891,14 +903,14 @@ def run_pipeline(cfg):
         else:
             checkpointer.record_step_pending(run_id, "discover_motifs")
             update_step_status(status_path, "discover_motifs", "running")
-            append_pipeline_log(logs_dir, "START: discover_motifs")
+            _log_step_event("discover_motifs", "START")
             checkpointer.record_step_running(run_id, "discover_motifs")
             try:
                 from .tasks import discover_motifs
-                discover_motifs.discover_motifs(cfg, fasta_dir, summary_dir, hmm_keep, force,
+                discover_motifs.discover_motifs(cfg, fasta_dir, summary_dir, discover_dir, hmm_keep, force,
                                          clade_assign_dir=clade_assign_dir)
                 update_step_status(status_path, "discover_motifs", "success")
-                append_pipeline_log(logs_dir, "SUCCESS: discover_motifs")
+                _log_step_event("discover_motifs", "SUCCESS")
                 checkpointer.record_step_success(run_id, "discover_motifs")
             except Exception as exc:
                 _on_step_failure("discover_motifs", exc)
