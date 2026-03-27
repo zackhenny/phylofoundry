@@ -400,6 +400,19 @@ class TestCodon:
         assert "genome2|prot_B1" in tips
         assert "genome3|prot_C1" in tips
 
+    def test_codon_target_order_keeps_per_hmm_primary(self):
+        from phylofoundry.tasks.codon import _ordered_codon_targets
+        hmm_names = _ordered_codon_targets(
+            ["HMM_A", "combined_all_hits", "HMM_B"],
+            include_combined_aux=True,
+        )
+        assert hmm_names == ["HMM_A", "HMM_B", "combined_all_hits"]
+
+    def test_hyphy_combined_mode_still_loads_per_hmm_clades(self):
+        from phylofoundry.tasks.hyphy import _clade_assignment_label_for_hmm
+        assert _clade_assignment_label_for_hmm("HMM_A") == "HMM_A"
+        assert _clade_assignment_label_for_hmm("combined_all_hits") == "combined"
+
 
 # ──── prep.py ─────────────────────────────────────────────────────────────────
 

@@ -80,6 +80,16 @@ def map_aa_id_to_cds_id(aa_id, mode="after_last_pipe"):
     return aa_id.split("|")[-1]
 
 
+def _ordered_codon_targets(tree_names, include_combined_aux=False):
+    """Return codon targets with per-HMM jobs first and combined auxiliary last."""
+    combined_hmm_name = "combined_all_hits"
+    per_hmm_names = [h for h in tree_names if h != combined_hmm_name]
+    targets = list(per_hmm_names)
+    if include_combined_aux and combined_hmm_name in tree_names:
+        targets.append(combined_hmm_name)
+    return targets
+
+
 # ---------------------------------------------------------------------------
 # pal2nal wrapper
 # ---------------------------------------------------------------------------
@@ -115,12 +125,22 @@ def run_codon(cfg, tree_dir, clipkit_dir, aln_dir, codon_dir, hmm_keep, force=Fa
     if not cds_dir:
         raise SystemExit("codon.build_codon_alignments requires inputs.cds_dir")
 
-    hmm_names = sorted([
+    discovered_tree_names = sorted([
         os.path.basename(x).replace(".treefile", "")
         for x in glob.glob(os.path.join(tree_dir, "*.treefile"))
     ])
     if hmm_keep is not None:
-        hmm_names = [h for h in hmm_names if h in hmm_keep]
+        discovered_tree_names = [h for h in discovered_tree_names if h in hmm_keep]
+
+    # Combined-tree mode is auxiliary: always keep standard per-HMM codon
+    # alignments as the primary outputs and only append the combined target.
+    include_combined_aux = (
+        cfg.get("phylo", {}).get("combined_tree", False)
+    )
+    hmm_names = _ordered_codon_targets(
+        discovered_tree_names,
+        include_combined_aux=include_combined_aux,
+    )
 
     for hmm in hmm_names:
         tree_fp = os.path.join(tree_dir, f"{hmm}.treefile")
