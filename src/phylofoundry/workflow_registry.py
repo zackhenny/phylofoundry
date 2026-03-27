@@ -412,7 +412,7 @@ REGISTRY.register(StepDefinition(
         ArtifactSpec(
             "motif_scores",
             ArtifactKind.TABLE,
-            "summary/motif_scores.tsv",
+            "motifs/motif_attention_scores.tsv",
             optional=True,
         ),
     ],
@@ -435,7 +435,7 @@ REGISTRY.register(StepDefinition(
         ArtifactSpec(
             "discovered_motifs",
             ArtifactKind.TABLE,
-            "summary/discovered_motifs.tsv",
+            "discover/discovered_motifs.tsv",
             optional=True,
         ),
     ],

@@ -419,7 +419,7 @@ def _compute_candidate_residues_for_hmm(hmm, aln_seqs, clade_df_hmm, disc_cfg, a
     pd.DataFrame(region_rows).to_csv(os.path.join(discover_dir, f"{hmm}.candidate_regions.tsv"), sep="\t", index=False)
 
 
-def discover_motifs(cfg, fasta_dir, summary_dir, hmm_keep, force=False, clade_assign_dir=None):
+def discover_motifs(cfg, fasta_dir, summary_dir, discover_dir, hmm_keep, force=False, clade_assign_dir=None):
     import glob
 
     disc_cfg = cfg.get("discover", {})
@@ -443,7 +443,8 @@ def discover_motifs(cfg, fasta_dir, summary_dir, hmm_keep, force=False, clade_as
             "embeddings.write_full_vectors: true so attention extraction is reproducible."
         )
 
-    out_fp = os.path.join(summary_dir, "discovered_motifs.tsv")
+    os.makedirs(discover_dir, exist_ok=True)
+    out_fp = os.path.join(discover_dir, "discovered_motifs.tsv")
     if os.path.exists(out_fp) and not force:
         print(f"[discover] Output exists: {out_fp}. Use --force to override.")
         return pd.read_csv(out_fp, sep="\t")
@@ -703,13 +704,12 @@ def discover_motifs(cfg, fasta_dir, summary_dir, hmm_keep, force=False, clade_as
         return None
 
     kmer_summary = pd.concat(all_discovered_motifs, ignore_index=True)
-    os.makedirs(summary_dir, exist_ok=True)
+    os.makedirs(discover_dir, exist_ok=True)
     kmer_summary.to_csv(out_fp, sep="\t", index=False)
     print(f"[discover] Wrote discovered motifs: {out_fp} ({len(kmer_summary)} k-mers)")
 
     if needs_ha:
         attention_dir = os.path.join(os.path.dirname(summary_dir), "attention")
-        discover_dir = os.path.join(os.path.dirname(summary_dir), "discover")
         align_clipkit_dir = os.path.join(os.path.dirname(summary_dir), "alignments_clipkit")
         align_dir = os.path.join(os.path.dirname(summary_dir), "alignments")
 
