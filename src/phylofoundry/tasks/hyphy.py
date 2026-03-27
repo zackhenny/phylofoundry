@@ -116,6 +116,11 @@ def _set_or_replace_arg(args, flag, value):
     return args
 
 
+def _clade_assignment_label_for_hmm(hmm):
+    """Return clade assignment label; combined tree remains auxiliary."""
+    return "combined" if hmm == "combined_all_hits" else hmm
+
+
 def _ensure_clade_test_args(test_name, base_args, relax_label_reference=True):
     args = _normalize_args(base_args)
     test_upper = str(test_name).upper()
@@ -239,12 +244,8 @@ def run_hyphy(cfg, codon_dir, tree_dir, hyphy_dir, hmm_keep, force=False, clade_
         # Load per-HMM clades if available, otherwise fall back to global with prefix filtering
         hmm_clades = None
         if use_detected_clades and load_per_hmm and clade_assign_dir:
-            # Check for combined mode
-            combined_tree = cfg.get("phylo", {}).get("combined_tree", False)
-            if combined_tree:
-                hmm_clades = load_per_hmm(clade_assign_dir, "combined")
-            else:
-                hmm_clades = load_per_hmm(clade_assign_dir, hmm)
+            label = _clade_assignment_label_for_hmm(hmm)
+            hmm_clades = load_per_hmm(clade_assign_dir, label)
 
         if hmm_clades is None and clades:
             # Fall back to global clades with prefix filtering (backward compat)
