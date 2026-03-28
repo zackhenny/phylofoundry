@@ -14,6 +14,7 @@ from .logging_utils import (
     append_pipeline_log,
     append_step_log,
     ensure_logs_dir,
+    resolve_logs_dir,
     execution_plan_path,
     initialize_step_status,
     step_status_path,
@@ -110,6 +111,12 @@ def run_pipeline(cfg):
     start_at = cfg["workflow"]["start_at"]
     stop_after = cfg["workflow"]["stop_after"]
     force = bool(cfg["workflow"]["force"])
+
+    # Determine whether this is a single-step invocation so that log files
+    # are placed directly in outdir (e.g. outdir/embed.log) instead of
+    # under outdir/logs/.  Two or more sequential steps always use the
+    # logs/ sub-directory.
+    _is_single_step = bool(start_at and stop_after and start_at == stop_after)
 
     # ── Standalone-module shortcut (--fasta_dir) ──────────────────────────
     # When a user provides an explicit per-HMM fasta_dir for a standalone
@@ -224,9 +231,16 @@ def run_pipeline(cfg):
     # ── Execution planning and logging scaffold ────────────────────────────
     # Build the plan before any work begins so that the logs/ directory and
     # status files are always present even if an early step fails.
+    # For single-step runs the log lands directly in outdir (<step>.log)
+    # rather than a sub-directory, so users can find it without navigating.
     exec_plan = build_execution_plan(cfg)
-    logs_dir = ensure_logs_dir(outdir)
-    write_execution_plan(exec_plan, execution_plan_path(logs_dir))
+    logs_dir = resolve_logs_dir(outdir, is_single_step=_is_single_step)
+    # execution_plan.json captures which steps run in a multi-step context;
+    # it is omitted for single-step invocations where the answer is trivial.
+    # step_status.tsv is always written (single or multi) because it provides
+    # a machine-readable success/failure record useful for scripting and CI.
+    if not _is_single_step:
+        write_execution_plan(exec_plan, execution_plan_path(logs_dir))
     status_path = step_status_path(logs_dir)
     initialize_step_status(exec_plan, status_path)
 
@@ -298,9 +312,11 @@ def run_pipeline(cfg):
     post_dir = input_paths.conservation_metrics_dir
     codon_dir = input_paths.codon_dir
     hyphy_dir = paths.hyphy_dir  # always write hyphy output to new outdir
-    # Embedding vectors can be large; place them in work_base when a separate
-    # working directory is configured.
-    emb_dir = os.path.join(work_base, "embeddings")
+    # Embedding vectors are always written to outdir/embeddings/ so that the
+    # output is co-located with other pipeline artifacts and is easy to find.
+    # work_base (set via output.workdir / --work_dir) is reserved for large
+    # *intermediate* files such as combined_proteomes.faa and combined.hmm.
+    emb_dir = paths.embeddings_dir
     clade_assign_dir = input_paths.clade_assign_dir
     curated_dir = input_paths.curated_dir
 
@@ -313,7 +329,8 @@ def run_pipeline(cfg):
 
     for d in paths.all_output_dirs():
         safe_mkdir(d)
-    # Ensure emb_dir exists even when it lives outside outdir
+    # emb_dir == paths.embeddings_dir which is already created by all_output_dirs()
+    # above; the explicit call below is kept as a no-op safety net.
     safe_mkdir(emb_dir)
 
     write_json(cfg, paths.resolved_config_json)

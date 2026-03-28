@@ -87,41 +87,69 @@ def _add_common_args(parser: argparse.ArgumentParser) -> None:
     """Add shared arguments used by most subparsers."""
     parser.add_argument("--config", default=None,
                         help="Path to a YAML config file (config/config.yaml) or "
-                             "legacy JSON config file")
+                             "legacy JSON config file.  Values in the file are merged "
+                             "with the built-in defaults; CLI flags take the highest "
+                             "precedence.  Run 'phylofoundry dump-config' to see the "
+                             "full annotated default config.")
     parser.add_argument("--faa_dir", default=None,
-                        help="Override inputs.faa_dir")
+                        help="Directory of per-genome protein FASTA (.faa) files, or "
+                             "path to a single .faa file.  Overrides inputs.faa_dir in "
+                             "the config.  Required for the prep step; not needed when "
+                             "running a later step that reads existing pipeline outputs.")
     parser.add_argument("--hmm_dir", default=None,
-                        help="Override inputs.hmm_input (dir or single .hmm)")
+                        help="Directory of HMM profile files (.hmm), or path to a "
+                             "single .hmm file.  Overrides inputs.hmm_input in the "
+                             "config.  Required for prep/hmmer/extract; may be omitted "
+                             "for standalone embed (--fasta_dir) or standalone phylo "
+                             "with --mafft.")
     parser.add_argument("--outdir", default=None,
-                        help="Override output.outdir")
+                        help="Output directory for all pipeline artifacts (trees, "
+                             "alignments, embeddings, logs, etc.).  Overrides "
+                             "output.outdir in the config.  When running a module "
+                             "independently this should point to an existing pipeline "
+                             "output directory so the module can find its inputs.")
+    parser.add_argument("--work_dir", default=None, dest="work_dir",
+                        metavar="WORK_DIR",
+                        help="Optional scratch directory for large *intermediate* files "
+                             "(combined_proteomes.faa, combined.hmm, DIAMOND databases). "
+                             "Keeps bulky intermediates off the main output filesystem. "
+                             "Overrides output.workdir in the config.  When not set, "
+                             "intermediate files are written to --outdir.")
     parser.add_argument("--cpu", type=int, default=None,
-                        help="Override resources.cpu")
+                        help="Number of CPU threads to use.  Overrides resources.cpu in "
+                             "the config.  Defaults to 8 (or SLURM_CPUS_PER_TASK if "
+                             "that environment variable is set).")
     parser.add_argument("--force", action="store_true",
-                        help="Override workflow.force=True (re-run all steps, "
-                             "ignore existing checkpoints)")
+                        help="Re-run all steps unconditionally, ignoring existing "
+                             "checkpoints and output files.  Overrides "
+                             "workflow.force=True.")
     # ── Resume / checkpoint flags ──────────────────────────────────────────
     parser.add_argument("--resume", action="store_true",
-                        help="Resume from an existing run in --outdir: reads the "
-                             "saved config.yaml / config.json, connects to the "
-                             "NDJSON+SQLite checkpoint, and skips steps whose "
-                             "fingerprint matches a prior successful run")
+                        help="Resume a previous run stored in --outdir: reads the "
+                             "saved config snapshot, reconnects to the checkpoint "
+                             "database, and skips steps whose content fingerprint "
+                             "matches the prior run.")
     parser.add_argument("--resume-from", dest="resume_from", default=None,
                         metavar="RUN_ID_OR_PATH",
-                        help="Explicitly specify a run ID or path to a saved "
-                             "config/checkpoint to resume from (overrides --resume)")
+                        help="Explicitly specify the run ID or directory of a prior "
+                             "run to resume from.  Overrides --resume (which auto-"
+                             "detects from --outdir).")
     parser.add_argument("--no-resume", dest="no_resume", action="store_true",
-                        help="Disable resume even if checkpoints are present in outdir")
+                        help="Disable automatic resume detection.  The pipeline starts "
+                             "fresh even if checkpoint data exists in --outdir.")
     # ── Input provenance flag ──────────────────────────────────────────────
     parser.add_argument("--input-run", dest="input_run", default=None,
                         metavar="PRIOR_OUTDIR",
-                        help="Path to a prior run's output directory.  When set, "
-                             "the current module will look for its required input "
-                             "artifacts inside PRIOR_OUTDIR instead of --outdir.  "
-                             "This enables chaining separate pipeline stages "
-                             "(e.g. phylofoundry hyphy --input-run ./results/phylo "
-                             "--outdir ./results/hyphy).  The prior run's "
-                             "config snapshot and artifact hashes are recorded in "
-                             "the new run's provenance.")
+                        help="Read input artifacts from a *different* pipeline output "
+                             "directory (PRIOR_OUTDIR) instead of --outdir.  Use this "
+                             "to chain separate pipeline stages: run the first stage "
+                             "with its own --outdir, then pass that directory as "
+                             "--input-run to the next stage.  Example: "
+                             "'phylofoundry phylo --outdir ./phylo_out' followed by "
+                             "'phylofoundry hyphy --input-run ./phylo_out "
+                             "--outdir ./hyphy_out'.  The prior run's config snapshot "
+                             "and artifact checksums are recorded in the new run's "
+                             "provenance.")
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -199,43 +227,111 @@ def _build_parser() -> argparse.ArgumentParser:
         "prep",
         help="Combine FAA and HMM inputs into pipeline inputs",
         description=(
-            "Combines all input FAA proteome files into a single combined_proteomes.faa "
-            "and all HMM profiles into a combined.hmm database."
+            "Combines all input FAA proteome files into a single\n"
+            "combined_proteomes.faa and all HMM profiles into a combined.hmm\n"
+            "database (including running hmmpress).\n\n"
+            "TYPICAL USE\n"
+            "-----------\n"
+            "  phylofoundry prep --faa_dir ./proteomes --hmm_dir ./markers \\\n"
+            "                    --outdir ./results\n\n"
+            "  Outputs written to --outdir:\n"
+            "    combined_proteomes.faa   concatenated protein FASTA\n"
+            "    combined.hmm             pressed HMM database\n\n"
+            "USING A CONFIG FILE\n"
+            "-------------------\n"
+            "  phylofoundry prep --config config/config.yaml --outdir ./results\n\n"
+            "  Relevant config keys: inputs.faa_dir, inputs.hmm_input,\n"
+            "  output.outdir, output.workdir (for large intermediate files),\n"
+            "  prep.cleanup_combined_faa\n\n"
+            "SKIPPING PREP\n"
+            "-------------\n"
+            "  Pass --combined_faa to supply a pre-built combined FASTA and skip\n"
+            "  this step entirely:\n"
+            "    phylofoundry hmmer --combined_faa ./combined.faa --outdir ./results"
         ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     _add_common_args(p_prep)
     p_prep.add_argument("--combined_faa", default=None,
-                        help="Path to a prebuilt combined proteomes FASTA "
-                             "(overrides inputs.combined_faa; skips prep build)")
+                        help="Path to a pre-built combined proteomes FASTA.  When "
+                             "supplied, the prep build step is skipped and this file "
+                             "is used directly.  Overrides inputs.combined_faa in the "
+                             "config.")
     p_hmmer = sub.add_parser(
         "hmmer",
         help="Run HMM scan/search (or DIAMOND blastp) against proteomes",
         description=(
-            "Runs hmmscan and/or hmmsearch to find competitive HMM hits. "
-            "Use --diamond_mode to run DIAMOND blastp instead."
+            "Runs hmmscan (per-genome) and hmmsearch (per-HMM) to identify\n"
+            "competitive HMM hits across all input proteomes, then builds a\n"
+            "filtered best-hits table.\n\n"
+            "TYPICAL USE (after prep)\n"
+            "------------------------\n"
+            "  phylofoundry hmmer --outdir ./results\n\n"
+            "  Expects in --outdir from a previous prep run:\n"
+            "    combined_proteomes.faa\n"
+            "    combined.hmm\n\n"
+            "  Outputs written to --outdir:\n"
+            "    hmmscan_tbl/           per-genome domain hit tables\n"
+            "    hmmsearch_tbl/         per-HMM domain hit tables\n"
+            "    summary/best_hits.competitive.tsv\n\n"
+            "SKIPPING PREP (pre-built inputs)\n"
+            "--------------------------------\n"
+            "  phylofoundry hmmer --combined_faa ./combined.faa \\\n"
+            "                     --hmm_dir ./markers --outdir ./results\n\n"
+            "DIAMOND MODE (alternative to HMMER)\n"
+            "------------------------------------\n"
+            "  phylofoundry hmmer --diamond_mode \\\n"
+            "                     --faa_dir ./proteomes \\\n"
+            "                     --diamond_query ./queries.faa \\\n"
+            "                     --outdir ./results\n\n"
+            "USING A CONFIG FILE\n"
+            "-------------------\n"
+            "  phylofoundry hmmer --config config/config.yaml --outdir ./results\n\n"
+            "  Relevant config keys: inputs.faa_dir, inputs.hmm_input,\n"
+            "  inputs.combined_faa, output.outdir, hmmer.run_scan,\n"
+            "  hmmer.run_search, filtering.*, diamond.*"
         ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     _add_common_args(p_hmmer)
     p_hmmer.add_argument("--diamond_query", default=None,
-                         help="Override inputs.diamond_query "
-                              "(FASTA file/dir for DIAMOND blastp)")
+                         help="FASTA file or directory of FASTA files to use as "
+                              "DIAMOND blastp queries.  Only required in --diamond_mode. "
+                              "Overrides inputs.diamond_query in the config.")
     p_hmmer.add_argument("--diamond_mode", action="store_true",
-                         help="Enable DIAMOND search mode")
+                         help="Run DIAMOND blastp instead of HMMER.  Requires "
+                              "--diamond_query (protein FASTA) and --faa_dir (target "
+                              "proteomes).  Use --diamond_db to skip the makedb step.")
     p_hmmer.add_argument("--diamond_db", default=None,
-                         help="Path to a prebuilt DIAMOND .dmnd database "
-                              "(overrides inputs.diamond_db; skips makedb step)")
+                         help="Path to a pre-built DIAMOND .dmnd database file. "
+                              "Skips the makedb step.  Overrides inputs.diamond_db.")
     p_hmmer.add_argument("--combined_faa", default=None,
-                         help="Path to a prebuilt combined proteomes FASTA "
-                              "(overrides inputs.combined_faa)")
+                         help="Path to a pre-built combined proteomes FASTA.  Skips "
+                              "the prep build step.  Overrides inputs.combined_faa.")
 
     # ── extract ────────────────────────────────────────────────────────────
     p_extract = sub.add_parser(
         "extract",
         help="Extract sequences for HMM hits into per-HMM FASTA files",
         description=(
-            "Reads HMM hit tables and extracts the matching protein sequences "
-            "from the combined proteome into individual per-HMM FASTA files."
+            "Reads the filtered best-hits table from the hmmer step and\n"
+            "extracts the matching protein sequences from the combined proteome\n"
+            "into individual per-HMM FASTA files under fasta_per_hmm/.\n\n"
+            "TYPICAL USE (after hmmer)\n"
+            "-------------------------\n"
+            "  phylofoundry extract --outdir ./results\n\n"
+            "  Expects in --outdir from a previous hmmer run:\n"
+            "    combined_proteomes.faa\n"
+            "    summary/best_hits.competitive.tsv\n\n"
+            "  Outputs written to --outdir:\n"
+            "    fasta_per_hmm/<HMM_NAME>.faa   one FASTA per HMM family\n\n"
+            "USING A CONFIG FILE\n"
+            "-------------------\n"
+            "  phylofoundry extract --config config/config.yaml --outdir ./results\n\n"
+            "  Relevant config keys: inputs.faa_dir, output.outdir,\n"
+            "  filtering.global_min_score, filtering.min_coverage"
         ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     _add_common_args(p_extract)
 
@@ -244,58 +340,147 @@ def _build_parser() -> argparse.ArgumentParser:
         "embed",
         help="Generate protein language model embeddings (ESM-2 or HuggingFace)",
         description=(
-            "Generates per-sequence embeddings using ESM-2 (default) or any "
-            "HuggingFace transformer model, then runs PCA/UMAP and optional "
-            "HDBSCAN clustering."
+            "Generates per-sequence embeddings using ESM-2 (default) or any\n"
+            "HuggingFace transformer model.  Optionally runs PCA dimensionality\n"
+            "reduction, UMAP projection, and HDBSCAN clustering.\n\n"
+            "TYPICAL USE (after extract in a pipeline run)\n"
+            "---------------------------------------------\n"
+            "  phylofoundry embed --outdir ./results --cpu 8\n\n"
+            "  Expects per-HMM FASTA files in --outdir/fasta_per_hmm/.\n"
+            "  Outputs written to --outdir/embeddings/:\n"
+            "    <HMM>.embeddings.npy     raw embedding vectors\n"
+            "    <HMM>.pca.tsv            PCA coordinates + metadata\n"
+            "    <HMM>.umap.tsv           UMAP coordinates\n"
+            "    <HMM>.umap.png           UMAP scatter plot\n"
+            "    <HMM>.knn.tsv            k-NN distance table\n"
+            "    <HMM>.dispersion.tsv     per-cluster dispersion metrics\n\n"
+            "STANDALONE USE (skipping prep/hmmer/extract)\n"
+            "--------------------------------------------\n"
+            "  phylofoundry embed --fasta_dir ./my_fastas --outdir ./embed_out \\\n"
+            "                     --model esm2_t12_35M_UR50D --device cuda\n\n"
+            "  --fasta_dir should contain one .faa file per gene family.\n"
+            "  Embeddings land in --outdir/embeddings/.\n\n"
+            "CHAINING FROM A PRIOR PIPELINE RUN\n"
+            "-----------------------------------\n"
+            "  phylofoundry embed --input-run ./prior_pipeline_out \\\n"
+            "                     --outdir ./embed_out --cpu 16\n\n"
+            "  Reads fasta_per_hmm/ from the prior run directory.\n\n"
+            "USING A CONFIG FILE\n"
+            "-------------------\n"
+            "  phylofoundry embed --config config/config.yaml --outdir ./results\n\n"
+            "  Relevant config keys:\n"
+            "    embeddings.enabled        must be true (auto-set when run standalone)\n"
+            "    embeddings.backend        'esm' (default) or 'transformers'\n"
+            "    embeddings.model          model name/path (e.g. esm2_t33_650M_UR50D)\n"
+            "    embeddings.device         'cuda' or 'cpu'\n"
+            "    embeddings.batch_size     sequences per inference batch\n"
+            "    embeddings.repr_layer     ESM-2 layer to extract (default: last)\n"
+            "    embeddings.pca_components number of PCA components\n"
+            "    embeddings.cluster_embeddings  run HDBSCAN clustering\n"
+            "    embeddings.hdbscan_min_cluster_size\n"
+            "    output.outdir, resources.cpu"
         ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     _add_common_args(p_embed)
     p_embed.add_argument("--model", default=None,
-                         help="Model name or path "
-                              "(overrides embeddings.model, "
-                              "e.g. esm2_t6_8M_UR50D)")
+                         help="ESM-2 or HuggingFace model name or path.  Examples: "
+                              "esm2_t6_8M_UR50D, esm2_t12_35M_UR50D, "
+                              "esm2_t33_650M_UR50D (default), "
+                              "facebook/esm2_t6_8M_UR50D.  "
+                              "Overrides embeddings.model in the config.")
     p_embed.add_argument("--device", default=None,
-                         help="Compute device: 'cuda' or 'cpu' "
-                              "(overrides embeddings.device)")
+                         help="Compute device for inference: 'cuda' (GPU, recommended) "
+                              "or 'cpu'.  Defaults to 'cuda' when a GPU is available. "
+                              "Overrides embeddings.device in the config.")
     p_embed.add_argument("--batch_size", type=int, default=None,
-                         help="Batch size for embedding inference "
-                              "(overrides embeddings.batch_size)")
+                         help="Number of sequences per inference batch.  Larger values "
+                              "are faster on GPU but use more memory.  Typical range: "
+                              "4–32.  Overrides embeddings.batch_size in the config.")
     p_embed.add_argument("--backend", default=None,
                          choices=["esm", "transformers"],
-                         help="Embedding backend "
-                              "(overrides embeddings.backend)")
+                         help="Embedding backend.  'esm' uses the fair-esm library "
+                              "(default, requires 'esm' Python package).  'transformers' "
+                              "uses HuggingFace Transformers and supports any "
+                              "AutoModel-compatible protein LM.  Overrides "
+                              "embeddings.backend in the config.")
     p_embed.add_argument("--fasta_dir", default=None,
-                         help="Directory of per-HMM .faa files to embed directly "
-                              "(alternative to --input-run or a previous --outdir run; "
-                              "skips prep/hmmer/extract pipeline stages)")
+                         help="Directory containing per-HMM .faa files to embed "
+                              "directly, bypassing the prep/hmmer/extract pipeline "
+                              "stages.  Each file should be named <HMM_NAME>.faa.  "
+                              "Use this when you already have per-family FASTAs and "
+                              "do not have (or need) a full prior pipeline run. "
+                              "Overrides inputs.fasta_dir in the config.")
 
     # ── phylo ──────────────────────────────────────────────────────────────
     p_phylo = sub.add_parser(
         "phylo",
         help="Run multiple sequence alignment and IQ-TREE phylogenetic inference",
         description=(
-            "Aligns sequences with hmmalign (or MAFFT), trims with ClipKit, "
-            "and infers maximum-likelihood trees with IQ-TREE."
+            "Aligns sequences with hmmalign (or MAFFT), trims with ClipKit,\n"
+            "and infers maximum-likelihood trees with IQ-TREE.\n\n"
+            "TYPICAL USE (after extract in a pipeline run)\n"
+            "---------------------------------------------\n"
+            "  phylofoundry phylo --outdir ./results --cpu 16\n\n"
+            "  Expects per-HMM FASTA files in --outdir/fasta_per_hmm/.\n"
+            "  Reads HMM profiles from inputs.hmm_input (needed for hmmalign).\n"
+            "  Outputs written to --outdir:\n"
+            "    alignments_hmm/          raw hmmalign/MAFFT alignments\n"
+            "    alignments_clipkit/      ClipKit-trimmed alignments\n"
+            "    trees_iqtree/            IQ-TREE .treefile outputs\n\n"
+            "STANDALONE USE (skipping prep/hmmer/extract)\n"
+            "--------------------------------------------\n"
+            "  # With hmmalign (requires HMM profiles):\n"
+            "  phylofoundry phylo --fasta_dir ./my_fastas \\\n"
+            "                     --hmm_dir ./markers \\\n"
+            "                     --outdir ./phylo_out\n\n"
+            "  # With MAFFT (no HMM profiles needed):\n"
+            "  phylofoundry phylo --fasta_dir ./my_fastas --mafft \\\n"
+            "                     --outdir ./phylo_out\n\n"
+            "  --fasta_dir should contain one .faa file per gene family.\n\n"
+            "CHAINING FROM A PRIOR PIPELINE RUN\n"
+            "-----------------------------------\n"
+            "  phylofoundry phylo --input-run ./prior_pipeline_out \\\n"
+            "                     --outdir ./phylo_out --cpu 16\n\n"
+            "USING A CONFIG FILE\n"
+            "-------------------\n"
+            "  phylofoundry phylo --config config/config.yaml --outdir ./results\n\n"
+            "  Relevant config keys:\n"
+            "    inputs.fasta_dir    per-HMM FASTA directory (for standalone use)\n"
+            "    inputs.hmm_input    HMM profiles directory (for hmmalign)\n"
+            "    phylo.mafft         use MAFFT instead of hmmalign\n"
+            "    phylo.mafft_mode    MAFFT alignment mode (auto, linsi, etc.)\n"
+            "    phylo.iqtree_bin    IQ-TREE binary (auto-detected if not set)\n"
+            "    phylo.iq_boot       bootstrap replicates (default: 1000)\n"
+            "    phylo.combined_tree build one tree from all HMMs combined\n"
+            "    phylo.skip_clipkit  skip ClipKit trimming\n"
+            "    output.outdir, resources.cpu"
         ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     _add_common_args(p_phylo)
     p_phylo.add_argument("--mafft", action="store_true",
-                         help="Use MAFFT alignment instead of hmmalign "
-                              "(overrides phylo.mafft)")
+                         help="Use MAFFT for multiple sequence alignment instead of "
+                              "hmmalign.  Required when --hmm_dir is not available.  "
+                              "Overrides phylo.mafft in the config.")
     p_phylo.add_argument("--combined", action="store_true",
-                         help="Build a single combined tree from all HMMs "
-                              "(overrides phylo.combined_tree)")
+                         help="Build a single combined tree from all HMM families "
+                              "concatenated.  Overrides phylo.combined_tree in the "
+                              "config.")
     p_phylo.add_argument("--iqtree_bin", default=None,
-                         help="IQ-TREE binary name or path "
-                              "(overrides phylo.iqtree_bin)")
+                         help="IQ-TREE executable name or full path (e.g. iqtree2, "
+                              "iqtree3, /opt/iqtree/bin/iqtree).  Auto-detected from "
+                              "PATH if not set.  Overrides phylo.iqtree_bin.")
     p_phylo.add_argument("--iq_boot", type=int, default=None,
-                         help="IQ-TREE bootstrap replicates "
-                              "(overrides phylo.iq_boot)")
+                         help="Number of ultrafast bootstrap replicates for IQ-TREE "
+                              "(e.g. 1000).  Set to 0 to disable bootstrapping.  "
+                              "Overrides phylo.iq_boot in the config.")
     p_phylo.add_argument("--fasta_dir", default=None,
-                         help="Directory of per-HMM .faa files to run trees on "
-                              "(alternative to --input-run or a previous --outdir run; "
-                              "skips prep/hmmer/extract pipeline stages; "
-                              "combine with --mafft to avoid needing --hmm_dir)")
+                         help="Directory containing per-HMM .faa files.  Use this to "
+                              "run phylo independently without a prior pipeline run.  "
+                              "Each file should be named <HMM_NAME>.faa.  Combine "
+                              "with --mafft to skip the need for --hmm_dir.  "
+                              "Overrides inputs.fasta_dir in the config.")
 
     # ── curate ─────────────────────────────────────────────────────────────
     p_curate = sub.add_parser(
@@ -303,9 +488,20 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Curate sequences using TreeShrink outlier pruning and/or ESM filtering",
         description=(
             "Identifies and removes outlier sequences by branch-length "
-            "(TreeShrink) and/or ESM-embedding distance. Writes to curated/ "
-            "overlay without overwriting raw pipeline outputs."
+            "(TreeShrink) and/or ESM-embedding distance. Writes curated overlays "
+            "to curated/ without overwriting the raw pipeline outputs.\n\n"
+            "TYPICAL USE (after phylo)\n"
+            "-------------------------\n"
+            "  phylofoundry curate --outdir ./results\n\n"
+            "  Expects in --outdir: trees_iqtree/, fasta_per_hmm/,\n"
+            "  alignments_clipkit/, and (optionally) embeddings/.\n\n"
+            "USING A CONFIG FILE\n"
+            "-------------------\n"
+            "  phylofoundry curate --config config/config.yaml --outdir ./results\n\n"
+            "  Relevant config keys: curate.enabled, curate.use_treeshrink,\n"
+            "  curate.use_esm_filter, output.outdir"
         ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     _add_common_args(p_curate)
 
@@ -314,63 +510,126 @@ def _build_parser() -> argparse.ArgumentParser:
         "taxonomy",
         help="Integrate taxonomy from GTDB-Tk output or a custom genome→lineage TSV",
         description=(
-            "Loads taxonomy from a GTDB-Tk summary directory "
-            "(inputs.gtdb_dir) or a custom TSV (inputs.taxonomy_file) "
-            "and annotates best_hits tables."
+            "Loads taxonomy from a GTDB-Tk summary directory\n"
+            "(inputs.gtdb_dir) or a custom TSV (inputs.taxonomy_file) and\n"
+            "annotates the best_hits table with lineage information.\n\n"
+            "TYPICAL USE (after hmmer)\n"
+            "-------------------------\n"
+            "  phylofoundry taxonomy --outdir ./results \\\n"
+            "                        --gtdb_dir ./gtdbtk_output\n\n"
+            "  Outputs written to --outdir:\n"
+            "    summary/best_hits.with_taxonomy.tsv\n\n"
+            "CUSTOM TAXONOMY FILE\n"
+            "--------------------\n"
+            "  phylofoundry taxonomy --outdir ./results \\\n"
+            "    --taxonomy_file ./my_taxonomy.tsv\n\n"
+            "  The TSV must have columns: genome (genome filename/ID) and\n"
+            "  lineage (semicolon-separated rank string).\n\n"
+            "USING A CONFIG FILE\n"
+            "-------------------\n"
+            "  phylofoundry taxonomy --config config/config.yaml --outdir ./results\n\n"
+            "  Relevant config keys: inputs.gtdb_dir, inputs.taxonomy_file,\n"
+            "  inputs.globdb_taxonomy_file, taxonomy_integrate.enabled,\n"
+            "  output.outdir"
         ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     _add_common_args(p_tax)
     p_tax.add_argument("--gtdb_dir", default=None,
-                       help="Override inputs.gtdb_dir")
+                       help="Path to a GTDB-Tk output directory (contains "
+                            "gtdbtk.bac120.summary.tsv or similar).  Overrides "
+                            "inputs.gtdb_dir in the config.")
     p_tax.add_argument("--taxonomy_file", default=None,
-                       help="Override inputs.taxonomy_file "
-                            "(TSV with columns: genome, lineage)")
+                       help="Path to a custom two-column TSV with columns 'genome' "
+                            "and 'lineage' (semicolon-separated GTDB-style ranks).  "
+                            "Overrides inputs.taxonomy_file in the config.")
     p_tax.add_argument("--globdb_taxonomy", default=None,
-                       help="Path to a GlobDB-style headerless taxonomy TSV "
-                            "(col1=genome_id, col2=GTDB taxonomy; overrides "
-                            "inputs.globdb_taxonomy_file)")
+                       help="Path to a GlobDB-style headerless TSV (col1=genome_id, "
+                            "col2=GTDB taxonomy string).  Overrides "
+                            "inputs.globdb_taxonomy_file in the config.")
 
     # ── conservation ───────────────────────────────────────────────────────
     p_cons = sub.add_parser(
         "conservation",
         help="Compute per-site conservation scores and KL divergence",
         description=(
-            "Uses scikit-bio to compute per-column conservation metrics and "
-            "Jensen-Shannon / KL divergence between user-specified clade groups."
+            "Uses scikit-bio to compute per-column conservation scores and\n"
+            "Jensen-Shannon / KL divergence between user-specified clade groups.\n\n"
+            "TYPICAL USE (after phylo)\n"
+            "-------------------------\n"
+            "  phylofoundry conservation --outdir ./results\n\n"
+            "  Expects ClipKit-trimmed alignments in\n"
+            "  --outdir/alignments_clipkit/.\n"
+            "  Outputs written to --outdir/summary/post_scikitbio/.\n\n"
+            "USING A CONFIG FILE\n"
+            "-------------------\n"
+            "  phylofoundry conservation --config config/config.yaml \\\n"
+            "                            --outdir ./results\n\n"
+            "  Relevant config keys: conservation_metrics.enabled,\n"
+            "  conservation_metrics.clades_tsv, output.outdir"
         ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     _add_common_args(p_cons)
     p_cons.add_argument("--clades_tsv", default=None,
-                        help="Path to clade assignment TSV "
-                             "(overrides conservation_metrics.clades_tsv)")
+                        help="Path to a clade assignment TSV (tab-separated, columns: "
+                             "protein_id, clade).  Used to compute per-clade KL/JS "
+                             "divergence.  Overrides conservation_metrics.clades_tsv.")
 
     # ── detect-clades ──────────────────────────────────────────────────────
     p_dc = sub.add_parser(
         "detect-clades",
         help="Detect clades via taxonomy, TreeCluster, or tree+embedding",
         description=(
-            "Assigns tip labels to clades using one of three strategies: "
-            "GTDB taxonomy rank, TreeCluster branch-length thresholding, "
-            "or tree+embedding joint analysis."
+            "Assigns protein sequences to clades using one of three strategies:\n"
+            "  taxonomy    — GTDB rank-based grouping from taxonomy_integrate output\n"
+            "  treecluster — branch-length thresholding via TreeCluster\n"
+            "  tree_embed  — joint tree + embedding clustering\n\n"
+            "TYPICAL USE (after phylo and taxonomy)\n"
+            "--------------------------------------\n"
+            "  phylofoundry detect-clades --outdir ./results\n\n"
+            "  Outputs written to --outdir:\n"
+            "    clade_assignments/<HMM>.tsv   per-HMM clade assignment tables\n"
+            "    summary/detected_clades.tsv   combined clade table\n\n"
+            "USING A CONFIG FILE\n"
+            "-------------------\n"
+            "  phylofoundry detect-clades --config config/config.yaml \\\n"
+            "                             --outdir ./results\n\n"
+            "  Relevant config keys: detect_clades.enabled,\n"
+            "  detect_clades.detect_method, output.outdir"
         ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     _add_common_args(p_dc)
     p_dc.add_argument("--detect_method", default=None,
                       choices=["taxonomy", "treecluster", "tree_embed"],
-                      help="Clade detection method "
-                           "(overrides detect_clades.detect_method)")
+                      help="Clade detection method.  'taxonomy' requires prior "
+                           "taxonomy_integrate output.  'treecluster' requires trees "
+                           "in trees_iqtree/.  'tree_embed' requires both trees and "
+                           "embeddings.  Overrides detect_clades.detect_method.")
 
     # ── aa-composition ─────────────────────────────────────────────────────
     p_aac = sub.add_parser(
         "aa-composition",
         help="Compute per-gene amino acid composition and comparative statistics",
         description=(
-            "Computes per-gene amino acid fractional composition and biochemical "
-            "metrics (Zc, GRAVY, nH2O, pI, S/N content) for all selected-gene "
-            "hits, optionally runs clade-level Kruskal-Wallis + BH-FDR tests, "
-            "and generates boxplots and heatmaps.  Outputs are written to "
-            "summary/aa_composition/."
+            "Computes per-gene amino acid fractional composition and biochemical\n"
+            "metrics (Zc, GRAVY, nH2O, pI, S/N ratio) for all HMM-hit proteins,\n"
+            "optionally runs clade-level Kruskal-Wallis + Benjamini-Hochberg FDR\n"
+            "tests, and generates boxplots and heatmaps.\n\n"
+            "TYPICAL USE (after hmmer/extract)\n"
+            "---------------------------------\n"
+            "  phylofoundry aa-composition --outdir ./results\n\n"
+            "  Outputs written to --outdir/summary/aa_composition/.\n\n"
+            "USING A CONFIG FILE\n"
+            "-------------------\n"
+            "  phylofoundry aa-composition --config config/config.yaml \\\n"
+            "                              --outdir ./results\n\n"
+            "  Relevant config keys: aa_composition.enabled,\n"
+            "  aa_composition.generate_plots, aa_composition.compute_pi,\n"
+            "  output.outdir"
         ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     _add_common_args(p_aac)
     p_aac.add_argument("--no_plots", action="store_true",
@@ -385,10 +644,19 @@ def _build_parser() -> argparse.ArgumentParser:
         "post",
         help="Run legacy post-processing (conservation + clade detection combined)",
         description=(
-            "Backward-compatibility shim that runs conservation metrics and "
-            "clade detection in one step. Prefer 'conservation' and "
-            "'detect-clades' for new workflows."
+            "Backward-compatibility shim that runs conservation metrics and\n"
+            "clade detection in a single step.\n\n"
+            "NOTE: For new workflows, prefer the dedicated 'conservation' and\n"
+            "'detect-clades' subcommands which offer finer control.\n\n"
+            "TYPICAL USE (after phylo)\n"
+            "-------------------------\n"
+            "  phylofoundry post --outdir ./results\n\n"
+            "USING A CONFIG FILE\n"
+            "-------------------\n"
+            "  phylofoundry post --config config/config.yaml --outdir ./results\n\n"
+            "  Relevant config keys: post.enabled, post.clades_tsv, output.outdir"
         ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     _add_common_args(p_post)
 
@@ -397,72 +665,150 @@ def _build_parser() -> argparse.ArgumentParser:
         "synteny",
         help="Visualise synteny context around HMM hits",
         description=(
-            "Extracts gene neighbourhoods around HMM hits from GenBank/GFF "
-            "files and plots synteny tracks using clinker or pygenomeviz."
+            "Extracts gene neighbourhoods around HMM hits from GenBank (.gbk)\n"
+            "or GFF3 annotation files and generates synteny track plots using\n"
+            "clinker or pygenomeviz.\n\n"
+            "TYPICAL USE (after hmmer)\n"
+            "-------------------------\n"
+            "  phylofoundry synteny --outdir ./results \\\n"
+            "                       --gbk_dir ./genbank_files\n\n"
+            "  Outputs written to --outdir.\n\n"
+            "USING A CONFIG FILE\n"
+            "-------------------\n"
+            "  phylofoundry synteny --config config/config.yaml --outdir ./results\n\n"
+            "  Relevant config keys: synteny.enabled, synteny.gbk_dir,\n"
+            "  synteny.gff_dir, synteny.window_genes, synteny.genome_fasta_dir,\n"
+            "  synteny.protein_id_field, synteny.gene_label_field, output.outdir"
         ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     _add_common_args(p_syn)
     p_syn.add_argument("--gbk_dir", default=None,
-                       help="Override synteny.gbk_dir "
-                            "(directory of GenBank files)")
+                       help="Directory of GenBank (.gbk/.gbff) annotation files, one "
+                            "per genome.  Used to extract gene neighbourhood windows "
+                            "around HMM hits.  Overrides synteny.gbk_dir in the config.")
     p_syn.add_argument("--gff_dir", default=None,
-                       help="Override synteny.gff_dir "
-                            "(directory of GFF3 files)")
+                       help="Directory of GFF3 annotation files.  Alternative to "
+                            "--gbk_dir; requires --faa_dir (or genome FASTAs) to "
+                            "resolve sequences.  Overrides synteny.gff_dir in the "
+                            "config.")
 
     # ── codon ──────────────────────────────────────────────────────────────
     p_codon = sub.add_parser(
         "codon",
         help="Build codon-aware alignments with pal2nal",
         description=(
-            "Converts protein alignments to codon (nucleotide) alignments "
-            "using pal2nal. Requires nucleotide CDS sequences in inputs.cds_dir."
+            "Converts protein alignments to codon-aware nucleotide alignments\n"
+            "using pal2nal.  Requires protein alignments from the phylo step and\n"
+            "nucleotide CDS sequences.\n\n"
+            "TYPICAL USE (after phylo)\n"
+            "-------------------------\n"
+            "  phylofoundry codon --outdir ./results\n\n"
+            "  Expects in --outdir: alignments_clipkit/ (protein alignments).\n"
+            "  Requires inputs.cds_dir (CDS nucleotide sequences in FASTA format).\n"
+            "  Outputs written to --outdir/codon_alignments/.\n\n"
+            "CHAINING FROM A PRIOR PIPELINE RUN\n"
+            "-----------------------------------\n"
+            "  phylofoundry codon --input-run ./phylo_out --outdir ./codon_out\n\n"
+            "USING A CONFIG FILE\n"
+            "-------------------\n"
+            "  phylofoundry codon --config config/config.yaml --outdir ./results\n\n"
+            "  Relevant config keys: codon.enabled, codon.build_codon_alignments,\n"
+            "  codon.cds_id_mode, codon.pal2nal_cmd, inputs.cds_dir, output.outdir"
         ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     _add_common_args(p_codon)
     p_codon.add_argument("--pal2nal_cmd", default=None,
-                         help="pal2nal command name or path "
-                              "(overrides codon.pal2nal_cmd)")
+                         help="Name or full path to the pal2nal.pl script "
+                              "(e.g. pal2nal.pl, /opt/pal2nal/pal2nal.pl).  "
+                              "Overrides codon.pal2nal_cmd in the config.")
 
     # ── hyphy ──────────────────────────────────────────────────────────────
     p_hyphy = sub.add_parser(
         "hyphy",
         help="Run HyPhy selection tests (RELAX, aBSREL, MEME)",
         description=(
-            "Runs HyPhy molecular-evolution tests on codon alignments. "
-            "Supports clade-aware labelling driven by detect-clades output."
+            "Runs HyPhy molecular-evolution tests on codon alignments to detect\n"
+            "sites or branches under positive/relaxed selection.\n\n"
+            "TYPICAL USE (after codon and detect-clades)\n"
+            "-------------------------------------------\n"
+            "  phylofoundry hyphy --outdir ./results\n\n"
+            "  Expects in --outdir: codon_alignments/, trees_iqtree/,\n"
+            "  and (optionally) clade_assignments/ for clade-aware tests.\n"
+            "  Outputs written to --outdir/summary/hyphy/.\n\n"
+            "CHAINING FROM A PRIOR PIPELINE RUN\n"
+            "-----------------------------------\n"
+            "  phylofoundry hyphy --input-run ./prior_run --outdir ./hyphy_out\n\n"
+            "USING A CONFIG FILE\n"
+            "-------------------\n"
+            "  phylofoundry hyphy --config config/config.yaml --outdir ./results\n\n"
+            "  Relevant config keys: hyphy.enabled, hyphy.run_hyphy,\n"
+            "  hyphy.hyphy_bin, hyphy.hyphy_tests (RELAX,aBSREL,MEME),\n"
+            "  hyphy.use_detected_clades, output.outdir"
         ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     _add_common_args(p_hyphy)
     p_hyphy.add_argument("--hyphy_bin", default=None,
-                         help="HyPhy binary name or path "
-                              "(overrides hyphy.hyphy_bin)")
+                         help="HyPhy executable name or full path (e.g. hyphy, "
+                              "/usr/local/bin/hyphy).  Overrides hyphy.hyphy_bin.")
     p_hyphy.add_argument("--hyphy_tests", default=None,
-                         help="Comma-separated HyPhy tests to run "
-                              "(overrides hyphy.hyphy_tests, "
-                              "e.g. 'RELAX,aBSREL,MEME')")
+                         help="Comma-separated list of HyPhy tests to run.  Supported "
+                              "values: RELAX, aBSREL, MEME.  Example: 'RELAX,MEME'.  "
+                              "Overrides hyphy.hyphy_tests in the config.")
 
     # ── score-motifs ───────────────────────────────────────────────────────
     p_sm = sub.add_parser(
         "score-motifs",
         help="Score known motifs using ESM-2 attention weights",
         description=(
-            "Quantifies structural importance of user-supplied sequence motifs "
-            "by aggregating ESM-2 attention scores at the motif positions."
+            "Quantifies the structural importance of user-supplied sequence\n"
+            "motifs by aggregating ESM-2 attention scores at the motif positions\n"
+            "across all sequences.\n\n"
+            "TYPICAL USE (after embed)\n"
+            "-------------------------\n"
+            "  phylofoundry score-motifs --outdir ./results \\\n"
+            "                            --motifs 'HPEVY,HPEVF'\n\n"
+            "  Expects embeddings in --outdir/embeddings/ and per-HMM FASTAs in\n"
+            "  --outdir/fasta_per_hmm/.  Outputs written to --outdir/motifs/.\n\n"
+            "USING A CONFIG FILE\n"
+            "-------------------\n"
+            "  phylofoundry score-motifs --config config/config.yaml \\\n"
+            "                            --outdir ./results\n\n"
+            "  Relevant config keys: motifs.enabled, motifs.motif_list,\n"
+            "  motifs.attention_layers, embeddings.model, output.outdir"
         ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     _add_common_args(p_sm)
     p_sm.add_argument("--motifs", default=None,
-                      help="Comma-separated motif list to score "
-                           "(e.g. 'HPEVY,HPEVF')")
+                      help="Comma-separated list of amino acid motifs to score "
+                           "(e.g. 'HPEVY,HPEVF').  Overrides motifs.motif_list "
+                           "in the config.")
 
     # ── discover-motifs ────────────────────────────────────────────────────
     p_dm = sub.add_parser(
         "discover-motifs",
         help="Discover novel motifs using ESM-2 attention and k-mer analysis",
         description=(
-            "Compares attention profiles across HDBSCAN clades to identify "
-            "clade-specific high-attention sequence regions (novel motifs)."
+            "Discovers clade-specific sequence motifs by comparing ESM-2\n"
+            "attention profiles and enriched k-mers across HDBSCAN-defined\n"
+            "clades.\n\n"
+            "TYPICAL USE (after embed)\n"
+            "-------------------------\n"
+            "  phylofoundry discover-motifs --outdir ./results\n\n"
+            "  Expects embeddings in --outdir/embeddings/ and per-HMM FASTAs in\n"
+            "  --outdir/fasta_per_hmm/.  Outputs written to --outdir/discover/.\n\n"
+            "USING A CONFIG FILE\n"
+            "-------------------\n"
+            "  phylofoundry discover-motifs --config config/config.yaml \\\n"
+            "                               --outdir ./results\n\n"
+            "  Relevant config keys: discover.enabled, discover.standard_clade,\n"
+            "  discover.novel_clade, discover.kmer_size, discover.top_n_peaks,\n"
+            "  embeddings.model, output.outdir"
         ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     _add_common_args(p_dm)
 
