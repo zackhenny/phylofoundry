@@ -96,6 +96,7 @@ def worker_phylo(args_pack):
         subprocess.run(iq_cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     except subprocess.CalledProcessError as e:
         print(f"[phylo] warning: IQ-TREE failed for {hmm_name}: {e}", file=os.sys.stderr)
+        return None
 
     return hmm_name
 
