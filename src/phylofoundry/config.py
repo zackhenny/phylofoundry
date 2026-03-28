@@ -86,6 +86,31 @@ def validate_config(cfg: dict):
     prebuilt_combined_faa = cfg["inputs"].get("combined_faa")
     prebuilt_diamond_db = cfg["inputs"].get("diamond_db")
 
+    # When running a standalone module with an explicit per-HMM fasta_dir,
+    # the normal faa_dir / hmm_input requirements are relaxed because the
+    # prep/hmmer/extract stages are bypassed.
+    fasta_dir_input = cfg["inputs"].get("fasta_dir")
+    start_at = cfg["workflow"].get("start_at")
+    stop_after = cfg["workflow"].get("stop_after")
+    is_standalone = start_at and stop_after and start_at == stop_after
+
+    if fasta_dir_input and is_standalone:
+        if not outdir:
+            raise SystemExit("output.outdir must be set.")
+        if start_at == "embed":
+            # embed only needs the per-HMM fasta_dir and an output directory
+            return
+        if start_at == "phylo":
+            # phylo needs hmm_input when using hmmalign; not required with --mafft
+            uses_mafft = cfg["phylo"].get("mafft", False)
+            if not uses_mafft and not hmm_arg:
+                raise SystemExit(
+                    "For standalone phylo without --mafft, inputs.hmm_input must be "
+                    "set (provide --hmm_dir) so that hmmalign can use the HMM profiles. "
+                    "Add --mafft to run MAFFT alignment instead."
+                )
+            return
+
     # Validate prebuilt file paths if given
     if prebuilt_combined_faa and not os.path.isfile(prebuilt_combined_faa):
         raise SystemExit(

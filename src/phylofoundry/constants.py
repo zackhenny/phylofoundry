@@ -29,7 +29,8 @@ DEFAULT_CONFIG = {
         "gtdb_dir": None,              # optional directory of GTDB-Tk output
         "taxonomy_file": None,         # optional TSV with genome->lineage mapping (columns: genome, lineage)
         "globdb_taxonomy_file": None,  # optional GlobDB taxonomy TSV (headerless: col1=genome_id, col2=GTDB taxonomy)
-        "pfam_dir": None               # optional directory of Pfam .dat and .hmm files
+        "pfam_dir": None,              # optional directory of Pfam .dat and .hmm files
+        "fasta_dir": None,             # optional directory of per-HMM .faa files for standalone embed/phylo
     },
     "output": {
         "outdir": None,
