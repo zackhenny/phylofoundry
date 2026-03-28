@@ -235,6 +235,10 @@ def run_pipeline(cfg):
     # rather than a sub-directory, so users can find it without navigating.
     exec_plan = build_execution_plan(cfg)
     logs_dir = resolve_logs_dir(outdir, is_single_step=_is_single_step)
+    # execution_plan.json captures which steps run in a multi-step context;
+    # it is omitted for single-step invocations where the answer is trivial.
+    # step_status.tsv is always written (single or multi) because it provides
+    # a machine-readable success/failure record useful for scripting and CI.
     if not _is_single_step:
         write_execution_plan(exec_plan, execution_plan_path(logs_dir))
     status_path = step_status_path(logs_dir)

@@ -142,12 +142,14 @@ def _add_common_args(parser: argparse.ArgumentParser) -> None:
                         metavar="PRIOR_OUTDIR",
                         help="Read input artifacts from a *different* pipeline output "
                              "directory (PRIOR_OUTDIR) instead of --outdir.  Use this "
-                             "to chain separate pipeline stages — e.g.:\n\n"
-                             "  phylofoundry phylo --outdir ./phylo_out\n"
-                             "  phylofoundry hyphy --input-run ./phylo_out "
-                             "--outdir ./hyphy_out\n\n"
-                             "The prior run's config snapshot and artifact checksums "
-                             "are recorded in the new run's provenance.")
+                             "to chain separate pipeline stages: run the first stage "
+                             "with its own --outdir, then pass that directory as "
+                             "--input-run to the next stage.  Example: "
+                             "'phylofoundry phylo --outdir ./phylo_out' followed by "
+                             "'phylofoundry hyphy --input-run ./phylo_out "
+                             "--outdir ./hyphy_out'.  The prior run's config snapshot "
+                             "and artifact checksums are recorded in the new run's "
+                             "provenance.")
 
 
 def _build_parser() -> argparse.ArgumentParser:
