@@ -9,6 +9,7 @@ for each internal tree node.
 import os
 import sys
 from collections import defaultdict
+from concurrent.futures import ProcessPoolExecutor
 from ..utils.bio import write_fasta
 from ..utils.helpers import safe_mkdir
 
@@ -76,8 +77,51 @@ def parse_iqtree_state(state_fp: str) -> dict:
     return ancestral_seqs
 
 
+def _worker_asr_parse(args_pack):
+    """Parse one IQ-TREE .state file and write the ancestral FASTA.
+
+    Designed for use with :class:`concurrent.futures.ProcessPoolExecutor`.
+
+    Parameters
+    ----------
+    args_pack : tuple
+        ``(hmm, state_fp, out_fasta, force)``
+
+    Returns
+    -------
+    tuple
+        ``(hmm, ancestral_seqs_dict)`` where the dict is empty on failure or
+        when the .state file is absent.
+    """
+    hmm, state_fp, out_fasta, force = args_pack
+
+    if os.path.exists(out_fasta) and not force:
+        from ..utils.bio import read_fasta
+        seqs = read_fasta(out_fasta)
+        print(f"[asr] Loaded existing ancestral sequences for {hmm}: "
+              f"{len(seqs)} nodes")
+        return hmm, seqs
+
+    print(f"[asr] Parsing ancestral states for {hmm}...")
+    anc_seqs = parse_iqtree_state(state_fp)
+
+    if not anc_seqs:
+        print(f"[asr] No ancestral sequences reconstructed for {hmm}.",
+              file=sys.stderr)
+        return hmm, {}
+
+    write_fasta(out_fasta, anc_seqs)
+    print(f"[asr] Wrote {len(anc_seqs)} ancestral sequences for {hmm} → {out_fasta}")
+    return hmm, anc_seqs
+
+
 def run_asr_parse(cfg, tree_dir, fasta_dir, hmm_keep, force=False):
     """Parse IQ-TREE .state files for all HMMs and write ancestral FASTAs.
+
+    Per-HMM .state files are parsed in parallel (one worker per CPU core) to
+    avoid the sequential bottleneck that caused the phylo step to linger long
+    after all IQ-TREE jobs had finished — especially in DIAMOND mode, which
+    typically produces more hits per query and therefore larger .state files.
 
     Parameters
     ----------
@@ -112,31 +156,26 @@ def run_asr_parse(cfg, tree_dir, fasta_dir, hmm_keep, force=False):
               "Run IQ-TREE with -asr flag to generate them.")
         return {}
 
+    # Build the list of tasks for per-HMM .state files (skip combined tree
+    # here; it is handled separately below).
+    tasks = []
     for state_fp in state_files:
         hmm = os.path.basename(state_fp).replace(".state", "")
+        if hmm == "combined_all_hits":
+            continue
         if hmm_keep is not None and hmm not in hmm_keep:
             continue
-
         out_fasta = os.path.join(fasta_dir, f"{hmm}.ancestral_nodes.fasta")
-        if os.path.exists(out_fasta) and not force:
-            # Load existing
-            from ..utils.bio import read_fasta
-            all_ancestral[hmm] = read_fasta(out_fasta)
-            print(f"[asr] Loaded existing ancestral sequences for {hmm}: "
-                  f"{len(all_ancestral[hmm])} nodes")
-            continue
+        tasks.append((hmm, state_fp, out_fasta, force))
 
-        print(f"[asr] Parsing ancestral states for {hmm}...")
-        anc_seqs = parse_iqtree_state(state_fp)
-
-        if not anc_seqs:
-            print(f"[asr] No ancestral sequences reconstructed for {hmm}.",
-                  file=sys.stderr)
-            continue
-
-        write_fasta(out_fasta, anc_seqs)
-        all_ancestral[hmm] = anc_seqs
-        print(f"[asr] Wrote {len(anc_seqs)} ancestral sequences for {hmm} → {out_fasta}")
+    if tasks:
+        cpu = cfg.get("resources", {}).get("cpu", 8)  # 8 matches DEFAULT_CONFIG
+        workers = max(1, min(cpu, len(tasks)))
+        print(f"[asr] Parsing {len(tasks)} .state file(s) with {workers} worker(s)...")
+        with ProcessPoolExecutor(max_workers=workers) as exe:
+            for hmm, anc_seqs in exe.map(_worker_asr_parse, tasks):
+                if anc_seqs:
+                    all_ancestral[hmm] = anc_seqs
 
     # Also handle combined tree if present
     combined_state = os.path.join(tree_dir, "combined_all_hits.state")
