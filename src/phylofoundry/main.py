@@ -264,6 +264,10 @@ def _build_parser() -> argparse.ArgumentParser:
                          choices=["esm", "transformers"],
                          help="Embedding backend "
                               "(overrides embeddings.backend)")
+    p_embed.add_argument("--fasta_dir", default=None,
+                         help="Directory of per-HMM .faa files to embed directly "
+                              "(alternative to --input-run or a previous --outdir run; "
+                              "skips prep/hmmer/extract pipeline stages)")
 
     # ── phylo ──────────────────────────────────────────────────────────────
     p_phylo = sub.add_parser(
@@ -287,6 +291,11 @@ def _build_parser() -> argparse.ArgumentParser:
     p_phylo.add_argument("--iq_boot", type=int, default=None,
                          help="IQ-TREE bootstrap replicates "
                               "(overrides phylo.iq_boot)")
+    p_phylo.add_argument("--fasta_dir", default=None,
+                         help="Directory of per-HMM .faa files to run trees on "
+                              "(alternative to --input-run or a previous --outdir run; "
+                              "skips prep/hmmer/extract pipeline stages; "
+                              "combine with --mafft to avoid needing --hmm_dir)")
 
     # ── curate ─────────────────────────────────────────────────────────────
     p_curate = sub.add_parser(
@@ -545,6 +554,8 @@ def _apply_step_args(args: argparse.Namespace, cfg: dict) -> None:
             cfg["embeddings"]["batch_size"] = args.batch_size
         if getattr(args, "backend", None):
             cfg["embeddings"]["backend"] = args.backend
+        if getattr(args, "fasta_dir", None):
+            cfg["inputs"]["fasta_dir"] = args.fasta_dir
 
     elif subcmd == "phylo":
         if getattr(args, "mafft", False):
@@ -555,6 +566,8 @@ def _apply_step_args(args: argparse.Namespace, cfg: dict) -> None:
             cfg["phylo"]["iqtree_bin"] = args.iqtree_bin
         if getattr(args, "iq_boot", None) is not None:
             cfg["phylo"]["iq_boot"] = args.iq_boot
+        if getattr(args, "fasta_dir", None):
+            cfg["inputs"]["fasta_dir"] = args.fasta_dir
 
     elif subcmd == "taxonomy":
         if getattr(args, "gtdb_dir", None):

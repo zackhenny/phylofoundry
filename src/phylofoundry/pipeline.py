@@ -111,6 +111,16 @@ def run_pipeline(cfg):
     stop_after = cfg["workflow"]["stop_after"]
     force = bool(cfg["workflow"]["force"])
 
+    # ── Standalone-module shortcut (--fasta_dir) ──────────────────────────
+    # When a user provides an explicit per-HMM fasta_dir for a standalone
+    # embed or phylo run, the prep/hmmer/extract stages are bypassed entirely.
+    fasta_dir_input = cfg["inputs"].get("fasta_dir")
+    _is_standalone_embed = start_at == "embed" and stop_after == "embed"
+    _is_standalone_phylo = start_at == "phylo" and stop_after == "phylo"
+    _skip_input_discovery = bool(
+        fasta_dir_input and (_is_standalone_embed or _is_standalone_phylo)
+    )
+
     # ── Detect search mode ────────────────────────────────────────────────
     use_diamond = cfg.get("diamond", {}).get("enabled", False)
     if use_diamond:
@@ -294,6 +304,13 @@ def run_pipeline(cfg):
     clade_assign_dir = input_paths.clade_assign_dir
     curated_dir = input_paths.curated_dir
 
+    # When --fasta_dir was supplied for a standalone embed/phylo run, use it as
+    # the per-HMM FASTA source instead of the standard outdir/fasta_per_hmm/.
+    if fasta_dir_input:
+        fasta_dir = os.path.abspath(fasta_dir_input)
+        raw_fasta_dir = fasta_dir
+        print(f"[pipeline] Using per-HMM FASTA input directory: {fasta_dir}")
+
     for d in paths.all_output_dirs():
         safe_mkdir(d)
     # Ensure emb_dir exists even when it lives outside outdir
@@ -307,9 +324,13 @@ def run_pipeline(cfg):
     # faa_dir is required unless a prebuilt combined_faa (or diamond_db in
     # DIAMOND mode) has been supplied — in those cases genome FASTAs are
     # not needed for the prep / DB-build steps.
+    # When running standalone embed/phylo with --fasta_dir, all of these
+    # pipeline-level inputs are bypassed.
     faa_dir = None
     genomes: list[str] = []
-    if faa_arg:
+    if _skip_input_discovery:
+        print("[pipeline] Skipping genome discovery (per-HMM FASTAs provided via --fasta_dir)")
+    elif faa_arg:
         faa_abs = os.path.abspath(faa_arg)
         if os.path.isfile(faa_abs):
             if not faa_abs.endswith(".faa"):
@@ -329,11 +350,18 @@ def run_pipeline(cfg):
             "was provided. Supply --faa_dir, --combined_faa, or --diamond_db."
         )
 
-    # HMM input discovery — skipped when DIAMOND mode is active
+    # HMM input discovery — skipped when DIAMOND mode is active.
+    # Also skipped for standalone embed (no HMMs needed) and for standalone
+    # phylo when MAFFT alignment is selected (hmmalign not required).
     hmm_dir = None
     hmm_files = []
     hmm_input_mode = None
-    if not use_diamond:
+    _skip_hmm_discovery = (
+        use_diamond
+        or (_is_standalone_embed and fasta_dir_input)
+        or (_is_standalone_phylo and fasta_dir_input and cfg["phylo"].get("mafft", False))
+    )
+    if not _skip_hmm_discovery:
         if not hmm_arg:
             raise SystemExit("inputs.hmm_input is not set.")
         hmm_abs = os.path.abspath(hmm_arg)

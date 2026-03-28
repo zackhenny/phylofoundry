@@ -275,6 +275,12 @@ class TestStepSpecificArgs:
         _apply_step_args(args, cfg)
         assert cfg["embeddings"]["backend"] == "transformers"
 
+    def test_embed_fasta_dir_arg(self):
+        cfg = _valid_cfg()
+        args = _parse(["embed", "--outdir", "/tmp/out", "--fasta_dir", "/tmp/my_faas"])
+        _apply_step_args(args, cfg)
+        assert cfg["inputs"]["fasta_dir"] == "/tmp/my_faas"
+
     def test_phylo_mafft_arg(self):
         cfg = _valid_cfg()
         args = _parse(["phylo", "--outdir", "/tmp/out", "--mafft"])
@@ -298,6 +304,12 @@ class TestStepSpecificArgs:
         args = _parse(["phylo", "--outdir", "/tmp/out", "--iq_boot", "500"])
         _apply_step_args(args, cfg)
         assert cfg["phylo"]["iq_boot"] == 500
+
+    def test_phylo_fasta_dir_arg(self):
+        cfg = _valid_cfg()
+        args = _parse(["phylo", "--outdir", "/tmp/out", "--fasta_dir", "/tmp/my_faas"])
+        _apply_step_args(args, cfg)
+        assert cfg["inputs"]["fasta_dir"] == "/tmp/my_faas"
 
     def test_hmmer_diamond_mode_arg(self):
         cfg = _valid_cfg()
@@ -386,7 +398,93 @@ class TestStepSpecificArgs:
         assert "HPEVY" in cfg["motifs"]["motif_list"]
 
 
-# ── Auto-enable optional steps ────────────────────────────────────────────────
+# ── Standalone mode with --fasta_dir ─────────────────────────────────────────
+
+
+class TestStandaloneFastaDir:
+    """Verify validate_config allows standalone embed/phylo with --fasta_dir."""
+
+    def test_embed_standalone_with_fasta_dir_passes_validation(self):
+        """embed --fasta_dir --outdir should pass without faa_dir or hmm_input."""
+        from phylofoundry.config import validate_config
+
+        cfg = deepcopy(DEFAULT_CONFIG)
+        cfg["inputs"]["fasta_dir"] = "/tmp/per_hmm_faas"
+        cfg["output"]["outdir"] = "/tmp/out"
+        cfg["workflow"]["start_at"] = "embed"
+        cfg["workflow"]["stop_after"] = "embed"
+        # Should not raise
+        validate_config(cfg)
+
+    def test_embed_standalone_without_fasta_dir_fails_validation(self):
+        """embed without faa_dir, hmm_input, AND fasta_dir must still fail."""
+        from phylofoundry.config import validate_config
+
+        cfg = deepcopy(DEFAULT_CONFIG)
+        cfg["output"]["outdir"] = "/tmp/out"
+        cfg["workflow"]["start_at"] = "embed"
+        cfg["workflow"]["stop_after"] = "embed"
+        with pytest.raises(SystemExit):
+            validate_config(cfg)
+
+    def test_phylo_standalone_with_fasta_dir_and_mafft_passes_validation(self):
+        """phylo --fasta_dir --mafft --outdir should pass without hmm_input."""
+        from phylofoundry.config import validate_config
+
+        cfg = deepcopy(DEFAULT_CONFIG)
+        cfg["inputs"]["fasta_dir"] = "/tmp/per_hmm_faas"
+        cfg["output"]["outdir"] = "/tmp/out"
+        cfg["phylo"]["mafft"] = True
+        cfg["workflow"]["start_at"] = "phylo"
+        cfg["workflow"]["stop_after"] = "phylo"
+        # Should not raise
+        validate_config(cfg)
+
+    def test_phylo_standalone_with_fasta_dir_no_mafft_requires_hmm(self):
+        """phylo --fasta_dir without --mafft must still require --hmm_dir."""
+        from phylofoundry.config import validate_config
+
+        cfg = deepcopy(DEFAULT_CONFIG)
+        cfg["inputs"]["fasta_dir"] = "/tmp/per_hmm_faas"
+        cfg["output"]["outdir"] = "/tmp/out"
+        # phylo.mafft is False by default
+        cfg["workflow"]["start_at"] = "phylo"
+        cfg["workflow"]["stop_after"] = "phylo"
+        with pytest.raises(SystemExit):
+            validate_config(cfg)
+
+    def test_phylo_standalone_with_fasta_dir_hmm_and_no_mafft_passes(self):
+        """phylo --fasta_dir --hmm_dir (no --mafft) should pass validation."""
+        from phylofoundry.config import validate_config
+
+        cfg = deepcopy(DEFAULT_CONFIG)
+        cfg["inputs"]["fasta_dir"] = "/tmp/per_hmm_faas"
+        cfg["inputs"]["hmm_input"] = "/tmp/hmm"
+        cfg["output"]["outdir"] = "/tmp/out"
+        cfg["workflow"]["start_at"] = "phylo"
+        cfg["workflow"]["stop_after"] = "phylo"
+        # Should not raise
+        validate_config(cfg)
+
+    def test_embed_fasta_dir_arg_parsed_and_applied(self):
+        """embed --fasta_dir propagates into cfg['inputs']['fasta_dir']."""
+        cfg = deepcopy(DEFAULT_CONFIG)
+        cfg["inputs"]["faa_dir"] = "/tmp/faa"
+        cfg["inputs"]["hmm_input"] = "/tmp/hmm"
+        cfg["output"]["outdir"] = "/tmp/out"
+        args = _parse(["embed", "--outdir", "/tmp/out", "--fasta_dir", "/tmp/faas"])
+        _apply_step_args(args, cfg)
+        assert cfg["inputs"]["fasta_dir"] == "/tmp/faas"
+
+    def test_phylo_fasta_dir_arg_parsed_and_applied(self):
+        """phylo --fasta_dir propagates into cfg['inputs']['fasta_dir']."""
+        cfg = deepcopy(DEFAULT_CONFIG)
+        cfg["inputs"]["faa_dir"] = "/tmp/faa"
+        cfg["inputs"]["hmm_input"] = "/tmp/hmm"
+        cfg["output"]["outdir"] = "/tmp/out"
+        args = _parse(["phylo", "--outdir", "/tmp/out", "--fasta_dir", "/tmp/faas"])
+        _apply_step_args(args, cfg)
+        assert cfg["inputs"]["fasta_dir"] == "/tmp/faas"
 
 
 class TestAutoEnable:
