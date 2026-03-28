@@ -42,6 +42,12 @@ inputs:
                              #   (col1=genome_id, col2=GTDB taxonomy string).
   pfam_dir: null             # (string|null) Directory of Pfam .dat and .hmm files for
                              #   Pfam-based annotation steps.
+  fasta_dir: null            # (string|null) Directory of pre-extracted per-HMM .faa files.
+                             #   When set, the prep/hmmer/extract pipeline stages are bypassed
+                             #   and sequences are read directly from this directory.  Each
+                             #   file must be named <HMM_NAME>.faa.  Used with standalone
+                             #   'phylofoundry embed --fasta_dir ...' or
+                             #   'phylofoundry phylo --fasta_dir ...' invocations.
 
 # ─────────────────────────────────────────────────────────────────────────────
 # MODULE: output
@@ -50,9 +56,11 @@ inputs:
 output:
   outdir: null               # (string|null) Root directory for final outputs and reports.
                              #   Required at runtime (pass via CLI or set here).
-  workdir: null              # (string|null) Scratch directory for large intermediate files
-                             #   (combined_proteomes.faa, DIAMOND databases, embeddings).
-                             #   Falls back to outdir when null.
+  workdir: null              # (string|null) Scratch directory for large *intermediate* files
+                             #   (combined_proteomes.faa, combined.hmm, DIAMOND databases).
+                             #   Embedding vectors and other final outputs always go to outdir.
+                             #   Falls back to outdir when null.  Equivalent to --work_dir on
+                             #   the CLI.
 
 # ─────────────────────────────────────────────────────────────────────────────
 # MODULE: resources

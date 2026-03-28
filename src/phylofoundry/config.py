@@ -35,6 +35,8 @@ def resolve_config(args: argparse.Namespace) -> dict:
         cfg["inputs"]["hmm_input"] = args.hmm_dir
     if args.outdir is not None:
         cfg["output"]["outdir"] = args.outdir
+    if getattr(args, "work_dir", None) is not None:
+        cfg["output"]["workdir"] = args.work_dir
     if args.cpu is not None:
         cfg["resources"]["cpu"] = int(args.cpu)
     

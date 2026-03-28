@@ -2,6 +2,19 @@
 
 Provides helpers to create the ``logs/`` directory and write structured
 outputs such as ``execution_plan.json`` and ``step_status.tsv``.
+
+Log placement rules
+-------------------
+* **Full pipeline** or **multi-step range** — logs are collected under
+  ``outdir/logs/`` (``pipeline.log``, ``<step>.log``, ``execution_plan.json``,
+  ``step_status.tsv``).
+* **Single module** (e.g. ``phylofoundry embed``) — the verbose log for that
+  step is written directly to ``outdir/<step>.log`` so the user can find it
+  without navigating into a sub-directory.  No ``logs/`` sub-directory is
+  created.
+
+Use :func:`resolve_logs_dir` to obtain the correct directory given whether the
+run is a single-step invocation or a broader pipeline execution.
 """
 
 from __future__ import annotations
@@ -24,6 +37,32 @@ def ensure_logs_dir(outdir: str) -> str:
     logs_dir = os.path.join(outdir, "logs")
     os.makedirs(logs_dir, exist_ok=True)
     return logs_dir
+
+
+def resolve_logs_dir(outdir: str, *, is_single_step: bool = False) -> str:
+    """Return the directory where log files should be written.
+
+    Parameters
+    ----------
+    outdir:
+        Root pipeline output directory.
+    is_single_step:
+        ``True`` when only a single pipeline step is being executed (e.g.
+        ``phylofoundry embed``).  In that case the log is written directly
+        into *outdir* so users can find ``<step>.log`` without navigating
+        into a sub-directory.  ``False`` (the default) causes a ``logs/``
+        sub-directory to be created under *outdir*.
+
+    Returns
+    -------
+    str
+        Absolute path to the directory that should receive log files.
+        The directory is created if it does not already exist.
+    """
+    if is_single_step:
+        os.makedirs(outdir, exist_ok=True)
+        return outdir
+    return ensure_logs_dir(outdir)
 
 
 def pipeline_log_path(logs_dir: str) -> str:
