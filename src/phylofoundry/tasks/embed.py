@@ -2449,15 +2449,11 @@ def compute_embeddings_for_hmm(hmm_name: str, seqs: dict, emb_cfg: dict, outdir_
 
     seqs = {k: v.replace(" ", "").replace("\n", "").replace("*", "").replace(".", "") for k, v in seqs.items()}
     if len(seqs) < 3:
-        print(f"[embed] Warning: HMM '{hmm_name}' has less than 3 sequences. Skipping embeddings.", file=sys.stderr)
+        print(f"[embed] Warning: HMM '{hmm_name}' has less than 3 sequences. Skipping embeddings.")
         return []
 
     # ── Validate config ───────────────────────────────────────────────────
-    try:
-        emb_cfg = _validate_emb_cfg(emb_cfg)
-    except ValueError as exc:
-        print(str(exc), file=sys.stderr)
-        return []
+    emb_cfg = _validate_emb_cfg(emb_cfg)
 
     cluster_on = emb_cfg["_cluster_on"]        # "pca" or "embeddings"
     cluster_method = emb_cfg["_cluster_method"]  # "hdbscan" or "leiden"
@@ -2476,11 +2472,9 @@ def compute_embeddings_for_hmm(hmm_name: str, seqs: dict, emb_cfg: dict, outdir_
         elif backend == "transformers":
             ids, X = _embed_transformers(seqs, model_id_or_path=model_name, device=device, batch_size=batch_size, model_dir=model_dir)
         else:
-            print(f"[embed] Error: Unknown backend '{backend}'", file=sys.stderr)
-            return []
+            raise ValueError(f"Unknown embedding backend '{backend}'. Expected 'esm' or 'transformers'.")
     except Exception as e:
-        print(f"[embed] FAILED {hmm_name}: {e}", file=sys.stderr)
-        return []
+        raise RuntimeError(f"[embed] Inference failed for HMM '{hmm_name}': {e}") from e
 
     X = X.astype(np.float32)
     np.save(out_npy, X)
@@ -2511,7 +2505,7 @@ def compute_embeddings_for_hmm(hmm_name: str, seqs: dict, emb_cfg: dict, outdir_
             n_knn = min(knn_neighbors, len(ids) - 1)
             if n_knn < 1:
                 import sys as _sys
-                print(f"[embed] kNN skipped for {hmm_name}: not enough sequences.", file=_sys.stderr)
+                print(f"[embed] kNN skipped for {hmm_name}: not enough sequences.")
             else:
                 nbrs = NearestNeighbors(n_neighbors=n_knn, metric="cosine").fit(Z)
                 distances, indices = nbrs.kneighbors(Z)
@@ -2530,7 +2524,7 @@ def compute_embeddings_for_hmm(hmm_name: str, seqs: dict, emb_cfg: dict, outdir_
                 pd.DataFrame(knn_rows).to_csv(out_knn, sep="\t", index=False)
         except Exception as e:
             import sys as _sys
-            print(f"[embed] kNN failed for {hmm_name}: {e}", file=_sys.stderr)
+            print(f"[embed] kNN failed for {hmm_name}: {e}")
 
     # ── UMAP (visualization only) ─────────────────────────────────────────
     U = None
@@ -2562,9 +2556,9 @@ def compute_embeddings_for_hmm(hmm_name: str, seqs: dict, emb_cfg: dict, outdir_
         # Save UMAP plot (colored by clades if available)
         _save_umap_plot(U, ids, hmm_name, out_umap_png, clades=clades)
     except ImportError:
-        print("[embed] UMAP skip: umap-learn not installed.", file=sys.stderr)
+        print("[embed] UMAP skip: umap-learn not installed.")
     except Exception as e:
-        print(f"[embed] UMAP failed for {hmm_name}: {e}", file=sys.stderr)
+        print(f"[embed] UMAP failed for {hmm_name}: {e}")
 
     # ── Clustering ────────────────────────────────────────────────────────
     # Select the feature matrix to cluster on (PCA or raw embeddings)
