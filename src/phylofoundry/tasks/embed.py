@@ -2474,7 +2474,7 @@ def compute_embeddings_for_hmm(hmm_name: str, seqs: dict, emb_cfg: dict, outdir_
         else:
             raise ValueError(f"Unknown embedding backend '{backend}'. Expected 'esm' or 'transformers'.")
     except Exception as e:
-        raise RuntimeError(f"[embed] Inference failed for HMM '{hmm_name}': {e}") from e
+        raise RuntimeError(f"[embed] Inference failed for HMM '{hmm_name}': {repr(e)}") from e
 
     X = X.astype(np.float32)
     np.save(out_npy, X)
