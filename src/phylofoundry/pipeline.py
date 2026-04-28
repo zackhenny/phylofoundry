@@ -504,19 +504,21 @@ def run_pipeline(cfg):
 
     # ── Helper: load hit DataFrames from disk if we skipped hmmer ──────────
     def _ensure_hit_dfs():
-        nonlocal scan_df, search_df
-        if scan_df is not None and search_df is not None:
+        nonlocal scan_df, search_df, best_df
+        if scan_df is not None and search_df is not None and best_df is not None:
             return
         import pandas as pd
+        best_hits_tsv = os.path.join(summary_dir, "best_hits.competitive.tsv")
         if use_diamond:
             hits_diamond_tsv = os.path.join(summary_dir, "diamond_hits.filtered.tsv")
             search_df = pd.read_csv(hits_diamond_tsv, sep="\t") if os.path.exists(hits_diamond_tsv) else pd.DataFrame()
             scan_df = pd.DataFrame()
-            return
-        hits_scan_tsv = os.path.join(summary_dir, "hmmscan_hits.filtered.tsv")
-        hits_search_tsv = os.path.join(summary_dir, "hmmsearch_hits.filtered.tsv")
-        scan_df = pd.read_csv(hits_scan_tsv, sep="\t") if os.path.exists(hits_scan_tsv) else pd.DataFrame()
-        search_df = pd.read_csv(hits_search_tsv, sep="\t") if os.path.exists(hits_search_tsv) else pd.DataFrame()
+        else:
+            hits_scan_tsv = os.path.join(summary_dir, "hmmscan_hits.filtered.tsv")
+            hits_search_tsv = os.path.join(summary_dir, "hmmsearch_hits.filtered.tsv")
+            scan_df = pd.read_csv(hits_scan_tsv, sep="\t") if os.path.exists(hits_scan_tsv) else pd.DataFrame()
+            search_df = pd.read_csv(hits_search_tsv, sep="\t") if os.path.exists(hits_search_tsv) else pd.DataFrame()
+        best_df = pd.read_csv(best_hits_tsv, sep="\t") if os.path.exists(best_hits_tsv) else pd.DataFrame()
 
     # ── STEP: extract ──────────────────────────────────────────────────────
     hmm_to_seqs = {}
@@ -545,8 +547,26 @@ def run_pipeline(cfg):
                         f"from combined_faa: {combined_faa}"
                     )
                     proteome_seqs = _load_proteomes_from_combined_faa(combined_faa)
+                # Use competitive best-hit assignments (one HMM per protein).
+                # When keep_all_hits is enabled, fall back to the full filtered
+                # hits table so every matching HMM retains the protein.
+                if cfg.get("phylo", {}).get("keep_all_hits", False):
+                    _all_hits = (
+                        scan_df if (scan_df is not None and not scan_df.empty)
+                        else search_df
+                    )
+                    if _all_hits is not None and not _all_hits.empty:
+                        _extract_df = _all_hits
+                    else:
+                        print(
+                            "[pipeline] WARNING: keep_all_hits=True but no raw hit "
+                            "tables are available; falling back to best_df."
+                        )
+                        _extract_df = best_df
+                else:
+                    _extract_df = best_df
                 hmm_to_seqs = extract.run_extract(
-                    cfg, scan_df, search_df, fasta_dir, hmm_keep, proteome_seqs, force
+                    cfg, _extract_df, fasta_dir, hmm_keep, proteome_seqs, force
                 )
                 del proteome_seqs  # free memory after extraction
                 update_step_status(status_path, "extract", "success")
