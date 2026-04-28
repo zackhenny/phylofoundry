@@ -3,36 +3,42 @@ import glob
 from collections import defaultdict
 from ..utils.bio import write_fasta
 
-def run_extract(cfg, scan_df, search_df, fasta_dir, hmm_keep, proteome_seqs, force=False):
-    print("\n[extract] Building per-HMM FASTAs...")
-    
-    phy_cfg = cfg.get("phylo", {})
+def run_extract(cfg, best_df, fasta_dir, hmm_keep, proteome_seqs, force=False):
+    """Build per-HMM FASTA files from competitive best-hit assignments.
+
+    Parameters
+    ----------
+    cfg : dict
+        Pipeline configuration dictionary.
+    best_df : pandas.DataFrame
+        Competitive best-hit table produced by ``hmmer.best_hits()`` or
+        ``diamond.run_diamond()``.  Each row represents the single best HMM
+        assignment for a (genome, protein) pair.  When ``phylo.keep_all_hits``
+        is ``True`` in the config, the caller should pass the full filtered
+        hits table instead so that every hit is retained.
+    fasta_dir : str
+        Directory where per-HMM ``.faa`` files are written.
+    hmm_keep : set or None
+        Optional set of HMM names to include.  ``None`` means keep all.
+    proteome_seqs : dict
+        Nested mapping ``{genome: {protein_id: sequence}}`` used to look up
+        amino-acid sequences for each hit.
+    force : bool
+        When ``True``, overwrite existing per-HMM FASTA files.
+    """
+    print("\n[extract] Building per-HMM FASTAs from best-hit assignments...")
+
     hmm_to_seqs = defaultdict(dict)
 
-    # choose base hits for membership
-    if phy_cfg.get("use_hmmsearch_alignment", False) and not search_df.empty:
-        base_df = search_df
-    else:
-        base_df = scan_df if not scan_df.empty else search_df
-
-    if base_df.empty:
+    if best_df is None or best_df.empty:
         print("WARNING: No hits available to extract sequences.")
         return hmm_to_seqs
 
-    if not phy_cfg.get("keep_all_hits", False):
-        filt_cfg = cfg.get("filtering", {})
-        use_evalue = bool(filt_cfg.get("use_evalue", False))
-        if use_evalue:
-            base_df = base_df.sort_values("evalue", ascending=True).groupby(["genome", "hmm"], as_index=False).head(1)
-        else:
-            base_df = base_df.sort_values("bitscore", ascending=False).groupby(["genome", "hmm"], as_index=False).head(1)
-
-    for _, r in base_df.iterrows():
+    for _, r in best_df.iterrows():
         hmm = r["hmm"]
-        # manifest filtering is on hmm label as used in hits tables
         if hmm_keep is not None and hmm not in hmm_keep:
             continue
-        
+
         genome = r["genome"]
         prot = r["protein"]
         seq = proteome_seqs.get(genome, {}).get(prot)
@@ -45,5 +51,5 @@ def run_extract(cfg, scan_df, search_df, fasta_dir, hmm_keep, proteome_seqs, for
         out_fp = os.path.join(fasta_dir, f"{hmm}.faa")
         if (not os.path.exists(out_fp)) or force:
             write_fasta(out_fp, seqs)
-            
+
     return hmm_to_seqs

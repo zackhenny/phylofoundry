@@ -277,7 +277,8 @@ class TestExtract:
         from phylofoundry.tasks.extract import run_extract
 
         cfg = {"phylo": {"use_hmmsearch_alignment": False, "keep_all_hits": False}}
-        scan_df = pd.DataFrame({
+        # best_df: one row per (genome, protein) — already competitive
+        best_df = pd.DataFrame({
             "genome": ["genomeA.faa", "genomeB.faa"],
             "protein": ["protein_A1", "protein_B1"],
             "hmm": ["TestHMM", "TestHMM"],
@@ -285,15 +286,38 @@ class TestExtract:
             "evalue": [1e-10, 1e-9],
             "coverage": [0.9, 0.85],
         })
-        search_df = pd.DataFrame()
         fasta_dir = str(tmp_path)
         proteome_seqs = {
             "genomeA.faa": {"protein_A1": "MSKGEELFT", "protein_A2": "MVSKGEELFT"},
             "genomeB.faa": {"protein_B1": "MSKGEELFT"},
         }
-        hmm_to_seqs = run_extract(cfg, scan_df, search_df, fasta_dir, None, proteome_seqs, force=True)
+        hmm_to_seqs = run_extract(cfg, best_df, fasta_dir, None, proteome_seqs, force=True)
         assert "TestHMM" in hmm_to_seqs
         assert len(hmm_to_seqs["TestHMM"]) == 2
+
+    def test_extract_competitive_assignment(self, tmp_path):
+        """A protein that matches two HMMs should only appear under the best-scoring one."""
+        import pandas as pd
+        from phylofoundry.tasks.hmmer import best_hits
+        from phylofoundry.tasks.extract import run_extract
+
+        cfg = {"phylo": {"use_hmmsearch_alignment": False, "keep_all_hits": False}}
+        # Raw hits: protein_A1 matches both HMM_X (high score) and HMM_Y (low score)
+        all_hits = pd.DataFrame({
+            "genome": ["genomeA.faa", "genomeA.faa"],
+            "protein": ["protein_A1", "protein_A1"],
+            "hmm": ["HMM_X", "HMM_Y"],
+            "bitscore": [200.0, 80.0],
+            "evalue": [1e-20, 1e-5],
+            "coverage": [0.9, 0.7],
+        })
+        competitive = best_hits(all_hits)
+        fasta_dir = str(tmp_path)
+        proteome_seqs = {"genomeA.faa": {"protein_A1": "MSKGEELFT"}}
+        hmm_to_seqs = run_extract(cfg, competitive, fasta_dir, None, proteome_seqs, force=True)
+        # protein_A1 should only appear under HMM_X
+        assert "genomeA.faa|protein_A1" in hmm_to_seqs.get("HMM_X", {})
+        assert "HMM_Y" not in hmm_to_seqs
 
 
 # ──── hmmer.py ────────────────────────────────────────────────────────────────
