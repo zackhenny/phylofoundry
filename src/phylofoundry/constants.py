@@ -109,11 +109,11 @@ DEFAULT_CONFIG = {
         "knn_threshold": 0.5,                   # cosine-similarity edge weight threshold
         "pca_components": None,                 # if None, auto-set to min(n_sequences, 110)
         "similarity_threshold_base": 0.00001,   # base cosine threshold at window_size=5
-        "use_existing_embeddings": True,        # load embeddings from embed step output
         "reuse_pca": False,                     # reuse PCA from embed step or rerun MAAPE's own PCA
-        "color_scheme": None,                   # None = auto-color by cluster/clade assignment
+        "color_scheme": None,                   # None = auto-detect from clade_assignments/;
+                                                # dict {protein_id: hex_colour} = explicit mapping
         "generate_aggregated": True,            # run Step 6 (aggregated condensed visualization)
-        "per_hmm": True,                        # run per-HMM (False = combined only)
+        "per_hmm": True,                        # True = run per HMM; False = skip individual HMMs
     },
     "curate": {
         "enabled": False,

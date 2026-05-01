@@ -28,6 +28,18 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+# ---------------------------------------------------------------------------
+# Module-level constants
+# ---------------------------------------------------------------------------
+
+#: Default number of PCA dimensions used by the MAAPE paper when not otherwise
+#: specified.  Applied as the upper bound when ``pca_components`` is ``null``
+#: in the config (actual value is ``min(n_sequences, DEFAULT_PCA_COMPONENTS)``).
+DEFAULT_PCA_COMPONENTS: int = 110
+
+#: Fixed random seed for reproducible spring-layout placement.
+_LAYOUT_SEED: int = 42
+
 
 # ---------------------------------------------------------------------------
 # Step 1 helpers — embedding loading and PCA/L2 normalisation
@@ -272,13 +284,17 @@ def _calculate_weights_and_edges(
     # Build co-occurrence matrix
     C = np.zeros((n_seqs, n_seqs), dtype=np.int32)
     for (i, j), path_list in paths.items():
-        n_paths = len(path_list)
-        C[i, j] += n_paths
-        # Asymmetric counts: paths at pos_i < pos_j suggest i→j direction
+        # Count directional evidence from sub-vector position asymmetry.
+        # pos_i < pos_j  → sub-vector of i aligns earlier in j  → i→j direction
+        # pos_j < pos_i  → sub-vector of j aligns earlier in i  → j→i direction
+        # pos_i == pos_j → symmetric, contributes equally to both directions
         for (w, pi, pj) in path_list:
             if pi < pj:
                 C[i, j] += 1
             elif pj < pi:
+                C[j, i] += 1
+            else:
+                C[i, j] += 1
                 C[j, i] += 1
 
     edge_list: list[tuple[int, int, float]] = []
@@ -461,7 +477,7 @@ def _visualize_maape(
     try:
         fig, ax = plt.subplots(figsize=(12, 10))
 
-        pos = nx.spring_layout(G, seed=42, k=1.0 / max(1, math.sqrt(len(G))))
+        pos = nx.spring_layout(G, seed=_LAYOUT_SEED, k=1.0 / max(1, math.sqrt(len(G))))
 
         # Node colours
         if color_map:
@@ -732,6 +748,9 @@ def run_maape(
     base_threshold = float(maape_cfg.get("similarity_threshold_base", 0.00001))
     reuse_pca = bool(maape_cfg.get("reuse_pca", False))
     generate_aggregated = bool(maape_cfg.get("generate_aggregated", True))
+    # When color_scheme is set to a dict/mapping in the config it overrides the
+    # auto-detected clade colour map loaded from clade_assignments/.
+    cfg_color_scheme = maape_cfg.get("color_scheme", None)
 
     os.makedirs(maape_dir, exist_ok=True)
 
@@ -755,7 +774,7 @@ def run_maape(
         X = _l2_normalize(X_raw)
     else:
         # Run MAAPE's own PCA as in the original paper
-        n_comp = pca_components_cfg if pca_components_cfg else min(n_seqs, 110)
+        n_comp = pca_components_cfg if pca_components_cfg else min(n_seqs, DEFAULT_PCA_COMPONENTS)
         n_comp = min(n_comp, n_seqs, X_raw.shape[1])
         if n_comp < X_raw.shape[1]:
             print(f"[maape] Running PCA({n_comp}) for {hmm_name}...")
@@ -780,14 +799,18 @@ def run_maape(
     # ── Step 3: Weights and directed edges ───────────────────────────────────
     edge_list = _calculate_weights_and_edges(paths, n_seqs)
 
-    # Write human-readable edge list (protein IDs)
+    # Write human-readable edge list (protein IDs).
+    # All edge indices are guaranteed to be valid offsets into `ids` because
+    # _calculate_weights_and_edges only produces indices in [0, n_seqs).
     if not os.path.exists(edgelist_txt) or force:
         with open(edgelist_txt, "w") as fh:
             fh.write("source\ttarget\tweight\n")
             for (src, tgt, w) in edge_list:
-                src_id = ids[src] if src < len(ids) else str(src)
-                tgt_id = ids[tgt] if tgt < len(ids) else str(tgt)
-                fh.write(f"{src_id}\t{tgt_id}\t{w:.6f}\n")
+                assert 0 <= src < len(ids) and 0 <= tgt < len(ids), (
+                    f"[maape] Edge index out of range for {hmm_name}: "
+                    f"src={src}, tgt={tgt}, n_seqs={len(ids)}"
+                )
+                fh.write(f"{ids[src]}\t{ids[tgt]}\t{w:.6f}\n")
         print(f"[maape] Wrote edge list: {edgelist_txt} ({len(edge_list)} edges)")
 
     # ── Step 4: KNN graph ────────────────────────────────────────────────────
@@ -813,8 +836,12 @@ def run_maape(
 
     # ── Step 5: MAAPE network visualisation ──────────────────────────────────
     if not os.path.exists(net_png) or force:
-        color_map = _load_clade_color_map(hmm_name, clade_assign_dir)
-        _visualize_maape(G, ids, net_png, hmm_name, color_map=color_map or None)
+        # Prefer user-supplied color_scheme from config over auto-detected clade map
+        if isinstance(cfg_color_scheme, dict):
+            color_map: dict[str, str] | None = cfg_color_scheme
+        else:
+            color_map = _load_clade_color_map(hmm_name, clade_assign_dir) or None
+        _visualize_maape(G, ids, net_png, hmm_name, color_map=color_map)
 
     # ── Step 6: Aggregated visualisation ─────────────────────────────────────
     if generate_aggregated and (not os.path.exists(agg_png) or force):
@@ -887,6 +914,13 @@ def run_maape_all(
         Per-HMM summary dicts; also written to ``maape/maape_summary.tsv``.
     """
     os.makedirs(maape_dir, exist_ok=True)
+
+    maape_cfg = cfg.get("maape", {})
+    per_hmm = bool(maape_cfg.get("per_hmm", True))
+
+    if not per_hmm:
+        print("[maape] per_hmm=false — skipping individual HMM processing.")
+        return []
 
     # Discover HMM names from embedding files
     if hmm_list is None:
