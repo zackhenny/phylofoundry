@@ -77,6 +77,7 @@ RESOLVED_CONFIG_JSON = "summary/resolved_config.json"
 # Module-specific output directories
 MOTIFS_DIR = "motifs"
 DISCOVER_DIR = "discover"
+MAAPE_DIR = "maape"
 
 # Logs directory
 LOGS_DIR = "logs"
@@ -225,6 +226,31 @@ class ArtifactPaths:
         """Directory containing motif-discovery outputs."""
         return os.path.join(self.outdir, DISCOVER_DIR)
 
+    @property
+    def maape_dir(self) -> str:
+        """Directory containing MAAPE evolutionary network outputs."""
+        return os.path.join(self.outdir, MAAPE_DIR)
+
+    def maape_network_for_hmm(self, hmm: str) -> str:
+        """Return the path to the MAAPE directed network pickle for *hmm*."""
+        return os.path.join(self.maape_dir, f"{hmm}.maape_network.pkl")
+
+    def maape_edgelist_for_hmm(self, hmm: str) -> str:
+        """Return the path to the MAAPE weighted directed edge list for *hmm*."""
+        return os.path.join(self.maape_dir, f"{hmm}.edge_list.txt")
+
+    def maape_plot_for_hmm(self, hmm: str) -> str:
+        """Return the path to the MAAPE network PNG plot for *hmm*."""
+        return os.path.join(self.maape_dir, f"{hmm}.maape_network.png")
+
+    def maape_aggregated_plot_for_hmm(self, hmm: str) -> str:
+        """Return the path to the MAAPE aggregated (condensed) PNG plot for *hmm*."""
+        return os.path.join(self.maape_dir, f"{hmm}.maape_aggregated.png")
+
+    def maape_paths_for_hmm(self, hmm: str) -> str:
+        """Return the path to the MAAPE assembly paths pickle for *hmm*."""
+        return os.path.join(self.maape_dir, f"{hmm}.paths.pkl")
+
     # ── Logs ────────────────────────────────────────────────────────────────
 
     @property
@@ -328,4 +354,5 @@ class ArtifactPaths:
             self.curated_dir,
             self.motifs_dir,
             self.discover_dir,
+            self.maape_dir,
         ]

@@ -10,6 +10,7 @@
 -   **Automated Phylogeny**: Per-HMM alignment (MAFFT/HMMER), trimming (ClipKit), and tree inference (IQ-TREE).
 -   **Protein Embeddings** (Optional): Generates per-HMM embeddings (ESM-2, HuggingFace) and dimensionality reduction (PCA/UMAP), with flexible clustering (HDBSCAN or Leiden) on PCA or raw embeddings, and 2D/3D UMAP scatter plots.
 -   **Cluster-Aware Subworkflow** (Optional): Extends the embedding step with per-cluster MSAs, profile HMMs, and sequence logos for subfamily-level motif analysis (see [Cluster-Aware Subworkflow](#-cluster-aware-subworkflow-optional)).
+-   **MAAPE Evolutionary Network Analysis** (Optional): Constructs a weighted, directed KNN similarity network from protein embeddings using the MAAPE algorithm ([Qinlab502/MAAPE](https://github.com/Qinlab502/MAAPE)).  Sliding-window sub-vector path generation reveals directional evolutionary flow between protein subfamilies; outputs include network plots, directed edge lists, and condensed cluster-level super-graphs (see [MAAPE Step](#maape-step-optional)).
 -   **Ancestral Sequence Reconstruction**: Parses IQ-TREE `.state` files to reconstruct ancestral protein sequences, embeds them alongside modern sequences, and visualizes evolutionary trajectories in UMAP space.
 -   **Combined Tree Mode**: `--combined` flag to build a single tree from all HMM hits, with combined embeddings and clustering.
 -   **Motif Scoring** (Optional): Uses ESM-2 attention weights to score structurally important motifs (e.g., `--motifs HPEVY,HPEVF`).
@@ -235,6 +236,12 @@ Each pipeline stage can be invoked individually using the **module subcommand** 
 # Run only the embedding step
 phylofoundry embed --outdir ./results --cpu 8
 
+# Run only the MAAPE evolutionary network step (after embed)
+phylofoundry maape --outdir ./results --cpu 8
+
+# Run MAAPE with custom KNN parameters
+phylofoundry maape --outdir ./results --knn_k 30 --knn_threshold 0.6
+
 # Run only the phylo step, using MAFFT alignment
 phylofoundry phylo --outdir ./results --cpu 16 --mafft
 
@@ -266,6 +273,7 @@ Optional pipeline steps (`embed`, `curate`, `synteny`, `hyphy`, etc.) are **auto
 | `hmmer` | HMM scan/search or DIAMOND blastp | `--diamond_mode`, `--diamond_query` |
 | `extract` | Extract sequences per HMM | — |
 | `embed` | Protein language model embeddings | `--model`, `--device`, `--batch_size`, `--backend` |
+| `maape` | MAAPE evolutionary network analysis | `--knn_k`, `--knn_threshold`, `--window_sizes`, `--no_aggregated` |
 | `phylo` | MSA + IQ-TREE phylogeny | `--mafft`, `--combined`, `--iqtree_bin`, `--iq_boot` |
 | `curate` | TreeShrink / ESM sequence curation | — |
 | `taxonomy` | GTDB-Tk / custom taxonomy integration | `--gtdb_dir`, `--taxonomy_file` |
@@ -622,6 +630,39 @@ Control execution range with `--start_at <STEP>` and `--stop_after <STEP>` on th
 -   **Clustering**: Runs HDBSCAN or Leiden on PCA-reduced or raw embedding vectors to auto-discover functional clusters.
 -   **Output**: `embeddings/<hmm_name>.pca.tsv`, `.umap.tsv`, `.umap.png`, `.umap.clustered.png`, `summary/clade_assignment.tsv`.
 -   **Cluster Subworkflow** (optional): When `embeddings.cluster_subworkflow.enabled=true`, runs an additional per-cluster analysis for each HMM hit set (see [Cluster Subworkflow](#-cluster-aware-subworkflow-optional) below).
+
+### Step 4b: `maape` (Optional)  (`phylofoundry maape [--knn_k K] [--knn_threshold T]`)
+-   **Depends on**: `embed` step outputs (`embeddings/`).
+-   **Action**: Runs the MAAPE algorithm to construct a weighted, directed KNN similarity network from protein embeddings.
+    1.  **PCA + L2 normalise** the embedding vectors (or reuse the embed step's PCA).
+    2.  **Sliding-window path generation** — for each window size, extract sub-vectors and record assembly paths between pairs with cosine similarity above a per-window threshold.
+    3.  **Co-occurrence matrix** — count assembly paths between sequence pairs and compute directed edges (higher count → source direction) with asymmetry-ratio weights.
+    4.  **KNN graph** — FAISS `IndexFlatIP` nearest-neighbour search (falls back to sklearn when FAISS is unavailable); KNN edges below the cosine threshold are pruned.
+    5.  **Network visualisation** — directional arrow plot coloured by clade/cluster assignment.
+    6.  **Aggregated visualisation** — condensed super-graph where each node is a cluster and edges summarise inter-cluster evolutionary flow.
+-   **Output** (in `maape/`):
+    | File | Description |
+    |------|-------------|
+    | `<HMM>.maape_network.pkl` | Serialised `networkx.DiGraph` |
+    | `<HMM>.edge_list.txt` | Tab-separated weighted directed edge list (protein IDs) |
+    | `<HMM>.maape_network.png` | Evolutionary direction network plot |
+    | `<HMM>.maape_aggregated.png` | Condensed cluster-level super-graph |
+    | `<HMM>.paths.pkl` | Assembly paths intermediate (cached for `--force`-free reruns) |
+    | `maape_summary.tsv` | Per-HMM summary: n_nodes, n_edges, mean_edge_weight, n_paths |
+-   **Key config keys** (`maape.*`):
+    | Key | Default | Description |
+    |-----|---------|-------------|
+    | `enabled` | `false` | Must be `true` (auto-set when run standalone) |
+    | `window_sizes` | `[5,10,20,40,80]` | Sliding window sizes for sub-vector extraction |
+    | `knn_k` | `20` | K for KNN graph construction |
+    | `knn_threshold` | `0.5` | Minimum cosine similarity for KNN edges |
+    | `pca_components` | `null` | PCA dims (`null` = `min(n_seqs, 110)`) |
+    | `similarity_threshold_base` | `0.00001` | Base cosine threshold at `window_size=5` |
+    | `reuse_pca` | `false` | Use embed-step PCA instead of MAAPE's own PCA |
+    | `generate_aggregated` | `true` | Enable Step 6 condensed super-graph |
+    | `per_hmm` | `true` | Run per HMM gene family |
+
+> **Prerequisite tip**: For best results, enable `embeddings.write_full_vectors: true` in the embed config so that MAAPE can load the full-dimensional ESM-2 vectors.  When only PCA-reduced vectors are available, MAAPE uses them directly.
 
 ### Step 5: `phylo`  (`phylofoundry phylo [--mafft] [--combined] [--iqtree_bin BIN]`)
 -   **Action**:

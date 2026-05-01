@@ -10,7 +10,7 @@ GAP_CHARS = set(["-", ".", "X", "x", "?", "*"])
 
 # Workflow
 STEPS = [
-    "prep", "hmmer", "extract", "embed", "phylo", "curate",
+    "prep", "hmmer", "extract", "embed", "maape", "phylo", "curate",
     "taxonomy_integrate", "conservation_metrics", "detect_clades",
     "aa_composition",  # per-gene AA composition analysis (after gene selection)
     "post",  # backward-compatibility shim — new code should prefer the three steps above
@@ -101,6 +101,19 @@ DEFAULT_CONFIG = {
         "write_full_vectors": False,  # if True, write TSV with all dims (can be huge); always writes .npy
         "cluster_embeddings": True,   # run HDBSCAN on raw embeddings
         "hdbscan_min_cluster_size": 5  # HDBSCAN min_cluster_size param
+    },
+    "maape": {
+        "enabled": False,
+        "window_sizes": [5, 10, 20, 40, 80],  # sliding window sizes for sub-vector path generation
+        "knn_k": 20,                            # K for KNN graph construction
+        "knn_threshold": 0.5,                   # cosine-similarity edge weight threshold
+        "pca_components": None,                 # if None, auto-set to min(n_sequences, 110)
+        "similarity_threshold_base": 0.00001,   # base cosine threshold at window_size=5
+        "use_existing_embeddings": True,        # load embeddings from embed step output
+        "reuse_pca": False,                     # reuse PCA from embed step or rerun MAAPE's own PCA
+        "color_scheme": None,                   # None = auto-color by cluster/clade assignment
+        "generate_aggregated": True,            # run Step 6 (aggregated condensed visualization)
+        "per_hmm": True,                        # run per-HMM (False = combined only)
     },
     "curate": {
         "enabled": False,
