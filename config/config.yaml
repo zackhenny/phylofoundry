@@ -1,5 +1,5 @@
 # PhyloFoundry Configuration File
-# Converted from config.json — use ruamel.yaml to edit programmatically so
+# Canonical configuration — use ruamel.yaml to edit programmatically so
 # that inline comments are preserved.
 #
 # Quick tips:
@@ -76,9 +76,10 @@ resources:
 # ─────────────────────────────────────────────────────────────────────────────
 workflow:
   start_at: null             # (string|null) Named step at which to begin execution.
-                             #   Valid values: prep, hmmer, extract, embed, phylo, curate,
-                             #   taxonomy_integrate, conservation_metrics, detect_clades,
-                             #   post, synteny, codon, hyphy, score_motifs, discover_motifs.
+                             #   Valid values: prep, hmmer, extract, embed, maape, phylo,
+                             #   curate, taxonomy_integrate, conservation_metrics,
+                             #   detect_clades, post, synteny, codon, hyphy,
+                             #   score_motifs, discover_motifs.
   stop_after: null           # (string|null) Named step after which execution halts.
                              #   Same valid values as start_at.
   force: false               # (bool) When true, ignore resume fingerprints and re-run all
@@ -273,6 +274,48 @@ embeddings:
       max_changepoints: 25   # (int) Maximum number of change-points to report.
       min_cluster_size: 5    # (int) Skip clusters smaller than this.
       pseudocount: 1.0e-6    # (float) Pseudocount for frequency smoothing.
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MODULE: maape
+# MAAPE Evolutionary Network Analysis.
+# Constructs a weighted, directed KNN similarity network from protein embeddings
+# using the MAAPE algorithm.  Sliding-window sub-vector path generation reveals
+# directional evolutionary flow between protein subfamilies.
+# Outputs: network plots, directed edge lists, and co-evolution summaries.
+# Requires: embeddings step to have been run (or embeddings available in outdir).
+# Reference: Wang et al. 2025 (https://doi.org/10.1039/D4DD00152K);
+#            Qinlab502/MAAPE (https://github.com/Qinlab502/MAAPE).
+# ─────────────────────────────────────────────────────────────────────────────
+maape:
+  enabled: false             # (bool) Enable MAAPE evolutionary network analysis.
+                             #   Also auto-enabled by the `maape` subcommand.
+  window_sizes:              # (list[int]) Sliding window sizes used for sub-vector
+    - 5                      #   path generation.  Smaller windows capture local
+    - 10                     #   sequence context; larger windows capture global trends.
+    - 20
+    - 40
+    - 80
+  knn_k: 20                  # (int) Number of nearest neighbours for KNN graph
+                             #   construction.  Increase for denser graphs.
+  knn_threshold: 0.5         # (float) Minimum cosine-similarity edge weight to retain.
+                             #   Edges below this threshold are pruned from the graph.
+  pca_components: null       # (int|null) Number of PCA dimensions to reduce embeddings
+                             #   to before KNN construction.  null → auto-set to
+                             #   min(n_sequences, 110).
+  similarity_threshold_base: 1.0e-5
+                             # (float) Base cosine threshold applied at window_size=5.
+                             #   Scaled automatically for larger window sizes.
+  reuse_pca: false           # (bool) Reuse PCA from the embed step rather than
+                             #   rerunning MAAPE's own PCA.  Requires embed to have
+                             #   written a PCA model to outdir.
+  color_scheme: null         # (dict|null) Explicit {protein_id: hex_colour} mapping for
+                             #   network plots.  null → auto-detect colours from the
+                             #   clade_assignments/ directory produced by the embed step.
+  generate_aggregated: true  # (bool) Run Step 6: aggregated condensed cluster-level
+                             #   visualisation across all HMMs.
+  per_hmm: true              # (bool) Run MAAPE individually for each HMM.
+                             #   Set to false to skip per-HMM analysis and only run
+                             #   the aggregated step (requires generate_aggregated=true).
 
 # ─────────────────────────────────────────────────────────────────────────────
 # MODULE: curate
