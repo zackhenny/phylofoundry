@@ -10,7 +10,7 @@
 -   **Automated Phylogeny**: Per-HMM alignment (MAFFT/HMMER), trimming (ClipKit), and tree inference (IQ-TREE).
 -   **Protein Embeddings** (Optional): Generates per-HMM embeddings (ESM-2, HuggingFace) and dimensionality reduction (PCA/UMAP), with flexible clustering (HDBSCAN or Leiden) on PCA or raw embeddings, and 2D/3D UMAP scatter plots.
 -   **Cluster-Aware Subworkflow** (Optional): Extends the embedding step with per-cluster MSAs, profile HMMs, and sequence logos for subfamily-level motif analysis (see [Cluster-Aware Subworkflow](#-cluster-aware-subworkflow-optional)).
--   **MAAPE Evolutionary Network Analysis** (Optional): Constructs a weighted, directed KNN similarity network from protein embeddings using the MAAPE algorithm ([Qinlab502/MAAPE](https://github.com/Qinlab502/MAAPE)).  Sliding-window sub-vector path generation reveals directional evolutionary flow between protein subfamilies; outputs include network plots, directed edge lists, and condensed cluster-level super-graphs (see [MAAPE Step](#maape-step-optional)).
+-   **MAAPE Evolutionary Network Analysis** (Optional): Constructs a weighted, directed KNN similarity network from protein embeddings using the MAAPE algorithm ([Wang et al., 2025](https://doi.org/10.1039/D4DD00152K); [Qinlab502/MAAPE](https://github.com/Qinlab502/MAAPE)).  Sliding-window sub-vector path generation reveals directional evolutionary flow between protein subfamilies; outputs include network plots, directed edge lists, and condensed cluster-level super-graphs (see [MAAPE Step](#maape-step-optional)).
 -   **Ancestral Sequence Reconstruction**: Parses IQ-TREE `.state` files to reconstruct ancestral protein sequences, embeds them alongside modern sequences, and visualizes evolutionary trajectories in UMAP space.
 -   **Combined Tree Mode**: `--combined` flag to build a single tree from all HMM hits, with combined embeddings and clustering.
 -   **Motif Scoring** (Optional): Uses ESM-2 attention weights to score structurally important motifs (e.g., `--motifs HPEVY,HPEVF`).
@@ -633,6 +633,7 @@ Control execution range with `--start_at <STEP>` and `--stop_after <STEP>` on th
 
 ### Step 4b: `maape` (Optional)  (`phylofoundry maape [--knn_k K] [--knn_threshold T]`)
 -   **Depends on**: `embed` step outputs (`embeddings/`).
+-   **Citation**: Wang et al. (2025) *Digital Discovery* — [doi:10.1039/D4DD00152K](https://doi.org/10.1039/D4DD00152K)
 -   **Action**: Runs the MAAPE algorithm to construct a weighted, directed KNN similarity network from protein embeddings.
     1.  **PCA + L2 normalise** the embedding vectors (or reuse the embed step's PCA).
     2.  **Sliding-window path generation** — for each window size, extract sub-vectors and record assembly paths between pairs with cosine similarity above a per-window threshold.
@@ -2144,3 +2145,26 @@ Selection tests.
 -   `label_mode`: (Default: `"crown"`) Branch-label strategy for clade foreground (`"crown"` or `"stem"`).
 -   `relax_label_reference`: (Default: `true`) Add `{reference}` labels to non-foreground branches for RELAX.
 -   `hyphy_args`: Existing per-test args are still supported; in clade-aware mode, `aBSREL`/`BUSTED` branch labels are forced to `FG` and RELAX labels are synchronized to `test`/`reference`.
+
+---
+
+## 📚 References & Citations
+
+If you use PhyloFoundry's **MAAPE evolutionary network analysis** step in your work, please cite the original MAAPE paper:
+
+> Wang, X., Gao, Q., Zhang, H., Huang, J., & Qin, Z. (2025). **MAAPE: a tool for modular evolution analysis of protein embeddings.** *Digital Discovery*, 4, 1462–1473. https://doi.org/10.1039/D4DD00152K
+
+BibTeX:
+```bibtex
+@article{wang2025maape,
+  title   = {{MAAPE}: a tool for modular evolution analysis of protein embeddings},
+  author  = {Wang, Xiaoyu and Gao, Qiandi and Zhang, Heqian and Huang, Jiaquan and Qin, Zhiwei},
+  journal = {Digital Discovery},
+  volume  = {4},
+  pages   = {1462--1473},
+  year    = {2025},
+  publisher = {Royal Society of Chemistry},
+  doi     = {10.1039/D4DD00152K},
+  url     = {https://doi.org/10.1039/D4DD00152K}
+}
+```
