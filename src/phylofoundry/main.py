@@ -44,6 +44,7 @@ _STEP_SUBCMD_MAP: dict[str, str] = {
     "hmmer": "hmmer",
     "extract": "extract",
     "embed": "embed",
+    "maape": "maape",
     "phylo": "phylo",
     "curate": "curate",
     "taxonomy": "taxonomy_integrate",
@@ -61,6 +62,7 @@ _STEP_SUBCMD_MAP: dict[str, str] = {
 # Maps internal step names to their (config_section, key) that enables them.
 _STEP_ENABLE_MAP: dict[str, tuple[str, str]] = {
     "embed": ("embeddings", "enabled"),
+    "maape": ("maape", "enabled"),
     "curate": ("curate", "enabled"),
     "taxonomy_integrate": ("taxonomy_integrate", "enabled"),
     "conservation_metrics": ("conservation_metrics", "enabled"),
@@ -411,6 +413,56 @@ def _build_parser() -> argparse.ArgumentParser:
                               "Use this when you already have per-family FASTAs and "
                               "do not have (or need) a full prior pipeline run. "
                               "Overrides inputs.fasta_dir in the config.")
+
+    # ── maape ──────────────────────────────────────────────────────────────
+    p_maape = sub.add_parser(
+        "maape",
+        help="Run MAAPE evolutionary network analysis on protein embeddings",
+        description=(
+            "Constructs a weighted, directed KNN similarity network from protein\n"
+            "language model embeddings using the MAAPE algorithm.  Reveals\n"
+            "evolutionary relationships and directional flow between protein\n"
+            "subfamilies in embedding space.\n\n"
+            "TYPICAL USE (after embed in a pipeline run)\n"
+            "-------------------------------------------\n"
+            "  phylofoundry maape --outdir ./results --cpu 8\n\n"
+            "  Expects embedding files in --outdir/embeddings/.\n"
+            "  Outputs written to --outdir/maape/:\n"
+            "    <HMM>.maape_network.pkl      serialised directed graph\n"
+            "    <HMM>.edge_list.txt          weighted directed edge list\n"
+            "    <HMM>.maape_network.png      evolutionary network plot\n"
+            "    <HMM>.maape_aggregated.png   condensed cluster-level plot\n"
+            "    <HMM>.paths.pkl              assembly paths (intermediate)\n"
+            "    maape_summary.tsv            per-HMM network statistics\n\n"
+            "USING A CONFIG FILE\n"
+            "-------------------\n"
+            "  phylofoundry maape --config config/config.yaml --outdir ./results\n\n"
+            "  Relevant config keys:\n"
+            "    maape.enabled                    must be true (auto-set standalone)\n"
+            "    maape.window_sizes               sliding window sizes (default: [5,10,20,40,80])\n"
+            "    maape.knn_k                      KNN graph neighbours (default: 20)\n"
+            "    maape.knn_threshold              cosine similarity threshold (default: 0.5)\n"
+            "    maape.pca_components             PCA dims (null = auto)\n"
+            "    maape.similarity_threshold_base  base threshold at window_size=5\n"
+            "    maape.generate_aggregated        enable Step 6 aggregated plot\n"
+            "    output.outdir, resources.cpu"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    _add_common_args(p_maape)
+    p_maape.add_argument("--knn_k", type=int, default=None,
+                         help="Number of nearest neighbours for KNN graph "
+                              "construction (default: 20).  Overrides maape.knn_k.")
+    p_maape.add_argument("--knn_threshold", type=float, default=None,
+                         help="Minimum cosine similarity for KNN edges to be "
+                              "retained (default: 0.5).  Overrides maape.knn_threshold.")
+    p_maape.add_argument("--window_sizes", default=None,
+                         help="Comma-separated list of sliding window sizes for "
+                              "sub-vector path generation (e.g. '5,10,20,40,80').  "
+                              "Overrides maape.window_sizes.")
+    p_maape.add_argument("--no_aggregated", action="store_true",
+                         help="Skip the Step 6 aggregated condensed visualisation.  "
+                              "Overrides maape.generate_aggregated=false.")
 
     # ── phylo ──────────────────────────────────────────────────────────────
     p_phylo = sub.add_parser(
@@ -903,6 +955,18 @@ def _apply_step_args(args: argparse.Namespace, cfg: dict) -> None:
         if getattr(args, "fasta_dir", None):
             cfg["inputs"]["fasta_dir"] = args.fasta_dir
 
+    elif subcmd == "maape":
+        if getattr(args, "knn_k", None) is not None:
+            cfg.setdefault("maape", {})["knn_k"] = args.knn_k
+        if getattr(args, "knn_threshold", None) is not None:
+            cfg.setdefault("maape", {})["knn_threshold"] = args.knn_threshold
+        if getattr(args, "window_sizes", None):
+            ws = [int(w.strip()) for w in args.window_sizes.split(",") if w.strip()]
+            if ws:
+                cfg.setdefault("maape", {})["window_sizes"] = ws
+        if getattr(args, "no_aggregated", False):
+            cfg.setdefault("maape", {})["generate_aggregated"] = False
+
     elif subcmd == "phylo":
         if getattr(args, "mafft", False):
             cfg["phylo"]["mafft"] = True
@@ -1005,7 +1069,7 @@ def _build_deps(cfg: dict, step_internal: "str | None" = None) -> list[str]:
     """
     # Steps with no external tool requirements
     _no_deps = {
-        "prep", "extract", "embed", "score_motifs", "discover_motifs",
+        "prep", "extract", "embed", "maape", "score_motifs", "discover_motifs",
         "taxonomy_integrate", "conservation_metrics", "detect_clades",
         "post", "curate",
     }

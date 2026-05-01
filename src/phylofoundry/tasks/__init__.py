@@ -10,6 +10,7 @@ __all__ = [
     "diamond",
     "extract",
     "embed",
+    "maape",
     "phylo",
     "post",
     "synteny",

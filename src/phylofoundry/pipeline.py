@@ -622,6 +622,43 @@ def run_pipeline(cfg):
         checkpointer.end_run(run_id, success=True)
         return
 
+    # ── STEP: maape ────────────────────────────────────────────────────────
+    from .tasks import maape as maape_task
+
+    maape_cfg = cfg.get("maape", {})
+    if step_in_range("maape", start_at, stop_after) and maape_cfg.get("enabled", False):
+        if _is_blocked("maape"):
+            print("[pipeline] Skipping blocked step: maape")
+        elif _is_resume_skip("maape"):
+            print("[pipeline] SKIP: maape (checkpoint match)")
+            update_step_status(status_path, "maape", "success")
+            checkpointer.record_step_skipped(run_id, "maape", "fingerprint match")
+        else:
+            checkpointer.record_step_pending(run_id, "maape")
+            update_step_status(status_path, "maape", "running")
+            _log_step_event("maape", "START")
+            checkpointer.record_step_running(run_id, "maape")
+            try:
+                cpu = cfg.get("resources", {}).get("cpu", 1)
+                _maape_hmm_list = sorted(hmm_to_seqs.keys()) if hmm_to_seqs else None
+                maape_task.run_maape_all(
+                    cfg,
+                    emb_dir=emb_dir,
+                    maape_dir=paths.maape_dir,
+                    hmm_list=_maape_hmm_list,
+                    clade_assign_dir=clade_assign_dir,
+                    force=force,
+                    n_jobs=cpu,
+                )
+                update_step_status(status_path, "maape", "success")
+                _log_step_event("maape", "SUCCESS")
+                checkpointer.record_step_success(run_id, "maape")
+            except Exception as exc:
+                _on_step_failure("maape", exc)
+    if stop_after == "maape":
+        checkpointer.end_run(run_id, success=True)
+        return
+
     # ── STEP: phylo ────────────────────────────────────────────────────────
     # In DIAMOND mode there are no HMM profiles for hmmalign, so MAFFT must be
     # used for alignment.  Auto-enable it here so users don't need to set it.

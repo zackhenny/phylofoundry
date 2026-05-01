@@ -38,4 +38,6 @@ dependencies:
     - bqplot
     - pygenomeviz
     - pwlf
+    - faiss-cpu
+    - networkx
     - .  # Install the current package in editable mode
