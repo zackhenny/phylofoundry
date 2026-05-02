@@ -149,10 +149,13 @@ def _run_hmm_comparison_msa_first(
     if not focal_resolved or not rest_resolved:
         return None
 
-    # Precompute ungapped→MSA column mappings once per sequence
-    u2col_cache: dict = {}
+    # Precompute ungapped→MSA column mappings and their inverses once per sequence
+    u2col_cache: dict[str, dict[int, int]] = {}
+    col2u_cache: dict[str, dict[int, int]] = {}
     for sid in focal_resolved | rest_resolved:
-        u2col_cache[sid] = ungapped_to_msa_column(aln_seqs[sid])
+        u2col = ungapped_to_msa_column(aln_seqs[sid])
+        u2col_cache[sid] = u2col
+        col2u_cache[sid] = {v: k for k, v in u2col.items()}
 
     col_focal_sum = np.zeros(n_cols)
     col_focal_cnt = np.zeros(n_cols, dtype=int)
@@ -189,8 +192,7 @@ def _run_hmm_comparison_msa_first(
             aln = aln_seqs[sid]
             if peak_col >= len(aln) or aln[peak_col] == "-":
                 continue
-            col2u = {v: k for k, v in u2col_cache[sid].items()}
-            ungapped_1based = col2u.get(peak_col)
+            ungapped_1based = col2u_cache[sid].get(peak_col)
             if ungapped_1based is None:
                 continue
             seq = raw_seqs.get(sid, "")
@@ -542,6 +544,12 @@ def discover_motifs(cfg, fasta_dir, summary_dir, discover_dir, hmm_keep, force=F
     novel_clade = disc_cfg.get("novel_clade")
     cross_hmm = bool(disc_cfg.get("cross_hmm_comparison", False))
     group_source = str(disc_cfg.get("group_source", "auto")).strip().lower()
+    _valid_group_sources = {"auto", "hdbscan", "detected"}
+    if group_source not in _valid_group_sources:
+        raise SystemExit(
+            f"discover.group_source '{group_source}' is not valid. "
+            f"Must be one of: {sorted(_valid_group_sources)}"
+        )
 
     ha_cfg = cfg.get("ha", {})
     candidates_enabled = bool(disc_cfg.get("candidates", {}).get("enabled", True))
@@ -778,7 +786,7 @@ def discover_motifs(cfg, fasta_dir, summary_dir, discover_dir, hmm_keep, force=F
         # Load MSA data per HMM upfront for MSA-column-first comparison
         _align_clipkit_dir = os.path.join(os.path.dirname(summary_dir), "alignments_clipkit")
         _align_dir = os.path.join(os.path.dirname(summary_dir), "alignments")
-        hmm_aln_seqs: dict = {}
+        hmm_aln_seqs: dict[str, dict[str, str]] = {}
         for _hmm_name in hmm_to_seqs:
             _clip = os.path.join(_align_clipkit_dir, f"{_hmm_name}.clipkit.faa")
             _afa = os.path.join(_align_dir, f"{_hmm_name}.afa")
