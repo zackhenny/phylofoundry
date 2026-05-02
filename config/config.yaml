@@ -520,8 +520,15 @@ discover:
   ha_window: 9               # (int) Sliding window size for HA smoothing.
   ha_delta_min: 0.2          # (float) Minimum HA delta to call a high-attention region.
   ha_gap_frac_max: 0.6       # (float) Maximum gap fraction at a site to include it.
-  cross_hmm_comparison: true # (bool) Compare attention profiles across HMMs as well as
-                             #   within each HMM.
+  cross_hmm_comparison: false # (bool) Compare attention profiles across HMMs as well as
+                              #   within each HMM.  Defaults to false (per-HMM mode) because
+                              #   cross-HMM pooling mixes unrelated protein families and
+                              #   degrades signal quality.
+  group_source: "auto"       # (string) Which clade groupings to use as discovery groups.
+                              #   Options: "auto" (use both HDBSCAN clusters and detected
+                              #     clades when available) | "hdbscan" (only HDBSCAN clusters
+                              #     from clade_assignment.tsv) | "detected" (only detected
+                              #     clades from clade_assign_dir / detected_clades.tsv).
   candidates:                # Scoring weights for ranking novel-motif candidates.
     enabled: true            # (bool) Enable the candidate-scoring sub-step.
     min_delta_ha: 0.1        # (float) Minimum HA delta for a candidate site.

@@ -219,19 +219,24 @@ def score_motifs(cfg, fasta_dir, summary_dir, motifs_dir, hmm_keep, force=False)
                             "attention_score": score,
                             "motif_present": True,
                             "clade_id": clade_map.get(seq_id, ""),
+                            "detected_clade": detected_clade_map.get(seq_id, ""),
                             "type": seq_type,
                         }
                     )
 
-                for pos in positions:
-                    all_rows.append({
+                if use_ha and seq_id in hmm_ha_scores:
+                    n_hits, ha_ov_mean, ha_ov_max, ha_sc_mean, ha_sc_sum = _motif_ha_metrics(
+                        positions, len(motif), hmm_ha_scores[seq_id], hmm_ha_masks[seq_id]
+                    )
+                    ha_rows.append({
                         "hmm": hmm,
                         "seq_id": seq_id,
                         "motif": motif,
-                        "start_pos": pos,
-                        "end_pos": pos + len(motif),
-                        "attention_score": score,
-                        "motif_present": True,
+                        "n_hits": n_hits,
+                        "ha_overlap_mean": ha_ov_mean,
+                        "ha_overlap_max": ha_ov_max,
+                        "ha_score_mean": ha_sc_mean,
+                        "ha_score_sum_mean": ha_sc_sum,
                         "clade_id": clade_map.get(seq_id, ""),
                         "detected_clade": detected_clade_map.get(seq_id, ""),
                         "type": seq_type,

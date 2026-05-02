@@ -121,6 +121,115 @@ def _extract_kmer_at_position(sequence: str, position: int, k: int = 5) -> str:
     return sequence[start:end]
 
 
+def _run_hmm_comparison_msa_first(
+    aln_seqs: dict,
+    raw_seqs: dict,
+    profiles: dict,
+    focal_ids: set,
+    rest_ids: set,
+    focal_clade,
+    ref_label: str,
+    kmer_size: int,
+    top_n: int,
+) -> "pd.DataFrame | None":
+    """MSA-column-first clade comparison for per-HMM discovery.
+
+    Computes per-MSA-column attention deltas (focal vs rest) rather than
+    interpolating profiles to a fixed normalized length.  This correctly
+    handles insertions and deletions in the alignment.
+    """
+    if not aln_seqs:
+        return None
+    n_cols = len(next(iter(aln_seqs.values())))
+    if n_cols == 0:
+        return None
+
+    focal_resolved = {s for s in focal_ids if s in aln_seqs and s in profiles}
+    rest_resolved = {s for s in rest_ids if s in aln_seqs and s in profiles}
+    if not focal_resolved or not rest_resolved:
+        return None
+
+    # Precompute ungapped→MSA column mappings once per sequence
+    u2col_cache: dict = {}
+    for sid in focal_resolved | rest_resolved:
+        u2col_cache[sid] = ungapped_to_msa_column(aln_seqs[sid])
+
+    col_focal_sum = np.zeros(n_cols)
+    col_focal_cnt = np.zeros(n_cols, dtype=int)
+    col_rest_sum = np.zeros(n_cols)
+    col_rest_cnt = np.zeros(n_cols, dtype=int)
+
+    for sid in focal_resolved:
+        prof = profiles[sid]
+        for ungapped_1based, msa_col in u2col_cache[sid].items():
+            i = ungapped_1based - 1
+            if i < len(prof):
+                col_focal_sum[msa_col] += prof[i]
+                col_focal_cnt[msa_col] += 1
+
+    for sid in rest_resolved:
+        prof = profiles[sid]
+        for ungapped_1based, msa_col in u2col_cache[sid].items():
+            i = ungapped_1based - 1
+            if i < len(prof):
+                col_rest_sum[msa_col] += prof[i]
+                col_rest_cnt[msa_col] += 1
+
+    col_focal_mean = np.where(col_focal_cnt > 0, col_focal_sum / col_focal_cnt, 0.0)
+    col_rest_mean = np.where(col_rest_cnt > 0, col_rest_sum / col_rest_cnt, 0.0)
+    delta = col_focal_mean - col_rest_mean
+
+    peaks = _find_peaks_in_delta(delta, top_n=top_n)
+
+    rows = []
+    for peak_col, delta_val in peaks:
+        if delta_val <= 0:
+            continue
+        for sid in focal_resolved:
+            aln = aln_seqs[sid]
+            if peak_col >= len(aln) or aln[peak_col] == "-":
+                continue
+            col2u = {v: k for k, v in u2col_cache[sid].items()}
+            ungapped_1based = col2u.get(peak_col)
+            if ungapped_1based is None:
+                continue
+            seq = raw_seqs.get(sid, "")
+            if not seq:
+                continue
+            raw_pos = ungapped_1based - 1
+            kmer = _extract_kmer_at_position(seq, raw_pos, k=kmer_size)
+            rows.append({
+                "kmer": kmer,
+                "msa_col": peak_col,
+                "position": raw_pos,
+                "normalized_position": peak_col,
+                "attention_delta": delta_val,
+                "source_clade": focal_clade,
+                "representative_seq_id": sid,
+            })
+
+    if not rows:
+        return None
+
+    df = pd.DataFrame(rows)
+    kmer_summ = (
+        df.groupby("kmer")
+        .agg(
+            n_sequences=("representative_seq_id", "nunique"),
+            mean_attention_delta=("attention_delta", "mean"),
+            median_position=("position", "median"),
+            median_msa_col=("msa_col", "median"),
+            representative_seq_id=("representative_seq_id", "first"),
+        )
+        .reset_index()
+        .sort_values("mean_attention_delta", ascending=False)
+        .head(top_n)
+    )
+    kmer_summ["source_clade"] = focal_clade
+    kmer_summ["reference_clade"] = ref_label
+    return kmer_summ
+
+
 def _compute_ha_enrichment_for_hmm(hmm, aln_seqs, clade_df_hmm, ha_cfg, disc_cfg, attention_dir, discover_dir):
     use_clusters = sorted([c for c in clade_df_hmm["cluster_id"].dropna().unique() if c != -1])
     if len(use_clusters) < 2:
@@ -431,7 +540,8 @@ def discover_motifs(cfg, fasta_dir, summary_dir, discover_dir, hmm_keep, force=F
     n_layers = disc_cfg.get("attention_layers", 4)
     standard_clade = disc_cfg.get("standard_clade")
     novel_clade = disc_cfg.get("novel_clade")
-    cross_hmm = bool(disc_cfg.get("cross_hmm_comparison", True))
+    cross_hmm = bool(disc_cfg.get("cross_hmm_comparison", False))
+    group_source = str(disc_cfg.get("group_source", "auto")).strip().lower()
 
     ha_cfg = cfg.get("ha", {})
     candidates_enabled = bool(disc_cfg.get("candidates", {}).get("enabled", True))
@@ -459,39 +569,41 @@ def discover_motifs(cfg, fasta_dir, summary_dir, discover_dir, hmm_keep, force=F
     # Build clade_to_proteins mapping from HDBSCAN clusters (protein column)
     # Keys are cluster IDs (numeric); values are sets of protein identifiers
     clade_to_proteins = {}
-    for cluster_id, grp in clade_df.groupby("cluster_id"):
-        if pd.isna(cluster_id) or cluster_id == -1:
-            continue
-        clade_to_proteins[cluster_id] = set(grp["protein"].values)
+    if group_source in ("auto", "hdbscan"):
+        for cluster_id, grp in clade_df.groupby("cluster_id"):
+            if pd.isna(cluster_id) or cluster_id == -1:
+                continue
+            clade_to_proteins[cluster_id] = set(grp["protein"].values)
 
     # Load detected clades from per-HMM clade_assignments or global detected_clades.tsv
     detected_fp = os.path.join(summary_dir, "detected_clades.tsv")
-    if clade_assign_dir and os.path.isdir(clade_assign_dir):
-        from .post import load_per_hmm_clades
-        clade_files = glob.glob(os.path.join(clade_assign_dir, "*.clades.tsv"))
-        n_detected_clades = 0
-        n_detected_proteins = 0
-        for cf in clade_files:
-            hmm_name = os.path.basename(cf).replace(".clades.tsv", "")
-            per_hmm = load_per_hmm_clades(clade_assign_dir, hmm_name)
-            if per_hmm:
-                for clade_name, tips in per_hmm.items():
-                    clade_to_proteins[clade_name] = set(tips)
-                    n_detected_proteins += len(tips)
-                    n_detected_clades += 1
-        if n_detected_clades:
+    if group_source in ("auto", "detected"):
+        if clade_assign_dir and os.path.isdir(clade_assign_dir):
+            from .post import load_per_hmm_clades
+            clade_files = glob.glob(os.path.join(clade_assign_dir, "*.clades.tsv"))
+            n_detected_clades = 0
+            n_detected_proteins = 0
+            for cf in clade_files:
+                hmm_name = os.path.basename(cf).replace(".clades.tsv", "")
+                per_hmm = load_per_hmm_clades(clade_assign_dir, hmm_name)
+                if per_hmm:
+                    for clade_name, tips in per_hmm.items():
+                        clade_to_proteins[clade_name] = set(tips)
+                        n_detected_proteins += len(tips)
+                        n_detected_clades += 1
+            if n_detected_clades:
+                print(f"[discover] Loaded {n_detected_clades} detected clades from "
+                      f"clade_assignments/ ({n_detected_proteins} total proteins).")
+        elif os.path.exists(detected_fp):
+            detected_df = pd.read_csv(detected_fp, sep="\t")
+            n_detected_proteins = 0
+            for clade_name, grp in detected_df.groupby("clade_name"):
+                tips = set(grp["tip"].values)
+                clade_to_proteins[clade_name] = tips
+                n_detected_proteins += len(tips)
+            n_detected_clades = detected_df["clade_name"].nunique()
             print(f"[discover] Loaded {n_detected_clades} detected clades from "
-                  f"clade_assignments/ ({n_detected_proteins} total proteins).")
-    elif os.path.exists(detected_fp):
-        detected_df = pd.read_csv(detected_fp, sep="\t")
-        n_detected_proteins = 0
-        for clade_name, grp in detected_df.groupby("clade_name"):
-            tips = set(grp["tip"].values)
-            clade_to_proteins[clade_name] = tips
-            n_detected_proteins += len(tips)
-        n_detected_clades = detected_df["clade_name"].nunique()
-        print(f"[discover] Loaded {n_detected_clades} detected clades from "
-              f"detected_clades.tsv ({n_detected_proteins} total proteins).")
+                  f"detected_clades.tsv ({n_detected_proteins} total proteins).")
 
     all_clades = list(clade_to_proteins.keys())
 
@@ -662,6 +774,19 @@ def discover_motifs(cfg, fasta_dir, summary_dir, discover_dir, hmm_keep, force=F
     else:
         # Per-HMM mode: compare clades only within each HMM
         print("[discover] cross_hmm_comparison=false: comparing clades within each HMM separately.")
+
+        # Load MSA data per HMM upfront for MSA-column-first comparison
+        _align_clipkit_dir = os.path.join(os.path.dirname(summary_dir), "alignments_clipkit")
+        _align_dir = os.path.join(os.path.dirname(summary_dir), "alignments")
+        hmm_aln_seqs: dict = {}
+        for _hmm_name in hmm_to_seqs:
+            _clip = os.path.join(_align_clipkit_dir, f"{_hmm_name}.clipkit.faa")
+            _afa = os.path.join(_align_dir, f"{_hmm_name}.afa")
+            _mafft = os.path.join(_align_dir, f"{_hmm_name}.mafft.fasta")
+            _aln_fp = _clip if os.path.exists(_clip) else _mafft if os.path.exists(_mafft) else _afa
+            if os.path.exists(_aln_fp):
+                hmm_aln_seqs[_hmm_name] = read_fasta(_aln_fp)
+
         hmm_clade_groups = {}
         for cname, proteins in clade_to_proteins.items():
             # Determine which HMM a clade belongs to by checking prefix or clade_df
@@ -690,11 +815,34 @@ def discover_motifs(cfg, fasta_dir, summary_dir, discover_dir, hmm_keep, force=F
             if len(hmm_clades_unique) < 2:
                 continue
             print(f"[discover]   HMM '{hmm_prefix}': {len(hmm_clades_unique)} clades")
+            hmm_raw = hmm_to_seqs.get(hmm_prefix, {})
+            hmm_aln = hmm_aln_seqs.get(hmm_prefix, {})
             for focal_clade in hmm_clades_unique:
-                result = _run_comparison(
-                    focal_clade, hmm_clades_unique,
-                    clade_to_proteins, f"OTHERS_IN_{hmm_prefix}"
-                )
+                raw_focal = clade_to_proteins.get(focal_clade, set())
+                raw_rest: set = set()
+                for other in hmm_clades_unique:
+                    if other != focal_clade:
+                        raw_rest.update(clade_to_proteins.get(other, set()))
+                focal_ids_r = _resolve_seq_ids(raw_focal, set(all_profiles.keys()))
+                rest_ids_r = _resolve_seq_ids(raw_rest, set(all_profiles.keys()))
+
+                if hmm_aln:
+                    result = _run_hmm_comparison_msa_first(
+                        hmm_aln,
+                        hmm_raw,
+                        all_profiles,
+                        focal_ids_r,
+                        rest_ids_r,
+                        focal_clade,
+                        f"OTHERS_IN_{hmm_prefix}",
+                        kmer_size,
+                        top_n,
+                    )
+                else:
+                    result = _run_comparison(
+                        focal_clade, hmm_clades_unique,
+                        clade_to_proteins, f"OTHERS_IN_{hmm_prefix}"
+                    )
                 if result is not None:
                     result["hmm"] = hmm_prefix
                     all_discovered_motifs.append(result)
