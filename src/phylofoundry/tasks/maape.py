@@ -69,7 +69,7 @@ def _is_valid_png(path: str) -> bool:
         return False
 
 
-def _choose_layout(G: Any, seed: int = _LAYOUT_SEED) -> dict:
+def _choose_layout(G: Any, seed: int = _LAYOUT_SEED, label: str = "") -> dict:
     """Choose a graph layout algorithm based on the number of nodes.
 
     ``nx.spring_layout`` (Fruchterman-Reingold) is O(n² × iterations) and
@@ -86,6 +86,8 @@ def _choose_layout(G: Any, seed: int = _LAYOUT_SEED) -> dict:
     seed:
         Random seed used by spring_layout and random_layout for reproducible
         node placement.
+    label:
+        Optional context string (e.g. HMM name) included in fallback log messages.
     """
     import networkx as nx
 
@@ -97,9 +99,10 @@ def _choose_layout(G: Any, seed: int = _LAYOUT_SEED) -> dict:
         try:
             return nx.kamada_kawai_layout(G)
         except Exception as exc:
+            ctx = f" [{label}]" if label else ""
             print(
-                f"[maape] kamada_kawai_layout failed ({exc}); "
-                "falling back to random_layout.",
+                f"[maape]{ctx} kamada_kawai_layout failed "
+                f"({type(exc).__name__}: {exc}); falling back to random_layout.",
                 file=sys.stderr,
             )
     return nx.random_layout(G, seed=seed)
@@ -541,7 +544,7 @@ def _visualize_maape(
     try:
         fig, ax = plt.subplots(figsize=(12, 10))
 
-        pos = _choose_layout(G)
+        pos = _choose_layout(G, label=hmm_name)
 
         # Node colours
         if color_map:
@@ -668,7 +671,7 @@ def _visualize_aggregated(
             S.add_edge(cu, cv, weight=total_w)
 
         fig, ax = plt.subplots(figsize=(10, 8))
-        pos = _choose_layout(S, seed=0)
+        pos = _choose_layout(S, seed=0, label=hmm_name)
 
         node_sizes = [200 + 20 * S.nodes[n].get("count", 1) for n in S.nodes()]
         cmap = plt.cm.get_cmap("tab20", max(len(cluster_ids), 1))
@@ -856,7 +859,7 @@ def run_maape(
         except Exception as exc:
             print(
                 f"[maape] WARNING: Cached paths file is corrupt for {hmm_name} "
-                f"({exc}); regenerating...",
+                f"({type(exc).__name__}: {exc}); regenerating...",
                 file=sys.stderr,
             )
             os.remove(paths_pkl)
@@ -897,7 +900,7 @@ def run_maape(
         except Exception as exc:
             print(
                 f"[maape] WARNING: Cached network file is corrupt for {hmm_name} "
-                f"({exc}); regenerating...",
+                f"({type(exc).__name__}: {exc}); regenerating...",
                 file=sys.stderr,
             )
             os.remove(network_pkl)
