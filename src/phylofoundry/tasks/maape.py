@@ -40,6 +40,73 @@ DEFAULT_PCA_COMPONENTS: int = 110
 #: Fixed random seed for reproducible spring-layout placement.
 _LAYOUT_SEED: int = 42
 
+#: Maximum number of nodes for which ``nx.spring_layout`` (Fruchterman-Reingold)
+#: is used.  Spring layout is O(n² × iterations) and becomes extremely slow for
+#: large graphs, causing pipeline timeouts.  Above this threshold the faster
+#: ``nx.kamada_kawai_layout`` (O(n³) but no iterative loop) is used instead.
+_SPRING_LAYOUT_MAX_NODES: int = 500
+
+#: PNG file magic bytes used to detect valid (non-truncated) plot files.
+_PNG_MAGIC: bytes = b"\x89PNG\r\n\x1a\n"
+
+
+# ---------------------------------------------------------------------------
+# Utility helpers
+# ---------------------------------------------------------------------------
+
+def _is_valid_png(path: str) -> bool:
+    """Return ``True`` if *path* exists and begins with the PNG magic bytes.
+
+    A bare ``os.path.exists`` check is insufficient: when a run is killed
+    mid-write, ``fig.savefig`` may leave a zero-length or truncated file on
+    disk.  Checking the magic header ensures such partial files are treated as
+    absent and the plot is regenerated on the next run.
+    """
+    try:
+        with open(path, "rb") as fh:
+            return fh.read(8) == _PNG_MAGIC
+    except OSError:
+        return False
+
+
+def _choose_layout(G: Any, seed: int = _LAYOUT_SEED, label: str = "") -> dict:
+    """Choose a graph layout algorithm based on the number of nodes.
+
+    ``nx.spring_layout`` (Fruchterman-Reingold) is O(n² × iterations) and
+    hangs for graphs with many nodes.  For graphs larger than
+    ``_SPRING_LAYOUT_MAX_NODES`` we fall back to ``nx.kamada_kawai_layout``
+    which does not iterate and remains tractable for moderate-sized graphs.
+    For very large graphs (> 2 × ``_SPRING_LAYOUT_MAX_NODES``) we use the
+    O(n) ``nx.random_layout`` so that plotting always completes quickly.
+
+    Parameters
+    ----------
+    G:
+        A NetworkX graph object.
+    seed:
+        Random seed used by spring_layout and random_layout for reproducible
+        node placement.
+    label:
+        Optional context string (e.g. HMM name) included in fallback log messages.
+    """
+    import networkx as nx
+
+    n = len(G)
+    if n <= _SPRING_LAYOUT_MAX_NODES:
+        return nx.spring_layout(G, seed=seed,
+                                k=1.0 / max(1, math.sqrt(n)))
+    if n <= 2 * _SPRING_LAYOUT_MAX_NODES:
+        try:
+            return nx.kamada_kawai_layout(G)
+        except Exception as exc:
+            ctx = f" [{label}]" if label else ""
+            print(
+                f"[maape]{ctx} kamada_kawai_layout failed "
+                f"({type(exc).__name__}: {exc}); falling back to random_layout.",
+                file=sys.stderr,
+            )
+    return nx.random_layout(G, seed=seed)
+
 
 # ---------------------------------------------------------------------------
 # Step 1 helpers — embedding loading and PCA/L2 normalisation
@@ -477,7 +544,7 @@ def _visualize_maape(
     try:
         fig, ax = plt.subplots(figsize=(12, 10))
 
-        pos = nx.spring_layout(G, seed=_LAYOUT_SEED, k=1.0 / max(1, math.sqrt(len(G))))
+        pos = _choose_layout(G, label=hmm_name)
 
         # Node colours
         if color_map:
@@ -604,7 +671,7 @@ def _visualize_aggregated(
             S.add_edge(cu, cv, weight=total_w)
 
         fig, ax = plt.subplots(figsize=(10, 8))
-        pos = nx.spring_layout(S, seed=0)
+        pos = _choose_layout(S, seed=0, label=hmm_name)
 
         node_sizes = [200 + 20 * S.nodes[n].get("count", 1) for n in S.nodes()]
         cmap = plt.cm.get_cmap("tab20", max(len(cluster_ids), 1))
@@ -783,11 +850,20 @@ def run_maape(
             X = _l2_normalize(X_raw)
 
     # ── Step 2: Path generation ──────────────────────────────────────────────
+    paths = None
     if os.path.exists(paths_pkl) and not force:
         print(f"[maape] Loading cached paths for {hmm_name}...")
-        with open(paths_pkl, "rb") as fh:
-            paths = pickle.load(fh)
-    else:
+        try:
+            with open(paths_pkl, "rb") as fh:
+                paths = pickle.load(fh)
+        except Exception as exc:
+            print(
+                f"[maape] WARNING: Cached paths file is corrupt for {hmm_name} "
+                f"({type(exc).__name__}: {exc}); regenerating...",
+                file=sys.stderr,
+            )
+            os.remove(paths_pkl)
+    if paths is None:
         print(f"[maape] Generating assembly paths for {hmm_name} "
               f"({n_seqs} seqs, windows={window_sizes})...")
         thresholds = _compute_similarity_thresholds(window_sizes, base_threshold)
@@ -806,19 +882,29 @@ def run_maape(
         with open(edgelist_txt, "w") as fh:
             fh.write("source\ttarget\tweight\n")
             for (src, tgt, w) in edge_list:
-                assert 0 <= src < len(ids) and 0 <= tgt < len(ids), (
-                    f"[maape] Edge index out of range for {hmm_name}: "
-                    f"src={src}, tgt={tgt}, n_seqs={len(ids)}"
-                )
+                if not (0 <= src < len(ids) and 0 <= tgt < len(ids)):
+                    raise RuntimeError(
+                        f"[maape] Edge index out of range for {hmm_name}: "
+                        f"src={src}, tgt={tgt}, n_seqs={len(ids)}"
+                    )
                 fh.write(f"{ids[src]}\t{ids[tgt]}\t{w:.6f}\n")
         print(f"[maape] Wrote edge list: {edgelist_txt} ({len(edge_list)} edges)")
 
     # ── Step 4: KNN graph ────────────────────────────────────────────────────
+    G = None
     if os.path.exists(network_pkl) and not force:
         print(f"[maape] Loading cached network for {hmm_name}...")
-        with open(network_pkl, "rb") as fh:
-            G = pickle.load(fh)
-    else:
+        try:
+            with open(network_pkl, "rb") as fh:
+                G = pickle.load(fh)
+        except Exception as exc:
+            print(
+                f"[maape] WARNING: Cached network file is corrupt for {hmm_name} "
+                f"({type(exc).__name__}: {exc}); regenerating...",
+                file=sys.stderr,
+            )
+            os.remove(network_pkl)
+    if G is None:
         print(f"[maape] Building KNN graph for {hmm_name} (k={knn_k})...")
         G = _build_knn_graph(X, ids, knn_k, knn_threshold, edge_list)
         with open(network_pkl, "wb") as fh:
@@ -835,7 +921,7 @@ def run_maape(
     )
 
     # ── Step 5: MAAPE network visualisation ──────────────────────────────────
-    if not os.path.exists(net_png) or force:
+    if not _is_valid_png(net_png) or force:
         # Prefer user-supplied color_scheme from config over auto-detected clade map
         if isinstance(cfg_color_scheme, dict):
             color_map: dict[str, str] | None = cfg_color_scheme
@@ -844,7 +930,7 @@ def run_maape(
         _visualize_maape(G, ids, net_png, hmm_name, color_map=color_map)
 
     # ── Step 6: Aggregated visualisation ─────────────────────────────────────
-    if generate_aggregated and (not os.path.exists(agg_png) or force):
+    if generate_aggregated and (not _is_valid_png(agg_png) or force):
         cluster_labels = _load_cluster_labels(hmm_name, emb_dir)
         _visualize_aggregated(G, ids, cluster_labels, agg_png, hmm_name)
 
