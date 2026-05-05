@@ -69,7 +69,7 @@ def _is_valid_png(path: str) -> bool:
         return False
 
 
-def _choose_layout(G: "Any") -> dict:
+def _choose_layout(G: Any, seed: int = _LAYOUT_SEED) -> dict:
     """Choose a graph layout algorithm based on the number of nodes.
 
     ``nx.spring_layout`` (Fruchterman-Reingold) is O(n² × iterations) and
@@ -78,19 +78,31 @@ def _choose_layout(G: "Any") -> dict:
     which does not iterate and remains tractable for moderate-sized graphs.
     For very large graphs (> 2 × ``_SPRING_LAYOUT_MAX_NODES``) we use the
     O(n) ``nx.random_layout`` so that plotting always completes quickly.
+
+    Parameters
+    ----------
+    G:
+        A NetworkX graph object.
+    seed:
+        Random seed used by spring_layout and random_layout for reproducible
+        node placement.
     """
     import networkx as nx
 
     n = len(G)
     if n <= _SPRING_LAYOUT_MAX_NODES:
-        return nx.spring_layout(G, seed=_LAYOUT_SEED,
+        return nx.spring_layout(G, seed=seed,
                                 k=1.0 / max(1, math.sqrt(n)))
     if n <= 2 * _SPRING_LAYOUT_MAX_NODES:
         try:
             return nx.kamada_kawai_layout(G)
-        except Exception:
-            pass
-    return nx.random_layout(G, seed=_LAYOUT_SEED)
+        except Exception as exc:
+            print(
+                f"[maape] kamada_kawai_layout failed ({exc}); "
+                "falling back to random_layout.",
+                file=sys.stderr,
+            )
+    return nx.random_layout(G, seed=seed)
 
 
 # ---------------------------------------------------------------------------
@@ -656,7 +668,7 @@ def _visualize_aggregated(
             S.add_edge(cu, cv, weight=total_w)
 
         fig, ax = plt.subplots(figsize=(10, 8))
-        pos = _choose_layout(S)
+        pos = _choose_layout(S, seed=0)
 
         node_sizes = [200 + 20 * S.nodes[n].get("count", 1) for n in S.nodes()]
         cmap = plt.cm.get_cmap("tab20", max(len(cluster_ids), 1))
