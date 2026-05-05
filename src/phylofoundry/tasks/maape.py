@@ -847,11 +847,20 @@ def run_maape(
             X = _l2_normalize(X_raw)
 
     # ── Step 2: Path generation ──────────────────────────────────────────────
+    paths = None
     if os.path.exists(paths_pkl) and not force:
         print(f"[maape] Loading cached paths for {hmm_name}...")
-        with open(paths_pkl, "rb") as fh:
-            paths = pickle.load(fh)
-    else:
+        try:
+            with open(paths_pkl, "rb") as fh:
+                paths = pickle.load(fh)
+        except Exception as exc:
+            print(
+                f"[maape] WARNING: Cached paths file is corrupt for {hmm_name} "
+                f"({exc}); regenerating...",
+                file=sys.stderr,
+            )
+            os.remove(paths_pkl)
+    if paths is None:
         print(f"[maape] Generating assembly paths for {hmm_name} "
               f"({n_seqs} seqs, windows={window_sizes})...")
         thresholds = _compute_similarity_thresholds(window_sizes, base_threshold)
@@ -870,19 +879,29 @@ def run_maape(
         with open(edgelist_txt, "w") as fh:
             fh.write("source\ttarget\tweight\n")
             for (src, tgt, w) in edge_list:
-                assert 0 <= src < len(ids) and 0 <= tgt < len(ids), (
-                    f"[maape] Edge index out of range for {hmm_name}: "
-                    f"src={src}, tgt={tgt}, n_seqs={len(ids)}"
-                )
+                if not (0 <= src < len(ids) and 0 <= tgt < len(ids)):
+                    raise RuntimeError(
+                        f"[maape] Edge index out of range for {hmm_name}: "
+                        f"src={src}, tgt={tgt}, n_seqs={len(ids)}"
+                    )
                 fh.write(f"{ids[src]}\t{ids[tgt]}\t{w:.6f}\n")
         print(f"[maape] Wrote edge list: {edgelist_txt} ({len(edge_list)} edges)")
 
     # ── Step 4: KNN graph ────────────────────────────────────────────────────
+    G = None
     if os.path.exists(network_pkl) and not force:
         print(f"[maape] Loading cached network for {hmm_name}...")
-        with open(network_pkl, "rb") as fh:
-            G = pickle.load(fh)
-    else:
+        try:
+            with open(network_pkl, "rb") as fh:
+                G = pickle.load(fh)
+        except Exception as exc:
+            print(
+                f"[maape] WARNING: Cached network file is corrupt for {hmm_name} "
+                f"({exc}); regenerating...",
+                file=sys.stderr,
+            )
+            os.remove(network_pkl)
+    if G is None:
         print(f"[maape] Building KNN graph for {hmm_name} (k={knn_k})...")
         G = _build_knn_graph(X, ids, knn_k, knn_threshold, edge_list)
         with open(network_pkl, "wb") as fh:
