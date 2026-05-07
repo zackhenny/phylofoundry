@@ -13,6 +13,7 @@ __all__ = [
     "maape",
     "phylo",
     "post",
+    "tree_viz",
     "synteny",
     "codon",
     "hyphy",

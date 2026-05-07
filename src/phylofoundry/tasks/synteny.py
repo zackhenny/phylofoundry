@@ -1,4 +1,5 @@
 import os
+import sys
 import shutil
 import subprocess
 import glob
@@ -85,7 +86,6 @@ def load_genbank_neighborhood(gbk_path, protein_id, window_genes, protein_id_fie
                 return neighborhood, record.seq
                 
     except Exception as e:
-        import sys
         print(f"[synteny] Warning: Failed to parse GenBank {gbk_path}: {e}", file=sys.stderr)
     return [], None
 
@@ -217,7 +217,6 @@ def _annotate_neighborhood_proteins(proteins_faa, combined_hmm, annotation_evalu
                             "annotation_bitscore": bitscore,
                         }
     except Exception as e:
-        import sys
         print(f"[synteny] Warning: HMM annotation of neighborhood proteins failed: {e}", file=sys.stderr)
     finally:
         try:
@@ -227,7 +226,85 @@ def _annotate_neighborhood_proteins(proteins_faa, combined_hmm, annotation_evalu
 
     return annotations
 
-def run_synteny(cfg, synteny_dir, tree_dir, scan_df, search_df, hmm_keep, force=False, clade_assign_dir=None):
+def _get_tree_tip_order(tree_fp):
+    """Return an ordered list of tip labels as rendered by a rectangular tree.
+
+    Uses scikit-bio's TreeNode to traverse the tree and extract tips in
+    the order they would appear in a left-to-right rectangular layout
+    (post-order traversal of the Newick tree as written by IQ-TREE).
+
+    Returns an empty list if the treefile cannot be read or scikit-bio
+    is unavailable.
+    """
+    try:
+        from skbio import TreeNode
+    except ImportError:
+        return []
+
+    try:
+        tree = TreeNode.read(tree_fp, format="newick")
+        return [n.name for n in tree.tips() if n.name]
+    except Exception:
+        return []
+
+
+def _call_synteny_tree_r(
+    rscript_bin,
+    r_script,
+    hmm_name,
+    tree_fp,
+    synteny_tsv,
+    tree_panel_dir,
+    clades_tsv=None,
+    tax_tsv=None,
+    formats="png",
+    width=20,
+    height=0,
+    bootstrap_min=80,
+    show_tip_labels="auto",
+    color_palette="Set3",
+    tax_level="genus",
+):
+    """Invoke ``scripts/plot_synteny_tree.R`` for one HMM."""
+    cmd = [
+        rscript_bin, "--vanilla", r_script,
+        "--treefile", tree_fp,
+        "--synteny_tsv", synteny_tsv,
+        "--outdir", tree_panel_dir,
+        "--hmm_name", hmm_name,
+        "--format", formats,
+        "--width", str(width),
+        "--height", str(height),
+        "--bootstrap_min", str(bootstrap_min),
+        "--show_tip_labels", show_tip_labels,
+        "--color_palette", color_palette,
+        "--tax_level", tax_level,
+    ]
+    if clades_tsv:
+        cmd += ["--clades_tsv", clades_tsv]
+    if tax_tsv:
+        cmd += ["--taxonomy_tsv", tax_tsv]
+
+    try:
+        result = subprocess.run(
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
+        )
+        if result.returncode != 0:
+            print(
+                f"    [synteny] WARNING: plot_synteny_tree.R failed for {hmm_name}:\n"
+                f"{result.stderr[-2000:]}",
+                file=sys.stderr,
+            )
+        else:
+            print(f"    [synteny] Saved synteny+tree panel: {tree_panel_dir}")
+    except Exception as exc:
+        print(
+            f"    [synteny] WARNING: R subprocess error for {hmm_name}: {exc}",
+            file=sys.stderr,
+        )
+
+
+def run_synteny(cfg, synteny_dir, tree_dir, scan_df, search_df, hmm_keep, force=False, clade_assign_dir=None, summary_dir=None):
     print("\n[synteny] Extracting neighborhoods and plotting synteny...")
     
     syn_cfg = cfg.get("synteny", {})
@@ -236,14 +313,12 @@ def run_synteny(cfg, synteny_dir, tree_dir, scan_df, search_df, hmm_keep, force=
 
     # Check for clinker availability
     if not shutil.which("clinker"):
-        import sys
         print("[synteny] FAILED: clinker command line tool is not installed or not in PATH.", file=sys.stderr)
         print("[synteny] Install with: pip install clinker-py", file=sys.stderr)
         return
 
     # Check for pgv-mmseqs availability
     if not shutil.which("pgv-mmseqs"):
-        import sys
         print("[synteny] WARNING: pgv-mmseqs command line tool is not installed or not in PATH. pyGenomeViz plot will be skipped.", file=sys.stderr)
         print("[synteny] Install with: pip install pygenomeviz", file=sys.stderr)
 
@@ -253,15 +328,31 @@ def run_synteny(cfg, synteny_dir, tree_dir, scan_df, search_df, hmm_keep, force=
     annotation_evalue = float(syn_cfg.get("annotation_evalue", 1e-5))
     cpu = int(cfg.get("resources", {}).get("cpu", 1))
     combined_hmm = os.path.join(cfg["output"]["outdir"], "combined.hmm")
-    
+
     if not gbk_dir and not gff_dir:
         print("WARNING: No gbk_dir or gff_dir provided for synteny. Skipping.")
         return
 
-    # Aggregate hits
-    summary_dir = os.path.join(cfg["output"]["outdir"], "summary")
+    # Resolve summary_dir: prefer passed-in argument, fall back to cfg-derived path
+    if summary_dir is None:
+        summary_dir = os.path.join(cfg["output"]["outdir"], "summary")
     best_hits_tsv = os.path.join(summary_dir, "best_hits.competitive.tsv")
-    
+
+    # Locate taxonomy annotation file for the R tree-panel script
+    tax_tsv_for_r = os.path.join(summary_dir, "genome_taxonomy.tsv")
+    if not os.path.exists(tax_tsv_for_r):
+        tax_tsv_for_r = os.path.join(summary_dir, "best_hits.with_taxonomy.tsv")
+    if not os.path.exists(tax_tsv_for_r):
+        tax_tsv_for_r = None
+
+    # Resolve R script paths for the tree+synteny panel
+    rscript_bin = shutil.which("Rscript")
+    _tasks_dir = os.path.dirname(__file__)
+    _repo_root = os.path.abspath(os.path.join(_tasks_dir, "..", "..", "..", ".."))
+    synteny_r_script = os.path.join(_repo_root, "scripts", "plot_synteny_tree.R")
+    if not os.path.exists(synteny_r_script):
+        synteny_r_script = None
+
     hits = pd.DataFrame()
     if syn_cfg.get("prefer_best_hit", True) and os.path.exists(best_hits_tsv):
         hits = pd.read_csv(best_hits_tsv, sep="\t")
@@ -345,7 +436,32 @@ def run_synteny(cfg, synteny_dir, tree_dir, scan_df, search_df, hmm_keep, force=
             print(f"    No neighborhoods extracted for {hmm}.")
             continue
 
-        # Optional Pfam annotation
+        # ── Tree-ordered neighborhood sorting ─────────────────────────────
+        # When tree_ordered=true (and include_tree=true), sort neighborhoods
+        # by the IQ-TREE leaf order so that closely related organisms are
+        # adjacent in the synteny plot.
+        if syn_cfg.get("tree_ordered", True) and syn_cfg.get("include_tree", True):
+            tree_fp_for_order = os.path.join(tree_dir, f"{hmm}.treefile")
+            tip_order = _get_tree_tip_order(tree_fp_for_order)
+            if tip_order:
+                # Build a rank dict: tip_label → index in tree order
+                tip_rank = {tip: i for i, tip in enumerate(tip_order)}
+
+                def _neighborhood_rank(n):
+                    genome_n, protein_n, _, _ = n
+                    # Tips in tree are formatted as "genome|protein"
+                    full_key = f"{genome_n}|{protein_n}"
+                    if full_key in tip_rank:
+                        return tip_rank[full_key]
+                    # Fallback: match by genome prefix
+                    for tip, rank in tip_rank.items():
+                        if tip.startswith(f"{genome_n}|"):
+                            return rank
+                    return len(tip_rank)  # unmatched → end
+
+                neighborhoods = sorted(neighborhoods, key=_neighborhood_rank)
+
+
         pfam_mapping = {}
         if pfam_dir and all_prots:
             print("    Running Pfam annotation on neighborhood proteins...")
@@ -367,7 +483,6 @@ def run_synteny(cfg, synteny_dir, tree_dir, scan_df, search_df, hmm_keep, force=
                         if dom_names:
                             pfam_mapping[uid] = "Pfam: " + ", ".join(dom_names)
                 except Exception as e:
-                    import sys
                     print(f"    Warning: Pfam scan failed: {e}", file=sys.stderr)
 
         # Save local structural proteins
@@ -504,9 +619,8 @@ def run_synteny(cfg, synteny_dir, tree_dir, scan_df, search_df, hmm_keep, force=
             cmd = ["clinker", *gbk_files, "-p", html_out]
             subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
             print(f"    Saved Clinker plot: {html_out}")
-            
+
         except Exception as e:
-            import sys
             import traceback
             print(f"    Clinker plotting failed for {hmm}: {e}", file=sys.stderr)
             traceback.print_exc()
@@ -521,14 +635,54 @@ def run_synteny(cfg, synteny_dir, tree_dir, scan_df, search_df, hmm_keep, force=
                 subprocess.run(pgv_cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
                 print(f"    Saved pyGenomeViz plot: {pgv_out_dir}")
             except Exception as e:
-                import sys
                 import traceback
                 print(f"    pyGenomeViz plotting failed for {hmm}: {e}", file=sys.stderr)
                 traceback.print_exc()
-            
+
             # Optionally clean up intermediate genbanks here, uncomment if preferred
             # for f in gbk_files:
             #     os.remove(f)
+
+        # ── ggtree-based combined tree + synteny panel (R) ────────────────
+        # Requires: a .treefile for the HMM, the gene-cluster TSV, and Rscript.
+        if syn_cfg.get("generate_tree_panel", True) and rscript_bin and synteny_r_script:
+            tree_fp_for_panel = os.path.join(tree_dir, f"{hmm}.treefile")
+            cluster_tsv_for_panel = os.path.join(anno_dir, f"{hmm}_gene_clusters.tsv")
+            if os.path.exists(tree_fp_for_panel) and os.path.exists(cluster_tsv_for_panel):
+                print("    Generating ggtree synteny+tree panel...")
+                tree_panel_dir = os.path.join(hmm_out_dir, "tree_panel")
+                safe_mkdir(tree_panel_dir)
+
+                panel_formats = syn_cfg.get("tree_panel_format", ["png"])
+                if isinstance(panel_formats, list):
+                    panel_formats_str = ",".join(panel_formats)
+                else:
+                    panel_formats_str = str(panel_formats)
+
+                clades_tsv_for_panel = None
+                if clade_assign_dir:
+                    _ctsv = os.path.join(clade_assign_dir, f"{hmm}.clades.tsv")
+                    if os.path.exists(_ctsv):
+                        clades_tsv_for_panel = _ctsv
+
+                viz_cfg = cfg.get("phylo", {}).get("tree_viz", {})
+                _call_synteny_tree_r(
+                    rscript_bin=rscript_bin,
+                    r_script=synteny_r_script,
+                    hmm_name=hmm,
+                    tree_fp=tree_fp_for_panel,
+                    synteny_tsv=cluster_tsv_for_panel,
+                    tree_panel_dir=tree_panel_dir,
+                    clades_tsv=clades_tsv_for_panel,
+                    tax_tsv=tax_tsv_for_r,
+                    formats=panel_formats_str,
+                    width=float(syn_cfg.get("tree_panel_width", 20)),
+                    height=0,
+                    bootstrap_min=float(viz_cfg.get("bootstrap_min", 80)),
+                    show_tip_labels=str(viz_cfg.get("show_tip_labels", "auto")),
+                    color_palette=str(viz_cfg.get("color_palette", "Set3")),
+                    tax_level=str(viz_cfg.get("tax_level", "genus")),
+                )
 
     # Write aggregate gene cluster annotations table
     if all_cluster_rows:

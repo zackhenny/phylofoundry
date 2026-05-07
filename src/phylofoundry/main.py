@@ -52,6 +52,7 @@ _STEP_SUBCMD_MAP: dict[str, str] = {
     "detect-clades": "detect_clades",
     "aa-composition": "aa_composition",
     "post": "post",
+    "tree-viz": "tree_viz",
     "synteny": "synteny",
     "codon": "codon",
     "hyphy": "hyphy",
@@ -69,6 +70,7 @@ _STEP_ENABLE_MAP: dict[str, tuple[str, str]] = {
     "detect_clades": ("detect_clades", "enabled"),
     "aa_composition": ("aa_composition", "enabled"),
     "post": ("post", "enabled"),
+    "tree_viz": ("phylo", "tree_viz.enabled"),  # enabled via phylo.tree_viz.enabled
     "synteny": ("synteny", "enabled"),
     "codon": ("codon", "enabled"),
     "hyphy": ("hyphy", "enabled"),
@@ -711,6 +713,34 @@ def _build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     _add_common_args(p_post)
+
+    # ── tree-viz ────────────────────────────────────────────────────────────
+    p_tree_viz = sub.add_parser(
+        "tree-viz",
+        help="Generate annotated ggtree plots from IQ-TREE treefiles",
+        description=(
+            "Produces annotated phylogenetic tree plots (PNG/PDF/SVG) from\n"
+            "IQ-TREE treefiles using ggtree (R).  Overlays clade designations\n"
+            "from the detect-clades step and taxonomy annotations from the\n"
+            "taxonomy step when available.\n\n"
+            "REQUIRES: R (≥4.3) with ggtree, treeio, ggtreeExtra packages\n"
+            "installed.  These are included in the phylofoundry conda environment.\n\n"
+            "TYPICAL USE (after phylo)\n"
+            "-------------------------\n"
+            "  phylofoundry tree-viz --outdir ./results\n\n"
+            "  Outputs written to --outdir/tree_viz/.\n\n"
+            "USING A CONFIG FILE\n"
+            "-------------------\n"
+            "  phylofoundry tree-viz --config config/config.yaml --outdir ./results\n\n"
+            "  Relevant config keys: phylo.tree_viz.enabled,\n"
+            "  phylo.tree_viz.formats, phylo.tree_viz.bootstrap_min,\n"
+            "  phylo.tree_viz.show_tip_labels, phylo.tree_viz.color_palette,\n"
+            "  phylo.tree_viz.annotate_taxonomy, phylo.tree_viz.tax_level,\n"
+            "  output.outdir"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    _add_common_args(p_tree_viz)
 
     # ── synteny ────────────────────────────────────────────────────────────
     p_syn = sub.add_parser(

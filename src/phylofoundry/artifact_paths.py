@@ -47,6 +47,9 @@ ALIGNMENTS_CLIPKIT_DIR = "alignments_clipkit"
 # IQ-TREE phylogenetic trees
 TREES_IQTREE_DIR = "trees_iqtree"
 
+# ggtree-based annotated tree visualization outputs
+TREE_VIZ_DIR = "tree_viz"
+
 # Protein language model embeddings
 EMBEDDINGS_DIR = "embeddings"
 
@@ -152,6 +155,11 @@ class ArtifactPaths:
     def trees_dir(self) -> str:
         """Directory containing IQ-TREE .treefile outputs."""
         return os.path.join(self.outdir, TREES_IQTREE_DIR)
+
+    @property
+    def tree_viz_dir(self) -> str:
+        """Directory containing ggtree-based annotated tree plot outputs."""
+        return os.path.join(self.outdir, TREE_VIZ_DIR)
 
     # ── Embeddings ──────────────────────────────────────────────────────────
 
@@ -345,6 +353,7 @@ class ArtifactPaths:
             self.alignments_hmm_dir,
             self.alignments_clipkit_dir,
             self.trees_dir,
+            self.tree_viz_dir,
             self.summary_dir,
             self.conservation_metrics_dir,
             self.codon_dir,

@@ -14,6 +14,7 @@ STEPS = [
     "taxonomy_integrate", "conservation_metrics", "detect_clades",
     "aa_composition",  # per-gene AA composition analysis (after gene selection)
     "post",  # backward-compatibility shim — new code should prefer the three steps above
+    "tree_viz",  # ggtree-based tree visualization with clade/taxonomy annotations
     "synteny", "codon", "hyphy", "score_motifs", "discover_motifs",
 ]
 
@@ -87,7 +88,18 @@ DEFAULT_CONFIG = {
         "use_hmmsearch_alignment": False,
         "keep_all_hits": False,
         "combined_tree": False, # If true, combine all hits into a single tree
-        "iqtree_bin": "iqtree" # Default to iqtree, falling back to iqtree2 or iqtree3 if needed
+        "iqtree_bin": "iqtree3", # Default to iqtree3; falls back to iqtree2/iqtree
+        "tree_viz": {
+            "enabled": True,
+            "formats": ["png", "pdf"],
+            "bootstrap_min": 80,
+            "show_tip_labels": "auto",   # "auto" (hide if >100 tips) | "true" | "false"
+            "width": 10,
+            "height": None,              # None → auto-scale (0.15 in per tip, min 6 in)
+            "color_palette": "Set3",
+            "annotate_taxonomy": True,
+            "tax_level": "genus",
+        },
     },
     "embeddings": {
         "enabled": False,
@@ -176,6 +188,10 @@ DEFAULT_CONFIG = {
         "generate_plots": True,        # generate boxplot/heatmap PNGs (requires matplotlib)
         "top_n_aas_heatmap": 10,       # number of AAs (by variance) shown in heatmap
     },
+    # tree_viz step: ggtree-based annotated tree plots (clade + taxonomy overlays)
+    # Settings are stored nested under phylo.tree_viz in the config for convenience,
+    # but the step itself is also controlled by phylo.tree_viz.enabled and the
+    # pipeline step name "tree_viz".
     "synteny": {
         "enabled": False,
         "gbk_dir": None,
@@ -189,7 +205,12 @@ DEFAULT_CONFIG = {
         "gene_label_field": ["gene", "product", "Name", "locus_tag"],
         "plot_width": 14,
         "include_tree": True,
-        "annotation_evalue": 1e-5
+        "annotation_evalue": 1e-5,
+        "tree_ordered": True,        # Sort tracks by IQ-TREE tip order
+        "generate_tree_panel": True, # Generate ggtree combined tree+synteny panel
+        "tree_panel_format": ["png"],
+        "tree_panel_width": 20,
+        "tree_panel_tree_fraction": 0.3,
     },
     "codon": {
         "enabled": False,

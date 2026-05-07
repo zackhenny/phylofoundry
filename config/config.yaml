@@ -167,9 +167,36 @@ phylo:
   keep_all_hits: false       # (bool) Include all hits (not just best competitive hits) in trees.
   combined_tree: false       # (bool) Combine all HMM hits into a single large tree.
                              #   Useful for cross-HMM evolutionary context.
-  iqtree_bin: "iqtree"       # (string) IQ-TREE binary name or full path.
-                             #   Auto-detected: falls back to iqtree2 or iqtree3 if iqtree
+  iqtree_bin: "iqtree3"      # (string) IQ-TREE binary name or full path.
+                             #   Auto-detected: falls back to iqtree2 or iqtree if iqtree3
                              #   is not found on PATH.
+
+  # ── ggtree-based tree visualization ────────────────────────────────────
+  # Produces annotated phylogenetic tree plots (PNG/PDF/SVG) from each
+  # IQ-TREE treefile.  Requires R with ggtree, treeio, and ggtreeExtra.
+  # Run automatically when synteny.enabled=true (tree panel for synteny)
+  # or when this section's own enabled flag is set.
+  tree_viz:
+    enabled: true            # (bool) Enable ggtree-based tree visualization.
+    formats:                 # (list[string]) Output image formats.
+      - "png"                #   Options: "png" | "pdf" | "svg"
+      - "pdf"
+    bootstrap_min: 80        # (int) Minimum bootstrap support value to annotate
+                             #   on internal nodes (shown as points + labels).
+    show_tip_labels: "auto"  # (string) Whether to draw tip labels.
+                             #   Options: "auto" (hide when >100 tips) |
+                             #            "true" | "false"
+    width: 10                # (float) Figure width in inches.
+    height: null             # (float|null) Figure height in inches.
+                             #   null → auto-scaled (0.15 in per tip, min 6 in).
+    color_palette: "Set3"    # (string) RColorBrewer palette for clade highlights.
+                             #   Options: any valid RColorBrewer palette name,
+                             #            e.g. "Set1"|"Set2"|"Set3"|"Paired"|"Dark2"
+    annotate_taxonomy: true  # (bool) Add a colored taxonomy tile strip when
+                             #   taxonomy data is available.
+    tax_level: "genus"       # (string) Taxonomy rank shown in the annotation panel.
+                             #   Options: "domain"|"phylum"|"class"|"order"|
+                             #            "family"|"genus"|"species"
 
 # ─────────────────────────────────────────────────────────────────────────────
 # MODULE: embeddings
@@ -438,6 +465,18 @@ synteny:
   plot_width: 14             # (int/float) Width (inches) of synteny plot figures.
   include_tree: true         # (bool) Order synteny tracks by phylogenetic tree when available.
   annotation_evalue: 1.0e-5  # (float) E-value cutoff for neighbourhood annotation searches.
+  tree_ordered: true         # (bool) Sort synteny tracks by IQ-TREE tip order so that
+                             #   genomic neighborhoods from closely related organisms appear
+                             #   adjacent in the plot.  Requires a .treefile for the HMM.
+  generate_tree_panel: true  # (bool) Produce a combined tree + synteny figure using ggtree.
+                             #   Calls scripts/plot_synteny_tree.R via Rscript.
+                             #   Requires R with ggtree, treeio, and ggtreeExtra.
+  tree_panel_format:         # (list[string]) Output formats for the tree+synteny panel.
+    - "png"                  #   Options: "png" | "pdf" | "svg"
+  tree_panel_width: 20       # (float) Width (inches) of the combined tree+synteny figure.
+  tree_panel_tree_fraction: 0.3
+                             # (float) Approximate fraction of total width given to the
+                             #   tree panel in the combined figure (0–1).
 
 # ─────────────────────────────────────────────────────────────────────────────
 # MODULE: codon
