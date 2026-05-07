@@ -6,7 +6,7 @@ from .constants import STEPS
 from .utils.helpers import safe_mkdir, write_json
 from .utils.bio import read_fasta
 from .tasks import prep, hmmer, extract, embed, phylo, curate, post, synteny, codon, hyphy, asr
-from .tasks import taxonomy_integrate, conservation_metrics, detect_clades, aa_composition
+from .tasks import taxonomy_integrate, conservation_metrics, detect_clades, aa_composition, tree_viz
 from .execution_planner import build_execution_plan
 from .execution_schema import StepState
 from .failure_policy import apply_failure_policy, build_reverse_dependency_map
@@ -891,6 +891,45 @@ def run_pipeline(cfg):
         checkpointer.end_run(run_id, success=True)
         return
 
+    # ── STEP: tree_viz ─────────────────────────────────────────────────────
+    # Generate ggtree-based annotated phylogenetic tree plots (PNG/PDF/SVG).
+    # Auto-enabled when synteny is enabled or when phylo.tree_viz.enabled=true.
+    _tree_viz_cfg = cfg.get("phylo", {}).get("tree_viz", {})
+    _tree_viz_enabled = (
+        _tree_viz_cfg.get("enabled", True)
+        or synteny_cfg.get("enabled", False)
+    )
+    if step_in_range("tree_viz", start_at, stop_after) and _tree_viz_enabled:
+        if _is_blocked("tree_viz"):
+            print("[pipeline] Skipping blocked step: tree_viz")
+        elif _is_resume_skip("tree_viz"):
+            print("[pipeline] SKIP: tree_viz (checkpoint match)")
+            update_step_status(status_path, "tree_viz", "success")
+            checkpointer.record_step_skipped(run_id, "tree_viz", "fingerprint match")
+        else:
+            checkpointer.record_step_pending(run_id, "tree_viz")
+            update_step_status(status_path, "tree_viz", "running")
+            _log_step_event("tree_viz", "START")
+            checkpointer.record_step_running(run_id, "tree_viz")
+            try:
+                tree_viz.run_tree_viz(
+                    cfg,
+                    tree_dir=tree_dir,
+                    summary_dir=summary_dir,
+                    clade_assign_dir=clade_assign_dir,
+                    viz_out_dir=paths.tree_viz_dir,
+                    hmm_keep=hmm_keep,
+                    force=force,
+                )
+                update_step_status(status_path, "tree_viz", "success")
+                _log_step_event("tree_viz", "SUCCESS")
+                checkpointer.record_step_success(run_id, "tree_viz")
+            except Exception as exc:
+                _on_step_failure("tree_viz", exc)
+    if stop_after == "tree_viz":
+        checkpointer.end_run(run_id, success=True)
+        return
+
     # ── STEP: synteny ──────────────────────────────────────────────────────
     synteny_dir = os.path.join(outdir, "synteny")
     safe_mkdir(synteny_dir)
@@ -909,8 +948,11 @@ def run_pipeline(cfg):
             checkpointer.record_step_running(run_id, "synteny")
             try:
                 _ensure_hit_dfs()
-                synteny.run_synteny(cfg, synteny_dir, tree_dir, scan_df, search_df, hmm_keep, force,
-                                    clade_assign_dir=clade_assign_dir)
+                synteny.run_synteny(
+                    cfg, synteny_dir, tree_dir, scan_df, search_df, hmm_keep, force,
+                    clade_assign_dir=clade_assign_dir,
+                    summary_dir=summary_dir,
+                )
                 update_step_status(status_path, "synteny", "success")
                 _log_step_event("synteny", "SUCCESS")
                 checkpointer.record_step_success(run_id, "synteny")

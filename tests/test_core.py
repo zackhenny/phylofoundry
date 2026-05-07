@@ -231,10 +231,11 @@ class TestConfig:
         from phylofoundry.constants import STEPS
 
         assert STEPS == [
-            "prep", "hmmer", "extract", "embed", "phylo", "curate",
+            "prep", "hmmer", "extract", "embed", "maape", "phylo", "curate",
             "taxonomy_integrate", "conservation_metrics", "detect_clades",
             "aa_composition",
             "post",
+            "tree_viz",
             "synteny", "codon", "hyphy", "score_motifs", "discover_motifs",
         ]
 

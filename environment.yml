@@ -16,8 +16,20 @@ dependencies:
   - mafft
   - pal2nal
   - clipkit
-  - iqtree
+  - iqtree=3.*
   - treeshrink
+  - r-base>=4.3
+  - r-ggplot2
+  - r-ape
+  - r-aplot
+  - r-dplyr
+  - r-tidyr
+  - r-scales
+  - r-rcolorbrewer
+  - r-optparse
+  - bioconductor-ggtree
+  - bioconductor-treeio
+  - bioconductor-ggtreeextra
   - biopython
   - matplotlib
   - scipy
