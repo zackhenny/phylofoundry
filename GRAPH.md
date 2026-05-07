@@ -16,6 +16,7 @@ flowchart TD
     hmmer["🔍 hmmer\nhmmscan / hmmsearch / DIAMOND"]
     extract["✂️ extract\nExtract hit sequences"]
     embed["🧠 embed [opt]\nESM-2 / HuggingFace embeddings"]
+    maape["🔀 maape [opt]\nMAAPE embedding network graphs"]
     phylo["🌳 phylo\nMSA → ClipKit → IQ-TREE"]
     curate["🔧 curate [opt]\nTreeShrink pruning / ESM filter"]
     taxonomy_integrate["🗂️ taxonomy_integrate [opt]\nGTDB / custom taxonomy"]
@@ -23,6 +24,7 @@ flowchart TD
     detect_clades["🔎 detect_clades [opt]\nTaxonomy / TreeCluster / embedding"]
     aa_composition["🧪 aa_composition [opt]\nAA composition + biochemical metrics"]
     post["🔄 post [opt]\nLegacy shim — prefers dedicated steps"]
+    tree_viz["🎨 tree_viz\nggtree annotated tree plots"]
     synteny["🗺️ synteny [opt]\nclinker / pygenomeviz"]
     codon["🧬 codon [opt]\npal2nal codon alignments"]
     hyphy["⚡ hyphy [opt]\nRELAX / aBSREL / MEME"]
@@ -32,6 +34,7 @@ flowchart TD
     prep --> hmmer
     hmmer --> extract
     extract --> embed
+    embed -.-> maape
     extract --> phylo
     extract -.-> score_motifs
     extract -.-> discover_motifs
@@ -42,18 +45,23 @@ flowchart TD
     phylo --> detect_clades
     phylo --> aa_composition
     phylo -.-> post
+    phylo --> tree_viz
+    taxonomy_integrate -.-> tree_viz
+    detect_clades -.-> tree_viz
     phylo --> codon
     codon --> hyphy
     detect_clades --> hyphy
     detect_clades -.-> discover_motifs
 
     style embed        fill:#d0e8ff,stroke:#5599cc
+    style maape        fill:#d0e8ff,stroke:#5599cc
     style curate       fill:#d0e8ff,stroke:#5599cc
     style taxonomy_integrate fill:#d0e8ff,stroke:#5599cc
     style conservation_metrics fill:#d0e8ff,stroke:#5599cc
     style detect_clades fill:#d0e8ff,stroke:#5599cc
     style aa_composition fill:#d0e8ff,stroke:#5599cc
     style post         fill:#ffe4b5,stroke:#cc8800
+    style tree_viz     fill:#d4edda,stroke:#28a745
     style synteny      fill:#d0e8ff,stroke:#5599cc
     style codon        fill:#d0e8ff,stroke:#5599cc
     style hyphy        fill:#d0e8ff,stroke:#5599cc
@@ -91,11 +99,14 @@ graph TD
     subgraph tasks["tasks/ (one module per step)"]
         t_prep["prep.py"]
         t_hmmer["hmmer.py"]
+        t_diamond["diamond.py"]
         t_extract["extract.py"]
         t_embed["embed.py"]
+        t_maape["maape.py"]
         t_phylo["phylo.py"]
         t_curate["curate.py"]
         t_post["post.py"]
+        t_tree_viz["tree_viz.py"]
         t_synteny["synteny.py"]
         t_codon["codon.py"]
         t_hyphy["hyphy.py"]
@@ -157,7 +168,9 @@ flowchart LR
     alignments_clipkit["alignments_clipkit/\n*.clipkit.faa"]
     trees["trees_iqtree/\n*.treefile"]
     embeddings["embeddings/\n*.pca.tsv\n*.umap.tsv\n*.png"]
+    maape_out["maape/\n*.pkl *.txt *.png"]
     curated["curated/\ntrees/ fasta/ alignments/"]
+    tree_viz_out["tree_viz/\n*.tree.png/pdf"]
     codon_aln["codon_alignments/\n*.codon.fasta"]
     hyphy_out["summary/hyphy/\n*.json"]
     synteny_out["synteny/\n*.pdf"]
@@ -178,7 +191,11 @@ flowchart LR
     alignments_hmm --> alignments_clipkit
     alignments_clipkit --> trees
     fasta_per_hmm --> embeddings
+    embeddings --> maape_out
     trees --> curated
+    trees --> tree_viz_out
+    clades_tsv --> tree_viz_out
+    tax_tsv --> tree_viz_out
     trees --> codon_aln
     trees --> post_bio
     trees --> clades_tsv

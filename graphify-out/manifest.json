@@ -1,258 +1,274 @@
 {
-  "/Users/zachary/Documents/Grad School/envs/phylofoundry/tests/test_provenance.py": {
-    "mtime": 1777682337.9320486,
-    "hash": "4e296a403539141c2a13f78064218000"
-  },
-  "/Users/zachary/Documents/Grad School/envs/phylofoundry/tests/test_cli_modules.py": {
-    "mtime": 1777682337.927536,
-    "hash": "1bd9e13ac2b96c0073da45cdfb8f3e40"
-  },
-  "/Users/zachary/Documents/Grad School/envs/phylofoundry/tests/test_embed_clustering.py": {
-    "mtime": 1777682337.9296832,
-    "hash": "b87520d7e714d4440516c4799b8d63ac"
-  },
-  "/Users/zachary/Documents/Grad School/envs/phylofoundry/tests/test_preflight.py": {
-    "mtime": 1777682337.9317243,
-    "hash": "0f0407bed2cf8520c32650ef62cd1fc5"
-  },
-  "/Users/zachary/Documents/Grad School/envs/phylofoundry/tests/test_config_yaml.py": {
-    "mtime": 1777682337.9283555,
-    "hash": "06fe333a2991a0329d0888cd1f33deee"
-  },
-  "/Users/zachary/Documents/Grad School/envs/phylofoundry/tests/test_core.py": {
-    "mtime": 1777682337.9286482,
-    "hash": "c51ee207d6700ae8377f1f5f5ea7689e"
-  },
-  "/Users/zachary/Documents/Grad School/envs/phylofoundry/tests/test_aa_composition.py": {
-    "mtime": 1777682337.9267564,
-    "hash": "07ec5c21a12aecfa38619f395e48e6ae"
-  },
-  "/Users/zachary/Documents/Grad School/envs/phylofoundry/tests/test_ha_utils.py": {
-    "mtime": 1777682337.930784,
-    "hash": "9f087eb9287157e2a193eb18b38dcdd8"
-  },
-  "/Users/zachary/Documents/Grad School/envs/phylofoundry/tests/test_curate.py": {
-    "mtime": 1777682337.9291427,
-    "hash": "8219adef9fc7da357f8da02e81192469"
-  },
-  "/Users/zachary/Documents/Grad School/envs/phylofoundry/tests/test_globdb_compat.py": {
-    "mtime": 1777682337.9305604,
-    "hash": "f70ccd30138862e1d21fb6e6ef3075a0"
-  },
-  "/Users/zachary/Documents/Grad School/envs/phylofoundry/tests/test_post_tree_embed.py": {
-    "mtime": 1777682337.9314063,
-    "hash": "2a3a042b182cda6adb6e8ffed510df38"
-  },
-  "/Users/zachary/Documents/Grad School/envs/phylofoundry/tests/test_synteny.py": {
-    "mtime": 1777682337.9323812,
-    "hash": "b70e0e2902ac4afec956c07cc96cea68"
-  },
-  "/Users/zachary/Documents/Grad School/envs/phylofoundry/tests/test_taxonomy.py": {
-    "mtime": 1777682337.932721,
-    "hash": "e9b32ee521cdf827a22dd7013ccfdc76"
-  },
-  "/Users/zachary/Documents/Grad School/envs/phylofoundry/tests/test_failure_policy.py": {
-    "mtime": 1777682337.9301486,
-    "hash": "030ca96e20c3be7d1d96aa3302c8955e"
-  },
-  "/Users/zachary/Documents/Grad School/envs/phylofoundry/tests/test_checkpoint.py": {
-    "mtime": 1777682337.9271026,
-    "hash": "4bd9b0549d4a4f79dbc994996b3983b2"
-  },
-  "/Users/zachary/Documents/Grad School/envs/phylofoundry/tests/test_hyphy_clade_integration.py": {
-    "mtime": 1777682337.9309993,
-    "hash": "e3ec6958b3a9dea606a3f50c4df56997"
-  },
-  "/Users/zachary/Documents/Grad School/envs/phylofoundry/legacy/phylo_pipeline.py": {
-    "mtime": 1777682337.909725,
-    "hash": "c48b9cfc23ed63123cfd21565e79c727"
-  },
-  "/Users/zachary/Documents/Grad School/envs/phylofoundry/scripts/migrate_json_to_yaml.py": {
-    "mtime": 1777682337.9106228,
-    "hash": "2de645aefd0df3b4ab36f82694dba4f4"
-  },
-  "/Users/zachary/Documents/Grad School/envs/phylofoundry/src/phylofoundry/config.py": {
-    "mtime": 1777682337.9130242,
-    "hash": "60194edb4dec21af1e5e90a2c7d01c31"
-  },
-  "/Users/zachary/Documents/Grad School/envs/phylofoundry/src/phylofoundry/checkpoint.py": {
-    "mtime": 1777682337.9126494,
-    "hash": "ad85f2f515d21d8c545d80907687bb79"
-  },
-  "/Users/zachary/Documents/Grad School/envs/phylofoundry/src/phylofoundry/failure_policy.py": {
-    "mtime": 1777682337.9140117,
-    "hash": "04414754cca86bbbca938250d20cdc3f"
-  },
-  "/Users/zachary/Documents/Grad School/envs/phylofoundry/src/phylofoundry/execution_planner.py": {
-    "mtime": 1777682337.9136655,
-    "hash": "57bc7797dbe297988d9ed7b8c0a69da6"
-  },
-  "/Users/zachary/Documents/Grad School/envs/phylofoundry/src/phylofoundry/execution_schema.py": {
-    "mtime": 1777682337.9138455,
-    "hash": "3e3ebbac2242b972931438501a07e479"
-  },
-  "/Users/zachary/Documents/Grad School/envs/phylofoundry/src/phylofoundry/workflow_registry.py": {
-    "mtime": 1777682337.925541,
-    "hash": "5f0b1ad608a22ac4f636f4162a707c10"
-  },
-  "/Users/zachary/Documents/Grad School/envs/phylofoundry/src/phylofoundry/workflow_schema.py": {
-    "mtime": 1777682337.9257677,
-    "hash": "2dd2ea7963c64b66dd8ef6f391fdccc1"
-  },
-  "/Users/zachary/Documents/Grad School/envs/phylofoundry/src/phylofoundry/constants.py": {
-    "mtime": 1777682337.9134276,
-    "hash": "3e038e84e2bef3507b2a99572485eebf"
-  },
-  "/Users/zachary/Documents/Grad School/envs/phylofoundry/src/phylofoundry/review_app.py": {
-    "mtime": 1777682337.9167495,
-    "hash": "8259719c2eec99348afb89fdbf901a91"
-  },
-  "/Users/zachary/Documents/Grad School/envs/phylofoundry/src/phylofoundry/__init__.py": {
-    "mtime": 1777682337.9116008,
-    "hash": "538552a2ce2a829a5a5b9e873118fff7"
-  },
-  "/Users/zachary/Documents/Grad School/envs/phylofoundry/src/phylofoundry/pipeline.py": {
-    "mtime": 1777682337.915003,
-    "hash": "e3a326ddf7b351b9f9b6fce0d2f8f86b"
-  },
-  "/Users/zachary/Documents/Grad School/envs/phylofoundry/src/phylofoundry/artifact_paths.py": {
-    "mtime": 1777682337.912128,
-    "hash": "43b53ba5b1c63009f0f17a79f7bccb13"
-  },
-  "/Users/zachary/Documents/Grad School/envs/phylofoundry/src/phylofoundry/provenance.py": {
-    "mtime": 1777682337.9163737,
-    "hash": "e89a2ee2a2ea3f7527a2c6e90c2d50d0"
-  },
-  "/Users/zachary/Documents/Grad School/envs/phylofoundry/src/phylofoundry/main.py": {
-    "mtime": 1777682337.9146144,
-    "hash": "0c6b2803ee2493e7a120dc5ca81f839f"
-  },
-  "/Users/zachary/Documents/Grad School/envs/phylofoundry/src/phylofoundry/logging_utils.py": {
-    "mtime": 1777682337.914237,
-    "hash": "61a4fb95815bc92b5783a3eb90432879"
-  },
-  "/Users/zachary/Documents/Grad School/envs/phylofoundry/src/phylofoundry/preflight.py": {
-    "mtime": 1777682337.9157333,
-    "hash": "84238a392949b36bc8c274b2bc8056b1"
-  },
-  "/Users/zachary/Documents/Grad School/envs/phylofoundry/src/phylofoundry/tasks/curate.py": {
-    "mtime": 1777682337.9189134,
-    "hash": "79f093bf05bd71ab754a68729fb49d45"
-  },
-  "/Users/zachary/Documents/Grad School/envs/phylofoundry/src/phylofoundry/tasks/post.py": {
-    "mtime": 1777682337.922724,
-    "hash": "6c1e848b623c2f7ad20fe33e3156460d"
-  },
-  "/Users/zachary/Documents/Grad School/envs/phylofoundry/src/phylofoundry/tasks/hmmer.py": {
-    "mtime": 1777682337.921439,
-    "hash": "4932a8071dfab0c997e608d0268c076b"
-  },
-  "/Users/zachary/Documents/Grad School/envs/phylofoundry/src/phylofoundry/tasks/embed.py": {
-    "mtime": 1777682337.9207947,
-    "hash": "01bc117d1cf2aa827a075de4f46bdcc4"
-  },
-  "/Users/zachary/Documents/Grad School/envs/phylofoundry/src/phylofoundry/tasks/diamond.py": {
-    "mtime": 1777682337.9198055,
-    "hash": "0ae120527e87620f95b886e4c00c0f0c"
-  },
-  "/Users/zachary/Documents/Grad School/envs/phylofoundry/src/phylofoundry/tasks/score_motifs.py": {
-    "mtime": 1777682337.9233027,
-    "hash": "ad4b07e2a414b9c945417e7ae3d8acd3"
-  },
-  "/Users/zachary/Documents/Grad School/envs/phylofoundry/src/phylofoundry/tasks/__init__.py": {
-    "mtime": 1777682337.9170067,
-    "hash": "3ce2dae8e9690376098200832cd5e664"
-  },
-  "/Users/zachary/Documents/Grad School/envs/phylofoundry/src/phylofoundry/tasks/asr.py": {
-    "mtime": 1777682337.9174984,
-    "hash": "62085f95e7e64daaa8f0e86cd7cce544"
-  },
-  "/Users/zachary/Documents/Grad School/envs/phylofoundry/src/phylofoundry/tasks/maape.py": {
-    "mtime": 1777682337.9221325,
-    "hash": "be80b14c314ce106dbad157b9f43207a"
-  },
-  "/Users/zachary/Documents/Grad School/envs/phylofoundry/src/phylofoundry/tasks/synteny.py": {
-    "mtime": 1777682337.9235246,
-    "hash": "346e6585763f5cf12925f942056eeb90"
-  },
-  "/Users/zachary/Documents/Grad School/envs/phylofoundry/src/phylofoundry/tasks/prep.py": {
-    "mtime": 1777682337.9229672,
-    "hash": "537c7263cbe1cba92b7ea7313515a306"
-  },
-  "/Users/zachary/Documents/Grad School/envs/phylofoundry/src/phylofoundry/tasks/taxonomy_integrate.py": {
-    "mtime": 1777682337.9237714,
-    "hash": "4ccd5cf6cfc71519b0ebd613548f3357"
-  },
-  "/Users/zachary/Documents/Grad School/envs/phylofoundry/src/phylofoundry/tasks/conservation_metrics.py": {
-    "mtime": 1777682337.9185479,
-    "hash": "68633498b937038792f4ee16d5561e30"
-  },
-  "/Users/zachary/Documents/Grad School/envs/phylofoundry/src/phylofoundry/tasks/detect_clades.py": {
-    "mtime": 1777682337.9191396,
-    "hash": "df4b7a7996616ce6dc207eca7539f13d"
-  },
-  "/Users/zachary/Documents/Grad School/envs/phylofoundry/src/phylofoundry/tasks/phylo.py": {
-    "mtime": 1777682337.922539,
-    "hash": "91ab4042fbaa1b7b85ee3edb8534293e"
-  },
-  "/Users/zachary/Documents/Grad School/envs/phylofoundry/src/phylofoundry/tasks/hyphy.py": {
-    "mtime": 1777682337.9218225,
-    "hash": "ef2ec5410dab7dec4bccba1e1b2219c9"
-  },
-  "/Users/zachary/Documents/Grad School/envs/phylofoundry/src/phylofoundry/tasks/codon.py": {
-    "mtime": 1777682337.918091,
-    "hash": "7937552083347d85ec5bb580ab49039f"
-  },
-  "/Users/zachary/Documents/Grad School/envs/phylofoundry/src/phylofoundry/tasks/aa_composition.py": {
-    "mtime": 1777682337.9172437,
-    "hash": "de1506a5865289e1bee23c0e726048b3"
-  },
-  "/Users/zachary/Documents/Grad School/envs/phylofoundry/src/phylofoundry/tasks/extract.py": {
-    "mtime": 1777682337.921037,
-    "hash": "8b3d78a66296dff07ae545554ebf01a3"
-  },
-  "/Users/zachary/Documents/Grad School/envs/phylofoundry/src/phylofoundry/tasks/discover_motifs.py": {
-    "mtime": 1777682337.9201286,
-    "hash": "cd872e67e9a038e801f8ac52dff68c88"
-  },
-  "/Users/zachary/Documents/Grad School/envs/phylofoundry/src/phylofoundry/utils/ha.py": {
-    "mtime": 1777682337.9244244,
-    "hash": "098b70d818992a89eeb4299c57946cbe"
-  },
-  "/Users/zachary/Documents/Grad School/envs/phylofoundry/src/phylofoundry/utils/bio.py": {
-    "mtime": 1777682337.9241018,
-    "hash": "639c52ac5c2b9b4a8817db6f69b365c9"
-  },
-  "/Users/zachary/Documents/Grad School/envs/phylofoundry/src/phylofoundry/utils/__init__.py": {
-    "mtime": 1777682337.9239302,
-    "hash": "d41d8cd98f00b204e9800998ecf8427e"
-  },
-  "/Users/zachary/Documents/Grad School/envs/phylofoundry/src/phylofoundry/utils/pfam_scan.py": {
-    "mtime": 1777682337.924932,
-    "hash": "3a436ba67f14325212efd74645a3df1f"
-  },
-  "/Users/zachary/Documents/Grad School/envs/phylofoundry/src/phylofoundry/utils/test.py": {
-    "mtime": 1777682337.9251344,
-    "hash": "a12ca4be3e34461e6e1ac60b70d8b3a0"
-  },
-  "/Users/zachary/Documents/Grad School/envs/phylofoundry/src/phylofoundry/utils/helpers.py": {
-    "mtime": 1777682337.9245996,
-    "hash": "575f56a1d01a507968f4c8fda69165a9"
-  },
-  "/Users/zachary/Documents/Grad School/envs/phylofoundry/environment.yml": {
-    "mtime": 1777682337.9093175,
-    "hash": "eea79eec2817cb0e671ddc4d9e0057fa"
-  },
-  "/Users/zachary/Documents/Grad School/envs/phylofoundry/README.md": {
-    "mtime": 1777682337.9080756,
+  "/home/runner/work/phylofoundry/phylofoundry/README.md": {
+    "mtime": 1778194086.9074116,
     "hash": "d5c383e39b2b7e54d4ef042499af4334"
   },
-  "/Users/zachary/Documents/Grad School/envs/phylofoundry/GRAPH.md": {
-    "mtime": 1777682337.9074607,
-    "hash": "753971df9e3219f610306d067bf60cff"
+  "/home/runner/work/phylofoundry/phylofoundry/GRAPH.md": {
+    "mtime": 1778194248.177634,
+    "hash": "61ba1f078ab0bad191f6cf76f9baa782"
   },
-  "/Users/zachary/Documents/Grad School/envs/phylofoundry/config/config.yaml": {
-    "mtime": 1777682337.9085865,
-    "hash": "372c2cc748839ff8fdf1ebd3df38cb46"
+  "/home/runner/work/phylofoundry/phylofoundry/environment.yml": {
+    "mtime": 1778194086.9074116,
+    "hash": "e837ada49336c114ce7b530ded7dac18"
+  },
+  "/home/runner/work/phylofoundry/phylofoundry/src/phylofoundry/main.py": {
+    "mtime": 1778194086.9234118,
+    "hash": "46e3b9b73b9d85bbb14a27e71f43c06a"
+  },
+  "/home/runner/work/phylofoundry/phylofoundry/src/phylofoundry/config.py": {
+    "mtime": 1778194086.923399,
+    "hash": "60194edb4dec21af1e5e90a2c7d01c31"
+  },
+  "/home/runner/work/phylofoundry/phylofoundry/src/phylofoundry/failure_policy.py": {
+    "mtime": 1778194086.9234118,
+    "hash": "04414754cca86bbbca938250d20cdc3f"
+  },
+  "/home/runner/work/phylofoundry/phylofoundry/src/phylofoundry/provenance.py": {
+    "mtime": 1778194086.9234118,
+    "hash": "e89a2ee2a2ea3f7527a2c6e90c2d50d0"
+  },
+  "/home/runner/work/phylofoundry/phylofoundry/src/phylofoundry/workflow_schema.py": {
+    "mtime": 1778194086.9262745,
+    "hash": "2dd2ea7963c64b66dd8ef6f391fdccc1"
+  },
+  "/home/runner/work/phylofoundry/phylofoundry/src/phylofoundry/artifact_paths.py": {
+    "mtime": 1778194086.923399,
+    "hash": "ec22a37cb8532dc0dcb087d65f663027"
+  },
+  "/home/runner/work/phylofoundry/phylofoundry/src/phylofoundry/review_app.py": {
+    "mtime": 1778194086.9234118,
+    "hash": "8259719c2eec99348afb89fdbf901a91"
+  },
+  "/home/runner/work/phylofoundry/phylofoundry/src/phylofoundry/pipeline.py": {
+    "mtime": 1778194086.9234118,
+    "hash": "3165c9790e19b1d0b112f5991e13c916"
+  },
+  "/home/runner/work/phylofoundry/phylofoundry/src/phylofoundry/workflow_registry.py": {
+    "mtime": 1778194086.9262745,
+    "hash": "5f0b1ad608a22ac4f636f4162a707c10"
+  },
+  "/home/runner/work/phylofoundry/phylofoundry/src/phylofoundry/checkpoint.py": {
+    "mtime": 1778194086.923399,
+    "hash": "ad85f2f515d21d8c545d80907687bb79"
+  },
+  "/home/runner/work/phylofoundry/phylofoundry/src/phylofoundry/logging_utils.py": {
+    "mtime": 1778194086.9234118,
+    "hash": "61a4fb95815bc92b5783a3eb90432879"
+  },
+  "/home/runner/work/phylofoundry/phylofoundry/src/phylofoundry/execution_planner.py": {
+    "mtime": 1778194086.9234118,
+    "hash": "57bc7797dbe297988d9ed7b8c0a69da6"
+  },
+  "/home/runner/work/phylofoundry/phylofoundry/src/phylofoundry/constants.py": {
+    "mtime": 1778194086.9234118,
+    "hash": "9cd5653c74c5a61bb403d40c95d1051a"
+  },
+  "/home/runner/work/phylofoundry/phylofoundry/src/phylofoundry/execution_schema.py": {
+    "mtime": 1778194086.9234118,
+    "hash": "3e3ebbac2242b972931438501a07e479"
+  },
+  "/home/runner/work/phylofoundry/phylofoundry/src/phylofoundry/preflight.py": {
+    "mtime": 1778194086.9234118,
+    "hash": "84238a392949b36bc8c274b2bc8056b1"
+  },
+  "/home/runner/work/phylofoundry/phylofoundry/src/phylofoundry/__init__.py": {
+    "mtime": 1778194086.923399,
+    "hash": "538552a2ce2a829a5a5b9e873118fff7"
+  },
+  "/home/runner/work/phylofoundry/phylofoundry/src/phylofoundry/tasks/post.py": {
+    "mtime": 1778194086.925412,
+    "hash": "6c1e848b623c2f7ad20fe33e3156460d"
+  },
+  "/home/runner/work/phylofoundry/phylofoundry/src/phylofoundry/tasks/prep.py": {
+    "mtime": 1778194086.925412,
+    "hash": "537c7263cbe1cba92b7ea7313515a306"
+  },
+  "/home/runner/work/phylofoundry/phylofoundry/src/phylofoundry/tasks/diamond.py": {
+    "mtime": 1778194086.9245706,
+    "hash": "0ae120527e87620f95b886e4c00c0f0c"
+  },
+  "/home/runner/work/phylofoundry/phylofoundry/src/phylofoundry/tasks/aa_composition.py": {
+    "mtime": 1778194086.9245706,
+    "hash": "de1506a5865289e1bee23c0e726048b3"
+  },
+  "/home/runner/work/phylofoundry/phylofoundry/src/phylofoundry/tasks/score_motifs.py": {
+    "mtime": 1778194086.925412,
+    "hash": "ad4b07e2a414b9c945417e7ae3d8acd3"
+  },
+  "/home/runner/work/phylofoundry/phylofoundry/src/phylofoundry/tasks/codon.py": {
+    "mtime": 1778194086.9245706,
+    "hash": "7937552083347d85ec5bb580ab49039f"
+  },
+  "/home/runner/work/phylofoundry/phylofoundry/src/phylofoundry/tasks/hmmer.py": {
+    "mtime": 1778194086.9245706,
+    "hash": "4932a8071dfab0c997e608d0268c076b"
+  },
+  "/home/runner/work/phylofoundry/phylofoundry/src/phylofoundry/tasks/curate.py": {
+    "mtime": 1778194086.9245706,
+    "hash": "79f093bf05bd71ab754a68729fb49d45"
+  },
+  "/home/runner/work/phylofoundry/phylofoundry/src/phylofoundry/tasks/embed.py": {
+    "mtime": 1778194086.9245706,
+    "hash": "01bc117d1cf2aa827a075de4f46bdcc4"
+  },
+  "/home/runner/work/phylofoundry/phylofoundry/src/phylofoundry/tasks/taxonomy_integrate.py": {
+    "mtime": 1778194086.925412,
+    "hash": "4ccd5cf6cfc71519b0ebd613548f3357"
+  },
+  "/home/runner/work/phylofoundry/phylofoundry/src/phylofoundry/tasks/conservation_metrics.py": {
+    "mtime": 1778194086.9245706,
+    "hash": "68633498b937038792f4ee16d5561e30"
+  },
+  "/home/runner/work/phylofoundry/phylofoundry/src/phylofoundry/tasks/tree_viz.py": {
+    "mtime": 1778194086.925412,
+    "hash": "a1afccbcd897a38772f50cdfe72b1c21"
+  },
+  "/home/runner/work/phylofoundry/phylofoundry/src/phylofoundry/tasks/hyphy.py": {
+    "mtime": 1778194086.9245706,
+    "hash": "ef2ec5410dab7dec4bccba1e1b2219c9"
+  },
+  "/home/runner/work/phylofoundry/phylofoundry/src/phylofoundry/tasks/phylo.py": {
+    "mtime": 1778194086.925412,
+    "hash": "91ab4042fbaa1b7b85ee3edb8534293e"
+  },
+  "/home/runner/work/phylofoundry/phylofoundry/src/phylofoundry/tasks/maape.py": {
+    "mtime": 1778194086.925412,
+    "hash": "57ba08c55749042bfe8df7f8f01ea6a1"
+  },
+  "/home/runner/work/phylofoundry/phylofoundry/src/phylofoundry/tasks/extract.py": {
+    "mtime": 1778194086.9245706,
+    "hash": "8b3d78a66296dff07ae545554ebf01a3"
+  },
+  "/home/runner/work/phylofoundry/phylofoundry/src/phylofoundry/tasks/discover_motifs.py": {
+    "mtime": 1778194086.9245706,
+    "hash": "cd872e67e9a038e801f8ac52dff68c88"
+  },
+  "/home/runner/work/phylofoundry/phylofoundry/src/phylofoundry/tasks/asr.py": {
+    "mtime": 1778194086.9245706,
+    "hash": "62085f95e7e64daaa8f0e86cd7cce544"
+  },
+  "/home/runner/work/phylofoundry/phylofoundry/src/phylofoundry/tasks/synteny.py": {
+    "mtime": 1778194086.925412,
+    "hash": "94e823a228feb0bad2815b388856a48e"
+  },
+  "/home/runner/work/phylofoundry/phylofoundry/src/phylofoundry/tasks/__init__.py": {
+    "mtime": 1778194086.9234118,
+    "hash": "4f2a86d85d690d77fe3a4a0342ad23ba"
+  },
+  "/home/runner/work/phylofoundry/phylofoundry/src/phylofoundry/tasks/detect_clades.py": {
+    "mtime": 1778194086.9245706,
+    "hash": "df4b7a7996616ce6dc207eca7539f13d"
+  },
+  "/home/runner/work/phylofoundry/phylofoundry/src/phylofoundry/utils/pfam_scan.py": {
+    "mtime": 1778194086.9262745,
+    "hash": "3a436ba67f14325212efd74645a3df1f"
+  },
+  "/home/runner/work/phylofoundry/phylofoundry/src/phylofoundry/utils/bio.py": {
+    "mtime": 1778194086.9262745,
+    "hash": "639c52ac5c2b9b4a8817db6f69b365c9"
+  },
+  "/home/runner/work/phylofoundry/phylofoundry/src/phylofoundry/utils/test.py": {
+    "mtime": 1778194086.9262745,
+    "hash": "a12ca4be3e34461e6e1ac60b70d8b3a0"
+  },
+  "/home/runner/work/phylofoundry/phylofoundry/src/phylofoundry/utils/helpers.py": {
+    "mtime": 1778194086.9262745,
+    "hash": "575f56a1d01a507968f4c8fda69165a9"
+  },
+  "/home/runner/work/phylofoundry/phylofoundry/src/phylofoundry/utils/ha.py": {
+    "mtime": 1778194086.9262745,
+    "hash": "098b70d818992a89eeb4299c57946cbe"
+  },
+  "/home/runner/work/phylofoundry/phylofoundry/src/phylofoundry/utils/__init__.py": {
+    "mtime": 1778194086.925412,
+    "hash": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "/home/runner/work/phylofoundry/phylofoundry/tests/test_synteny.py": {
+    "mtime": 1778194086.9266655,
+    "hash": "b70e0e2902ac4afec956c07cc96cea68"
+  },
+  "/home/runner/work/phylofoundry/phylofoundry/tests/test_aa_composition.py": {
+    "mtime": 1778194086.9266655,
+    "hash": "07ec5c21a12aecfa38619f395e48e6ae"
+  },
+  "/home/runner/work/phylofoundry/phylofoundry/tests/test_config_yaml.py": {
+    "mtime": 1778194086.9266655,
+    "hash": "06fe333a2991a0329d0888cd1f33deee"
+  },
+  "/home/runner/work/phylofoundry/phylofoundry/tests/test_core.py": {
+    "mtime": 1778194086.9266655,
+    "hash": "c816a1e6d41e36c79f510a92f9e223b4"
+  },
+  "/home/runner/work/phylofoundry/phylofoundry/tests/test_hyphy_clade_integration.py": {
+    "mtime": 1778194086.9266655,
+    "hash": "e3ec6958b3a9dea606a3f50c4df56997"
+  },
+  "/home/runner/work/phylofoundry/phylofoundry/tests/test_ha_utils.py": {
+    "mtime": 1778194086.9266655,
+    "hash": "9f087eb9287157e2a193eb18b38dcdd8"
+  },
+  "/home/runner/work/phylofoundry/phylofoundry/tests/test_taxonomy.py": {
+    "mtime": 1778194086.927412,
+    "hash": "e9b32ee521cdf827a22dd7013ccfdc76"
+  },
+  "/home/runner/work/phylofoundry/phylofoundry/tests/test_cli_modules.py": {
+    "mtime": 1778194086.9266655,
+    "hash": "1bd9e13ac2b96c0073da45cdfb8f3e40"
+  },
+  "/home/runner/work/phylofoundry/phylofoundry/tests/test_embed_clustering.py": {
+    "mtime": 1778194086.9266655,
+    "hash": "b87520d7e714d4440516c4799b8d63ac"
+  },
+  "/home/runner/work/phylofoundry/phylofoundry/tests/test_provenance.py": {
+    "mtime": 1778194086.9266655,
+    "hash": "4e296a403539141c2a13f78064218000"
+  },
+  "/home/runner/work/phylofoundry/phylofoundry/tests/test_preflight.py": {
+    "mtime": 1778194086.9266655,
+    "hash": "0f0407bed2cf8520c32650ef62cd1fc5"
+  },
+  "/home/runner/work/phylofoundry/phylofoundry/tests/test_globdb_compat.py": {
+    "mtime": 1778194086.9266655,
+    "hash": "f70ccd30138862e1d21fb6e6ef3075a0"
+  },
+  "/home/runner/work/phylofoundry/phylofoundry/tests/test_curate.py": {
+    "mtime": 1778194086.9266655,
+    "hash": "8219adef9fc7da357f8da02e81192469"
+  },
+  "/home/runner/work/phylofoundry/phylofoundry/tests/test_checkpoint.py": {
+    "mtime": 1778194086.9266655,
+    "hash": "4bd9b0549d4a4f79dbc994996b3983b2"
+  },
+  "/home/runner/work/phylofoundry/phylofoundry/tests/test_post_tree_embed.py": {
+    "mtime": 1778194086.9266655,
+    "hash": "2a3a042b182cda6adb6e8ffed510df38"
+  },
+  "/home/runner/work/phylofoundry/phylofoundry/tests/test_failure_policy.py": {
+    "mtime": 1778194086.9266655,
+    "hash": "030ca96e20c3be7d1d96aa3302c8955e"
+  },
+  "/home/runner/work/phylofoundry/phylofoundry/legacy/phylo_pipeline.py": {
+    "mtime": 1778194086.922412,
+    "hash": "c48b9cfc23ed63123cfd21565e79c727"
+  },
+  "/home/runner/work/phylofoundry/phylofoundry/scripts/migrate_json_to_yaml.py": {
+    "mtime": 1778194086.922412,
+    "hash": "2de645aefd0df3b4ab36f82694dba4f4"
+  },
+  "/home/runner/work/phylofoundry/phylofoundry/scripts/plot_iqtree_ggtree.R": {
+    "mtime": 1778194086.923186,
+    "hash": "9042239a6d81c1c73ef42a2707178272"
+  },
+  "/home/runner/work/phylofoundry/phylofoundry/scripts/plot_synteny_tree.R": {
+    "mtime": 1778194086.923186,
+    "hash": "08cc964ac243644ec24a765922cc8b25"
+  },
+  "/home/runner/work/phylofoundry/phylofoundry/config/config.yaml": {
+    "mtime": 1778194086.9074116,
+    "hash": "8765e33aa6bcc3726b8e5421ceab5492"
+  },
+  "/home/runner/work/phylofoundry/phylofoundry/graphify-out/GRAPH_REPORT.md": {
+    "mtime": 1778194086.9080858,
+    "hash": "d6ef29f59e8412a29d5b81ebfc51cc3a"
   }
 }
