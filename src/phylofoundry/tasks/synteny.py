@@ -447,8 +447,8 @@ def run_synteny(cfg, synteny_dir, tree_dir, scan_df, search_df, hmm_keep, force=
                 # Build a rank dict: tip_label → index in tree order
                 tip_rank = {tip: i for i, tip in enumerate(tip_order)}
 
-                def _neighborhood_rank(n):
-                    genome_n, protein_n, _, _ = n
+                def _neighborhood_rank(nbr):
+                    genome_n, protein_n, _, _ = nbr
                     # Tips in tree are formatted as "genome|protein"
                     full_key = f"{genome_n}|{protein_n}"
                     if full_key in tip_rank:
@@ -654,10 +654,7 @@ def run_synteny(cfg, synteny_dir, tree_dir, scan_df, search_df, hmm_keep, force=
                 safe_mkdir(tree_panel_dir)
 
                 panel_formats = syn_cfg.get("tree_panel_format", ["png"])
-                if isinstance(panel_formats, list):
-                    panel_formats_str = ",".join(panel_formats)
-                else:
-                    panel_formats_str = str(panel_formats)
+                panel_formats_str = ",".join(panel_formats) if isinstance(panel_formats, list) else str(panel_formats)
 
                 clades_tsv_for_panel = None
                 if clade_assign_dir:

@@ -283,7 +283,7 @@ if (!is.null(clades_df) && n_clades > 0) {
     shape = 22, size = 4, inherit.aes = FALSE
   ) +
   scale_fill_manual(
-    name  = paste0(opt$tax_level, " / Clade"),
+    name  = "Clade",
     values = clade_colors,
     guide  = guide_legend(override.aes = list(alpha = 0.8))
   )

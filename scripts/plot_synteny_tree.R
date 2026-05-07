@@ -122,7 +122,6 @@ get_clade_colors <- function(names_vec, palette_name) {
 message("[synteny_tree] Reading tree: ", opt$treefile)
 tree     <- treeio::read.newick(opt$treefile)
 n_tips   <- length(tree@phylo$tip.label)
-tip_order <- tree@phylo$tip.label[order(seq_len(n_tips))]  # natural order
 
 show_tips <- switch(tolower(opt$show_tip_labels),
   "true"  = TRUE, "false" = FALSE, "auto" = (n_tips <= 100), TRUE)

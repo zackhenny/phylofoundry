@@ -32,14 +32,17 @@ def _find_rscript() -> str | None:
 
 def _r_script_path() -> str:
     """Return the absolute path to ``plot_iqtree_ggtree.R``."""
-    # The scripts/ directory lives at the repository root, two levels above
-    # this file (src/phylofoundry/tasks/tree_viz.py →
-    #   src/phylofoundry/tasks/ → src/phylofoundry/ → src/ → repo root).
-    tasks_dir = os.path.dirname(__file__)
-    repo_root = os.path.abspath(
-        os.path.join(tasks_dir, "..", "..", "..", "..")
-    )
-    return os.path.join(repo_root, "scripts", "plot_iqtree_ggtree.R")
+    # Walk up from this file's directory to find the repo root,
+    # identified by the presence of the scripts/ directory.
+    tasks_dir = os.path.dirname(os.path.abspath(__file__))
+    candidate = tasks_dir
+    for _ in range(6):  # max 6 levels up
+        scripts_dir = os.path.join(candidate, "scripts")
+        if os.path.isdir(scripts_dir):
+            return os.path.join(scripts_dir, "plot_iqtree_ggtree.R")
+        candidate = os.path.dirname(candidate)
+    # Fallback: assume 4-level standard layout
+    return os.path.join(tasks_dir, "..", "..", "..", "..", "scripts", "plot_iqtree_ggtree.R")
 
 
 def run_tree_viz(
@@ -97,15 +100,13 @@ def run_tree_viz(
 
     viz_cfg = cfg.get("phylo", {}).get("tree_viz", {})
     formats = viz_cfg.get("formats", ["png"])
-    if isinstance(formats, list):
-        formats_str = ",".join(formats)
-    else:
-        formats_str = str(formats)
+    formats_str = ",".join(formats) if isinstance(formats, list) else str(formats)
 
-    bootstrap_min = float(viz_cfg.get("bootstrap_min", 80))
+    bootstrap_min = int(viz_cfg.get("bootstrap_min", 80))
     show_tip_labels = str(viz_cfg.get("show_tip_labels", "auto"))
     width = float(viz_cfg.get("width", 10))
-    height = float(viz_cfg.get("height") or 0)
+    _height_raw = viz_cfg.get("height")
+    height = float(_height_raw) if _height_raw is not None else 0.0
     color_palette = str(viz_cfg.get("color_palette", "Set3"))
     tax_level = str(viz_cfg.get("tax_level", "genus"))
 
