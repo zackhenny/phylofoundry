@@ -591,6 +591,24 @@ def run_pipeline(cfg):
             print(f"[pipeline] Loaded taxonomy for {len(tax_map)} genomes.")
 
     # ── STEP: embed ────────────────────────────────────────────────────────
+    # Auto-enable embed when MAAPE is enabled and embed is in the pipeline
+    # range but not yet enabled.  MAAPE requires embedding vectors; without
+    # them it silently produces no output.
+    _maape_cfg_pre = cfg.get("maape", {})
+    if (
+        _maape_cfg_pre.get("enabled", False)
+        and not emb_cfg.get("enabled", False)
+        and step_in_range("embed", start_at, stop_after)
+    ):
+        print(
+            "[pipeline] MAAPE is enabled — auto-enabling embed step so that "
+            "embedding vectors are available for MAAPE."
+        )
+        emb_cfg = dict(emb_cfg)
+        emb_cfg["enabled"] = True
+        cfg = dict(cfg)
+        cfg["embeddings"] = emb_cfg
+
     if step_in_range("embed", start_at, stop_after) and emb_cfg.get("enabled", False):
         if _is_blocked("embed"):
             print("[pipeline] Skipping blocked step: embed")

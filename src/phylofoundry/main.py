@@ -1247,10 +1247,21 @@ def main() -> None:
     # Apply subcommand-specific argument overrides
     _apply_step_args(args, cfg)
 
-    # Auto-enable optional steps when invoked as a standalone subcommand
+    # Auto-enable optional steps when invoked as a standalone subcommand.
+    # Keys may use dot-notation to address nested config values, e.g.
+    # "tree_viz.enabled" means cfg[section]["tree_viz"]["enabled"].
     if step_internal and step_internal in _STEP_ENABLE_MAP:
         section, key = _STEP_ENABLE_MAP[step_internal]
-        cfg.setdefault(section, {})[key] = True
+        if "." in key:
+            parts = key.split(".")
+            target = cfg.setdefault(section, {})
+            for part in parts[:-1]:
+                if not isinstance(target.get(part), dict):
+                    target[part] = {}
+                target = target[part]
+            target[parts[-1]] = True
+        else:
+            cfg.setdefault(section, {})[key] = True
 
     validate_config(cfg)
 
