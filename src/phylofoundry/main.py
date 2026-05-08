@@ -1253,6 +1253,10 @@ def main() -> None:
     if step_internal and step_internal in _STEP_ENABLE_MAP:
         section, key = _STEP_ENABLE_MAP[step_internal]
         if "." in key:
+            # Walk the config hierarchy, creating intermediate dicts as needed.
+            # All paths in _STEP_ENABLE_MAP are expected to point to dicts that
+            # already exist after resolve_config() (e.g. cfg["phylo"]["tree_viz"]),
+            # so the isinstance guard here is a safety net for unexpected configs.
             parts = key.split(".")
             target = cfg.setdefault(section, {})
             for part in parts[:-1]:
