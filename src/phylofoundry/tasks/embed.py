@@ -236,7 +236,7 @@ def _run_leiden(X, n_neighbors=15, metric="cosine", resolution=1.0):
             for j, d in zip(nbrs, dists):
                 if j > i:
                     edges.append((i, j))
-        weights.append(max(0.0, 1.0 - d))  # similarity weight (clamped to [0, 1])
+                    weights.append(max(0.0, 1.0 - d))  # similarity weight (clamped to [0, 1])
 
         g = ig.Graph(n=n_samples, edges=edges)
         g.es["weight"] = weights
@@ -2444,7 +2444,7 @@ def compute_embeddings_for_hmm(hmm_name: str, seqs: dict, emb_cfg: dict, outdir_
     out_disp = os.path.join(outdir_embeddings, f"{hmm_name}.dispersion.tsv")
     out_vec_tsv = os.path.join(outdir_embeddings, f"{hmm_name}.vectors.tsv")
 
-    if os.path.exists(out_pca) and os.path.exists(out_npy) and os.path.exists(out_umap) and not force:
+    if os.path.exists(out_pca) and os.path.exists(out_npy) and not force:
         return []
 
     seqs = {k: v.replace(" ", "").replace("\n", "").replace("*", "").replace(".", "") for k, v in seqs.items()}
@@ -2478,6 +2478,11 @@ def compute_embeddings_for_hmm(hmm_name: str, seqs: dict, emb_cfg: dict, outdir_
 
     X = X.astype(np.float32)
     np.save(out_npy, X)
+
+    # Write companion IDs file so the MAAPE step can resolve synthetic-ID fallback
+    out_ids = os.path.join(outdir_embeddings, f"{hmm_name}.embeddings_ids.txt")
+    with open(out_ids, "w") as _fh:
+        _fh.write("\n".join(ids) + "\n")
 
     # ── PCA ───────────────────────────────────────────────────────────────
     ncomp = int(emb_cfg["pca_components"])

@@ -117,6 +117,29 @@ REGISTRY.register(StepDefinition(
 ))
 
 REGISTRY.register(StepDefinition(
+    name="maape",
+    description=(
+        "MAAPE (Modular Assembly Analysis of Protein Embeddings): build evolutionary "
+        "network graphs from embedding vectors produced by the embed step."
+    ),
+    outputs=[
+        ArtifactSpec("maape", ArtifactKind.DIRECTORY, "maape/"),
+    ],
+    tool_requirements=[
+        ToolRequirement("networkx", optional=True),
+        ToolRequirement("faiss-cpu", optional=True,
+                        description="Faster KNN; falls back to sklearn if absent."),
+    ],
+    dependencies=["embed"],
+    optional=True,
+    enabled_config_key="maape.enabled",
+    notes=(
+        "Requires embedding vectors from the embed step.  When maape.enabled=true "
+        "and embeddings.enabled=false, the pipeline auto-enables the embed step."
+    ),
+))
+
+REGISTRY.register(StepDefinition(
     name="phylo",
     description=(
         "Run multiple sequence alignment (hmmalign/mafft) and phylogenetic tree "
@@ -342,6 +365,30 @@ REGISTRY.register(StepDefinition(
         "taxonomy_integrate, conservation_metrics, and detect_clades instead. "
         "Each of those steps has an independent enabled flag so that failures "
         "in one do not block the others."
+    ),
+))
+
+REGISTRY.register(StepDefinition(
+    name="tree_viz",
+    description=(
+        "Generate annotated phylogenetic tree plots (ggtree/R) for every IQ-TREE "
+        "treefile, with optional clade highlights and taxonomy annotation panels."
+    ),
+    outputs=[
+        ArtifactSpec("tree_viz", ArtifactKind.DIRECTORY, "tree_viz/"),
+    ],
+    tool_requirements=[
+        ToolRequirement(
+            "Rscript",
+            description="Required for ggtree-based tree visualisation.",
+        ),
+    ],
+    dependencies=["phylo"],
+    optional=True,
+    enabled_config_key="phylo.tree_viz.enabled",
+    notes=(
+        "Auto-enabled when synteny is enabled.  Requires R packages: ggtree, "
+        "ggtreeExtra, treeio, ggplot2, ggnewscale, and optparse."
     ),
 ))
 

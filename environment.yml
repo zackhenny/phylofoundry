@@ -27,6 +27,7 @@ dependencies:
   - r-scales
   - r-rcolorbrewer
   - r-optparse
+  - r-ggnewscale
   - bioconductor-ggtree
   - bioconductor-treeio
   - bioconductor-ggtreeextra
@@ -52,4 +53,5 @@ dependencies:
     - pwlf
     - faiss-cpu
     - networkx
+    - seaborn
     - .  # Install the current package in editable mode

@@ -26,6 +26,7 @@ suppressPackageStartupMessages({
   library(ape)
   library(treeio)
   library(ggtree)
+  library(ggnewscale)
   library(ggtreeExtra)
   library(dplyr)
   library(tidyr)
