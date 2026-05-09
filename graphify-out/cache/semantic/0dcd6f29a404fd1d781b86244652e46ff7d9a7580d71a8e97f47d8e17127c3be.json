@@ -1,0 +1,1 @@
+{"nodes": [{"id": "init_version", "label": "__version__ (phylofoundry)", "file_type": "code", "source_file": "src/phylofoundry/__init__.py", "source_location": "line 2", "source_url": null, "captured_at": null, "author": null, "contributor": null}], "edges": [], "hyperedges": []}
