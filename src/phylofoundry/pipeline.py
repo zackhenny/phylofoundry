@@ -191,13 +191,39 @@ def run_pipeline(cfg):
         else:
             prev_checkpointer = checkpointer
 
-        # Build per-step fingerprints from current config
+        # Build per-step fingerprints from current config.
+        # Include step-specific config sections so that changes to per-step
+        # settings (e.g. synteny.gbk_dir) properly invalidate the checkpoint.
+        _STEP_CFG_KEYS: dict = {
+            "prep": ["prep"],
+            "hmmer": ["hmmer", "filtering"],
+            "extract": [],
+            "embed": ["embeddings"],
+            "maape": ["maape"],
+            "phylo": ["phylo"],
+            "curate": ["curate"],
+            "taxonomy_integrate": ["taxonomy_integrate"],
+            "conservation_metrics": ["conservation_metrics"],
+            "detect_clades": ["detect_clades"],
+            "aa_composition": ["aa_composition"],
+            "post": ["post"],
+            "tree_viz": ["phylo"],
+            "synteny": ["synteny"],
+            "codon": ["codon"],
+            "hyphy": ["hyphy"],
+            "score_motifs": ["motifs"],
+            "discover_motifs": ["discover"],
+        }
         step_fps: dict = {}
         for s in STEPS:
+            step_cfg_sections = {
+                k: cfg.get(k, {}) for k in _STEP_CFG_KEYS.get(s, [])
+            }
             params_for_fp = {
                 "step": s,
                 "workflow": {k: v for k, v in cfg["workflow"].items()
                              if k not in ("force",)},
+                "step_cfg": step_cfg_sections,
             }
             step_fps[s] = compute_fingerprint(params_for_fp, [])
 
@@ -970,6 +996,7 @@ def run_pipeline(cfg):
                     cfg, synteny_dir, tree_dir, scan_df, search_df, hmm_keep, force,
                     clade_assign_dir=clade_assign_dir,
                     summary_dir=summary_dir,
+                    resume=(resume_plan.get("synteny") == "resume"),
                 )
                 update_step_status(status_path, "synteny", "success")
                 _log_step_event("synteny", "SUCCESS")
