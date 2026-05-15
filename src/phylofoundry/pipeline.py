@@ -36,10 +36,12 @@ from .checkpoint import (
 # be included in that step's checkpoint fingerprint.  This ensures that
 # changes to step-specific settings (e.g. synteny.gbk_dir) properly
 # invalidate the checkpoint so --resume re-runs the step.
-_STEP_CFG_KEYS: dict = {
+# Steps that have no dedicated config section (e.g. "extract") use an empty
+# list — their fingerprint is derived from the shared workflow config only.
+_STEP_CFG_KEYS: dict[str, list[str]] = {
     "prep": ["prep"],
     "hmmer": ["hmmer", "filtering"],
-    "extract": [],
+    "extract": [],           # no dedicated config section
     "embed": ["embeddings"],
     "maape": ["maape"],
     "phylo": ["phylo"],
@@ -49,7 +51,7 @@ _STEP_CFG_KEYS: dict = {
     "detect_clades": ["detect_clades"],
     "aa_composition": ["aa_composition"],
     "post": ["post"],
-    "tree_viz": ["phylo"],
+    "tree_viz": ["phylo"],   # tree_viz settings live under phylo.tree_viz
     "synteny": ["synteny"],
     "codon": ["codon"],
     "hyphy": ["hyphy"],
