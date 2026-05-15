@@ -32,6 +32,32 @@ from .checkpoint import (
 )
 
 
+# Maps each pipeline step name to the cfg section keys whose content should
+# be included in that step's checkpoint fingerprint.  This ensures that
+# changes to step-specific settings (e.g. synteny.gbk_dir) properly
+# invalidate the checkpoint so --resume re-runs the step.
+_STEP_CFG_KEYS: dict = {
+    "prep": ["prep"],
+    "hmmer": ["hmmer", "filtering"],
+    "extract": [],
+    "embed": ["embeddings"],
+    "maape": ["maape"],
+    "phylo": ["phylo"],
+    "curate": ["curate"],
+    "taxonomy_integrate": ["taxonomy_integrate"],
+    "conservation_metrics": ["conservation_metrics"],
+    "detect_clades": ["detect_clades"],
+    "aa_composition": ["aa_composition"],
+    "post": ["post"],
+    "tree_viz": ["phylo"],
+    "synteny": ["synteny"],
+    "codon": ["codon"],
+    "hyphy": ["hyphy"],
+    "score_motifs": ["motifs"],
+    "discover_motifs": ["discover"],
+}
+
+
 def step_in_range(step, start_at, stop_after):
     """Check whether `step` falls within [start_at, stop_after]."""
     i = STEPS.index(step)
@@ -194,26 +220,6 @@ def run_pipeline(cfg):
         # Build per-step fingerprints from current config.
         # Include step-specific config sections so that changes to per-step
         # settings (e.g. synteny.gbk_dir) properly invalidate the checkpoint.
-        _STEP_CFG_KEYS: dict = {
-            "prep": ["prep"],
-            "hmmer": ["hmmer", "filtering"],
-            "extract": [],
-            "embed": ["embeddings"],
-            "maape": ["maape"],
-            "phylo": ["phylo"],
-            "curate": ["curate"],
-            "taxonomy_integrate": ["taxonomy_integrate"],
-            "conservation_metrics": ["conservation_metrics"],
-            "detect_clades": ["detect_clades"],
-            "aa_composition": ["aa_composition"],
-            "post": ["post"],
-            "tree_viz": ["phylo"],
-            "synteny": ["synteny"],
-            "codon": ["codon"],
-            "hyphy": ["hyphy"],
-            "score_motifs": ["motifs"],
-            "discover_motifs": ["discover"],
-        }
         step_fps: dict = {}
         for s in STEPS:
             step_cfg_sections = {
