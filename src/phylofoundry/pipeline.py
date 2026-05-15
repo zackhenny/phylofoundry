@@ -32,6 +32,34 @@ from .checkpoint import (
 )
 
 
+# Maps each pipeline step name to the cfg section keys whose content should
+# be included in that step's checkpoint fingerprint.  This ensures that
+# changes to step-specific settings (e.g. synteny.gbk_dir) properly
+# invalidate the checkpoint so --resume re-runs the step.
+# Steps that have no dedicated config section (e.g. "extract") use an empty
+# list — their fingerprint is derived from the shared workflow config only.
+_STEP_CFG_KEYS: dict[str, list[str]] = {
+    "prep": ["prep"],
+    "hmmer": ["hmmer", "filtering"],
+    "extract": [],           # no dedicated config section
+    "embed": ["embeddings"],
+    "maape": ["maape"],
+    "phylo": ["phylo"],
+    "curate": ["curate"],
+    "taxonomy_integrate": ["taxonomy_integrate"],
+    "conservation_metrics": ["conservation_metrics"],
+    "detect_clades": ["detect_clades"],
+    "aa_composition": ["aa_composition"],
+    "post": ["post"],
+    "tree_viz": ["phylo"],   # tree_viz settings live under phylo.tree_viz
+    "synteny": ["synteny"],
+    "codon": ["codon"],
+    "hyphy": ["hyphy"],
+    "score_motifs": ["motifs"],
+    "discover_motifs": ["discover"],
+}
+
+
 def step_in_range(step, start_at, stop_after):
     """Check whether `step` falls within [start_at, stop_after]."""
     i = STEPS.index(step)
@@ -191,13 +219,19 @@ def run_pipeline(cfg):
         else:
             prev_checkpointer = checkpointer
 
-        # Build per-step fingerprints from current config
+        # Build per-step fingerprints from current config.
+        # Include step-specific config sections so that changes to per-step
+        # settings (e.g. synteny.gbk_dir) properly invalidate the checkpoint.
         step_fps: dict = {}
         for s in STEPS:
+            step_cfg_sections = {
+                k: cfg.get(k, {}) for k in _STEP_CFG_KEYS.get(s, [])
+            }
             params_for_fp = {
                 "step": s,
                 "workflow": {k: v for k, v in cfg["workflow"].items()
                              if k not in ("force",)},
+                "step_cfg": step_cfg_sections,
             }
             step_fps[s] = compute_fingerprint(params_for_fp, [])
 
@@ -970,6 +1004,7 @@ def run_pipeline(cfg):
                     cfg, synteny_dir, tree_dir, scan_df, search_df, hmm_keep, force,
                     clade_assign_dir=clade_assign_dir,
                     summary_dir=summary_dir,
+                    resume=(resume_plan.get("synteny") == "resume"),
                 )
                 update_step_status(status_path, "synteny", "success")
                 _log_step_event("synteny", "SUCCESS")

@@ -304,7 +304,7 @@ def _call_synteny_tree_r(
         )
 
 
-def run_synteny(cfg, synteny_dir, tree_dir, scan_df, search_df, hmm_keep, force=False, clade_assign_dir=None, summary_dir=None):
+def run_synteny(cfg, synteny_dir, tree_dir, scan_df, search_df, hmm_keep, force=False, clade_assign_dir=None, summary_dir=None, resume=False):
     print("\n[synteny] Extracting neighborhoods and plotting synteny...")
     
     syn_cfg = cfg.get("synteny", {})
@@ -371,6 +371,9 @@ def run_synteny(cfg, synteny_dir, tree_dir, scan_df, search_df, hmm_keep, force=
     if hmm_keep:
         hits = hits[hits["hmm"].isin(hmm_keep)]
 
+    if resume:
+        print("[synteny] Resume mode: previously completed HMMs will be skipped.")
+
     all_cluster_rows = []  # aggregate across all HMMs
 
     for hmm, group in hits.groupby("hmm"):
@@ -384,6 +387,8 @@ def run_synteny(cfg, synteny_dir, tree_dir, scan_df, search_df, hmm_keep, force=
         
         html_out = os.path.join(hmm_out_dir, f"synteny.{hmm}.html")
         if os.path.exists(html_out) and not force:
+            if resume:
+                print(f"  [synteny] Skipping {hmm} (already completed)")
             continue
 
         print(f"  [synteny] Calculating synteny for {hmm} ({len(group)} hits)...")
