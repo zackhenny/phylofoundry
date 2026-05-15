@@ -23,6 +23,7 @@ def worker_phylo(args_pack):
     if os.path.exists(treefile) and not force:
         return hmm_name
 
+    print(f"  [phylo] Building tree for {hmm_name} ({len(seqs)} sequences)...")
     # Align
     try:
         if phy_cfg["mafft"]:

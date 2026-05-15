@@ -170,6 +170,7 @@ def run_codon(cfg, tree_dir, clipkit_dir, aln_dir, codon_dir, hmm_keep, force=Fa
         if os.path.exists(codon_aln_fp) and not force:
             continue
 
+        print(f"  [codon] Building codon alignment for {hmm}...")
         # ── Read and clean AA alignment (strip stop codons) ──────────────
         aln_seqs_raw = read_fasta(aa_aln_fp)
         aln_seqs = _clean_aa_alignment(aln_seqs_raw)

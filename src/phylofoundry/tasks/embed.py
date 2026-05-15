@@ -2723,6 +2723,7 @@ def run_embed(cfg, hmm_to_seqs, clades, emb_dir, fasta_dir, hmm_keep,
             continue
 
         tracker.record_running(hmm)
+        print(f"  [embed] Embedding {hmm} ({len(seqs)} sequences)...")
         try:
             assignments = compute_embeddings_for_hmm(
                 hmm, seqs, emb_cfg, emb_dir, force=force,
