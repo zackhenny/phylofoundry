@@ -141,6 +141,7 @@ def run_tree_viz(
         if os.path.exists(out_check) and not force:
             continue
 
+        print(f"  [tree_viz] Plotting tree for {hmm_name}...")
         # Per-HMM clade assignment file
         clades_tsv = os.path.join(clade_assign_dir, f"{hmm_name}.clades.tsv")
         if not os.path.exists(clades_tsv):

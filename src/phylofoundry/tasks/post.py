@@ -630,6 +630,7 @@ def run_post(cfg, tree_dir, clipkit_dir, aln_dir, post_dir, summary_dir, hmm_kee
         hmm_names = [h for h in hmm_names if h in hmm_keep]
 
     for hmm in hmm_names:
+        print(f"  [post] Processing {hmm}...")
         tree_fp = os.path.join(tree_dir, f"{hmm}.treefile")
 
         clip_aln = os.path.join(clipkit_dir, f"{hmm}.clipkit.faa")

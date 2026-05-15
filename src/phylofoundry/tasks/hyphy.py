@@ -211,6 +211,7 @@ def run_hyphy(cfg, codon_dir, tree_dir, hyphy_dir, hmm_keep, force=False, clade_
         if not os.path.exists(tree_fp):
             continue
 
+        print(f"  [hyphy] Running tests for {hmm}...")
         if not clades:
             for test in tests:
                 out_json = os.path.join(hyphy_dir, f"{hmm}.{test}.json")

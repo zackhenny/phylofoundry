@@ -386,7 +386,7 @@ def run_synteny(cfg, synteny_dir, tree_dir, scan_df, search_df, hmm_keep, force=
         if os.path.exists(html_out) and not force:
             continue
 
-        print(f"  Processing HMM: {hmm} ({len(group)} hits)...")
+        print(f"  [synteny] Calculating synteny for {hmm} ({len(group)} hits)...")
         
         if syn_cfg.get("dedup_by_genome", True):
             group = group.sort_values("bitscore", ascending=False).groupby("genome").head(1)
@@ -616,7 +616,7 @@ def run_synteny(cfg, synteny_dir, tree_dir, scan_df, search_df, hmm_keep, force=
         # Run clinker
         print("    Generating Clinker synteny plot...")
         try:
-            cmd = ["clinker", *gbk_files, "-p", html_out]
+            cmd = ["clinker", *gbk_files, "-p", html_out, "--no_plot"]
             subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
             print(f"    Saved Clinker plot: {html_out}")
 
@@ -630,7 +630,7 @@ def run_synteny(cfg, synteny_dir, tree_dir, scan_df, search_df, hmm_keep, force=
             print("    Generating pyGenomeViz synteny plot (pgv-mmseqs)...")
             try:
                 pgv_out_dir = os.path.join(hmm_out_dir, "pgv_out")
-                pgv_cmd = ["pgv-mmseqs", *gbk_files, "-o", pgv_out_dir]
+                pgv_cmd = ["pgv-mmseqs", *gbk_files, "-o", pgv_out_dir, "--no-show"]
                 # Default behavior is to launch the image to outdir/result.png (or pdf)
                 subprocess.run(pgv_cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
                 print(f"    Saved pyGenomeViz plot: {pgv_out_dir}")
