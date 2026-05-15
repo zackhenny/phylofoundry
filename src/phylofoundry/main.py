@@ -370,7 +370,7 @@ def _build_parser() -> argparse.ArgumentParser:
                               "before competitive assignment.  Overrides "
                               "filtering.global_min_score in the config.")
     p_hmmer.add_argument("--min_coverage", type=float, default=None,
-                         help="Minimum alignment coverage fraction [0–1] required to "
+                         help="Minimum alignment coverage fraction [0-1] required to "
                               "keep a hit (default: 0.5 = 50%% of the query length "
                               "aligned).  Overrides filtering.min_coverage in the "
                               "config.")
