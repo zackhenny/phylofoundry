@@ -618,27 +618,37 @@ def run_synteny(cfg, synteny_dir, tree_dir, scan_df, search_df, hmm_keep, force=
                 SeqIO.write(rec, outf, "genbank")
             gbk_files.append(gbk_path)
             
-        # Run clinker
+        # Run clinker – produce interactive HTML and alignment coordinate TSV
         print("    Generating Clinker synteny plot...")
+        clinker_coords_out = os.path.join(hmm_out_dir, f"alignment_coords.{hmm}.tsv")
         try:
-            cmd = ["clinker", *gbk_files, "-p", html_out, "--no_plot"]
+            cmd = [
+                "clinker", *gbk_files,
+                "-p", html_out,
+                "-o", clinker_coords_out,
+                "--no_plot",
+            ]
             subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
             print(f"    Saved Clinker plot: {html_out}")
+            print(f"    Saved Clinker alignment coords: {clinker_coords_out}")
 
         except Exception as e:
             import traceback
             print(f"    Clinker plotting failed for {hmm}: {e}", file=sys.stderr)
             traceback.print_exc()
 
-        # Run pgv-mmseqs
+        # Run pgv-mmseqs – produce PNG and interactive HTML alignment output
         if shutil.which("pgv-mmseqs"):
             print("    Generating pyGenomeViz synteny plot (pgv-mmseqs)...")
             try:
                 pgv_out_dir = os.path.join(hmm_out_dir, "pgv_out")
-                pgv_cmd = ["pgv-mmseqs", *gbk_files, "-o", pgv_out_dir, "--no-show"]
-                # Default behavior is to launch the image to outdir/result.png (or pdf)
+                pgv_cmd = [
+                    "pgv-mmseqs", *gbk_files,
+                    "-o", pgv_out_dir,
+                    "--formats", "png,html",
+                ]
                 subprocess.run(pgv_cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
-                print(f"    Saved pyGenomeViz plot: {pgv_out_dir}")
+                print(f"    Saved pyGenomeViz outputs (PNG + HTML): {pgv_out_dir}")
             except Exception as e:
                 import traceback
                 print(f"    pyGenomeViz plotting failed for {hmm}: {e}", file=sys.stderr)
