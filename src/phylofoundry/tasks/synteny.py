@@ -311,20 +311,26 @@ def run_synteny(cfg, synteny_dir, tree_dir, scan_df, search_df, hmm_keep, force=
     if not syn_cfg.get("enabled", False):
         return
 
-    # Check for clinker availability
-    if not shutil.which("clinker"):
-        print("[synteny] FAILED: clinker command line tool is not installed or not in PATH.", file=sys.stderr)
-        print("[synteny] Install with: pip install clinker-py", file=sys.stderr)
-        return
-
-    # Check for pgv-mmseqs availability
-    if not shutil.which("pgv-mmseqs"):
-        print("[synteny] WARNING: pgv-mmseqs command line tool is not installed or not in PATH. pyGenomeViz plot will be skipped.", file=sys.stderr)
+    # Check for pygenomeviz (primary alignment + visualization engine)
+    try:
+        from pygenomeviz.align import AlignCoord, MMseqs  # noqa: F401
+        from pygenomeviz import GenomeViz  # noqa: F401
+        _pgv_available = True
+    except ImportError:
+        _pgv_available = False
+        print("[synteny] WARNING: pygenomeviz is not installed. MMseqs alignment and coordinate outputs will be skipped.", file=sys.stderr)
         print("[synteny] Install with: pip install pygenomeviz", file=sys.stderr)
+
+    if _pgv_available and not shutil.which("mmseqs"):
+        _pgv_available = False
+        print("[synteny] WARNING: mmseqs binary not found in PATH. pyGenomeViz MMseqs alignment will be skipped.", file=sys.stderr)
+
+    # Check for clinker (optional – produces an interactive HTML viewer)
+    _clinker_available = bool(shutil.which("clinker"))
 
     gbk_dir = syn_cfg.get("gbk_dir")
     gff_dir = syn_cfg.get("gff_dir")
-    pfam_dir = cfg["inputs"].get("pfam_dir")
+    pfam_dir = cfg.get("inputs", {}).get("pfam_dir")
     annotation_evalue = float(syn_cfg.get("annotation_evalue", 1e-5))
     cpu = int(cfg.get("resources", {}).get("cpu", 1))
     combined_hmm = os.path.join(cfg["output"]["outdir"], "combined.hmm")
@@ -618,45 +624,117 @@ def run_synteny(cfg, synteny_dir, tree_dir, scan_df, search_df, hmm_keep, force=
                 SeqIO.write(rec, outf, "genbank")
             gbk_files.append(gbk_path)
             
-        # Run clinker – produce interactive HTML and alignment coordinate TSV
-        print("    Generating Clinker synteny plot...")
-        clinker_coords_out = os.path.join(hmm_out_dir, f"alignment_coords.{hmm}.tsv")
-        try:
-            cmd = [
-                "clinker", *gbk_files,
-                "-p", html_out,
-                "-o", clinker_coords_out,
-                "--no_plot",
-            ]
-            subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
-            print(f"    Saved Clinker plot: {html_out}")
-            print(f"    Saved Clinker alignment coords: {clinker_coords_out}")
-
-        except Exception as e:
-            import traceback
-            print(f"    Clinker plotting failed for {hmm}: {e}", file=sys.stderr)
-            traceback.print_exc()
-
-        # Run pgv-mmseqs – produce PNG and interactive HTML alignment output
-        if shutil.which("pgv-mmseqs"):
-            print("    Generating pyGenomeViz synteny plot (pgv-mmseqs)...")
+        # ── pyGenomeViz MMseqs alignment (primary) ───────────────────────────
+        # Runs MMseqs RBH alignment, saves alignment coordinates TSV for
+        # downstream user plotting, and generates PNG + interactive HTML.
+        pgv_out_dir = os.path.join(hmm_out_dir, "pgv_out")
+        safe_mkdir(pgv_out_dir)
+        if _pgv_available and gbk_files:
+            print("    Running pyGenomeViz MMseqs alignment (primary)...")
             try:
-                pgv_out_dir = os.path.join(hmm_out_dir, "pgv_out")
-                pgv_cmd = [
-                    "pgv-mmseqs", *gbk_files,
-                    "-o", pgv_out_dir,
-                    "--formats", "png,html",
-                ]
-                subprocess.run(pgv_cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
-                print(f"    Saved pyGenomeViz outputs (PNG + HTML): {pgv_out_dir}")
+                from pygenomeviz import GenomeViz
+                from pygenomeviz.align import AlignCoord, MMseqs
+                from pygenomeviz.parser import Genbank as PGVGenbank
+                from pygenomeviz.utils import is_pseudo_feature
+
+                mmseqs_evalue = float(syn_cfg.get("mmseqs_evalue", 1e-3))
+                gbk_list = [PGVGenbank(gp) for gp in gbk_files]
+
+                # Run MMseqs RBH alignment
+                mmseqs_tmp = os.path.join(pgv_out_dir, "mmseqs_tmp")
+                safe_mkdir(mmseqs_tmp)
+                align_coords = MMseqs(
+                    gbk_list,
+                    outdir=mmseqs_tmp,
+                    evalue=mmseqs_evalue,
+                    threads=cpu,
+                ).run()
+
+                # Save alignment coordinates TSV – users can load this for
+                # custom plotting with AlignCoord.read(path)
+                coords_tsv = os.path.join(pgv_out_dir, f"align_coords.{hmm}.tsv")
+                AlignCoord.write(align_coords, coords_tsv)
+                print(f"    Saved MMseqs alignment coordinates: {coords_tsv}")
+
+                # Build GenomeViz visualisation from alignment results
+                fig_width = float(syn_cfg.get("pgv_fig_width", 15))
+                fig_track_height = float(syn_cfg.get("pgv_fig_track_height", 1.0))
+                gv = GenomeViz(
+                    fig_width=fig_width,
+                    fig_track_height=fig_track_height,
+                    track_align_type="center",
+                    feature_track_ratio=0.25,
+                )
+                for idx, gbk in enumerate(gbk_list):
+                    track = gv.add_feature_track(
+                        gbk.name,
+                        gbk.get_seqid2size(),
+                        space=0.02,
+                    )
+                    seqid2features = gbk.get_seqid2features(feature_type=None)
+                    for seqid, features in seqid2features.items():
+                        for feature in features:
+                            if feature.type == "CDS":
+                                fc = "orange" if not is_pseudo_feature(feature) else "lightgrey"
+                                track.add_features(
+                                    feature,
+                                    target_seg=seqid,
+                                    plotstyle="bigbox",
+                                    fc=fc,
+                                    ec="black",
+                                    lw=0.5,
+                                )
+
+                # Apply alignment links
+                filtered = AlignCoord.filter(align_coords)
+                if filtered:
+                    identities = [ac.identity for ac in filtered if ac.identity is not None]
+                    min_ident = int(min(identities)) if identities else 0
+                    for ac in filtered:
+                        gv.add_link(
+                            ac.ref_link,
+                            ac.query_link,
+                            color="grey",
+                            inverted_color="red",
+                            v=ac.identity,
+                            vmin=min_ident,
+                        )
+
+                # Save PNG
+                pgv_png = os.path.join(pgv_out_dir, f"synteny.{hmm}.png")
+                gv.savefig(pgv_png, dpi=300)
+                print(f"    Saved pyGenomeViz PNG: {pgv_png}")
+
+                # Save interactive HTML
+                pgv_html = os.path.join(pgv_out_dir, f"synteny.{hmm}.html")
+                gv.savefig_html(pgv_html)
+                print(f"    Saved pyGenomeViz HTML: {pgv_html}")
+
             except Exception as e:
                 import traceback
-                print(f"    pyGenomeViz plotting failed for {hmm}: {e}", file=sys.stderr)
+                print(f"    [synteny] pyGenomeViz MMseqs alignment failed for {hmm}: {e}", file=sys.stderr)
                 traceback.print_exc()
 
-            # Optionally clean up intermediate genbanks here, uncomment if preferred
-            # for f in gbk_files:
-            #     os.remove(f)
+        # ── Clinker interactive HTML (optional) ──────────────────────────────
+        # Clinker provides an additional interactive alignment viewer with drag-
+        # and-drop reordering.  Run only when the clinker binary is present.
+        if _clinker_available and gbk_files:
+            print("    Generating Clinker interactive viewer (optional)...")
+            clinker_coords_out = os.path.join(hmm_out_dir, f"alignment_coords.{hmm}.tsv")
+            try:
+                cmd = [
+                    "clinker", *gbk_files,
+                    "-p", html_out,
+                    "-o", clinker_coords_out,
+                    "--no_plot",
+                ]
+                subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+                print(f"    Saved Clinker interactive HTML: {html_out}")
+                print(f"    Saved Clinker alignment coords: {clinker_coords_out}")
+            except Exception as e:
+                import traceback
+                print(f"    [synteny] Clinker failed for {hmm}: {e}", file=sys.stderr)
+                traceback.print_exc()
 
         # ── ggtree-based combined tree + synteny panel (R) ────────────────
         # Requires: a .treefile for the HMM, the gene-cluster TSV, and Rscript.

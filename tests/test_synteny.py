@@ -3,9 +3,11 @@ import os
 import pytest
 from unittest.mock import MagicMock, patch
 
-# Mock pygenomeviz before importing synteny
+# Mock pygenomeviz and its submodules before importing synteny
 sys.modules["pygenomeviz"] = MagicMock()
-sys.modules["pygenomeviz.GenomeViz"] = MagicMock()
+sys.modules["pygenomeviz.align"] = MagicMock()
+sys.modules["pygenomeviz.parser"] = MagicMock()
+sys.modules["pygenomeviz.utils"] = MagicMock()
 
 from phylofoundry.tasks import synteny
 
