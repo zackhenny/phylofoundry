@@ -114,7 +114,7 @@ def run_phylo(cfg, hmm_to_seqs, fasta_dir, aln_dir, clipkit_dir, tree_dir, name_
                 continue
             hmm_to_seqs[hmm] = read_fasta(fp)
 
-    threads_per = max(1, min(4, cpu // 2))
+    threads_per = max(1, phy_cfg.get("cpus_per_tree", 6))
     workers = max(1, cpu // threads_per)
 
     # Sub-task progress tracker: tracks per-HMM tree-building progress.

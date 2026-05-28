@@ -304,6 +304,386 @@ def _call_synteny_tree_r(
         )
 
 
+
+def _worker_synteny(args_pack):
+    """Process a single HMM's synteny analysis.  Designed to be called from
+    ProcessPoolExecutor so it must be a module-level function that accepts a
+    single picklable argument tuple.
+
+    Returns a list of cluster-row dicts (may be empty) that the caller
+    aggregates into the global gene-cluster table.
+    """
+    (hmm, group_records, syn_cfg, synteny_dir, tree_dir, combined_hmm,
+     annotation_evalue, cpu_per_job, force, resume,
+     clade_assign_dir, tax_tsv_for_r, rscript_bin, synteny_r_script,
+     _pgv_available, _clinker_available) = args_pack
+
+    # Re-create the group DataFrame from records (avoids pickling a full DataFrame slice)
+    group = pd.DataFrame(group_records)
+
+    gbk_dir = syn_cfg.get("gbk_dir")
+    gff_dir = syn_cfg.get("gff_dir")
+    pfam_dir = syn_cfg.get("_pfam_dir")
+
+    hmm_out_dir = os.path.join(synteny_dir, hmm)
+    anno_dir = os.path.join(hmm_out_dir, "annotations")
+    seqs_dir = os.path.join(hmm_out_dir, "seqs")
+
+    safe_mkdir(hmm_out_dir)
+    safe_mkdir(anno_dir)
+    safe_mkdir(seqs_dir)
+
+    html_out = os.path.join(hmm_out_dir, f"synteny.{hmm}.html")
+    if os.path.exists(html_out) and not force:
+        if resume:
+            print(f"  [synteny] Skipping {hmm} (already completed)")
+        return []
+
+    print(f"  [synteny] Calculating synteny for {hmm} ({len(group)} hits)...")
+
+    if syn_cfg.get("dedup_by_genome", True):
+        group = group.sort_values("bitscore", ascending=False).groupby("genome").head(1)
+        max_hits = int(syn_cfg.get("max_hits_per_hmm", 50))
+        if len(group) > max_hits:
+            group = group.head(max_hits)
+
+    neighborhoods = []  # list of (genome, protein, track_feats, contig_seq)
+    all_prots = {}      # uid -> sequence
+
+    window = int(syn_cfg.get("window_genes", 10))
+    fields_id = syn_cfg.get("protein_id_field", ["ID", "protein_id", "locus_tag"])
+    fields_label = syn_cfg.get("gene_label_field", ["gene", "product", "Name", "locus_tag"])
+
+    for _, r in group.iterrows():
+        genome = r["genome"]
+        protein = r["protein"]
+
+        found_feats = []
+        contig_seq = None
+        if gbk_dir:
+            base = normalize_genome_id(genome)
+            cand = glob.glob(os.path.join(gbk_dir, f"{base}*.gb*"))
+            if cand:
+                found_feats, contig_seq = load_genbank_neighborhood(cand[0], protein, window, fields_id, fields_label)
+
+        if not found_feats and gff_dir:
+            base = normalize_genome_id(genome)
+            cand = glob.glob(os.path.join(gff_dir, f"{base}*.gff*"))
+            if cand:
+                found_feats, contig_seq = load_gff_neighborhood(cand[0], protein, window, fields_id, fields_label)
+
+        if not found_feats:
+            continue
+
+        track_feats = []
+        for i, f in enumerate(found_feats):
+            uid = f"{genome}|{f['contig']}|{f['protein_id']}|{i}"
+            f["uid"] = uid
+            if f.get("translation"):
+                all_prots[uid] = f["translation"]
+            track_feats.append(f)
+
+        neighborhoods.append((genome, protein, track_feats, contig_seq))
+
+    if not neighborhoods:
+        print(f"    No neighborhoods extracted for {hmm}.")
+        return []
+
+    # ── Tree-ordered neighborhood sorting ─────────────────────────────
+    if syn_cfg.get("tree_ordered", True) and syn_cfg.get("include_tree", True):
+        tree_fp_for_order = os.path.join(tree_dir, f"{hmm}.treefile")
+        tip_order = _get_tree_tip_order(tree_fp_for_order)
+        if tip_order:
+            tip_rank = {tip: i for i, tip in enumerate(tip_order)}
+
+            def _neighborhood_rank(nbr):
+                genome_n, protein_n, _, _ = nbr
+                full_key = f"{genome_n}|{protein_n}"
+                if full_key in tip_rank:
+                    return tip_rank[full_key]
+                for tip, rank in tip_rank.items():
+                    if tip.startswith(f"{genome_n}|"):
+                        return rank
+                return len(tip_rank)
+
+            neighborhoods = sorted(neighborhoods, key=_neighborhood_rank)
+
+    pfam_mapping = {}
+    if pfam_dir and all_prots:
+        print("    Running Pfam annotation on neighborhood proteins...")
+        import tempfile, json
+        with tempfile.TemporaryDirectory() as td:
+            faa_path = os.path.join(td, "proteins.faa")
+            write_fasta(faa_path, all_prots)
+
+            pfam_out = os.path.join(td, "pfam.json")
+            script_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "utils", "pfam_scan.py")
+            cmd = ["python", script_path, faa_path, pfam_dir, "-outfmt", "json", "-out", pfam_out]
+            try:
+                subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+                with open(pfam_out) as fh:
+                    pfam_res = json.load(fh)
+                for uid, domains in pfam_res.items():
+                    dom_names = [d["hmm_name"] for d in domains]
+                    if dom_names:
+                        pfam_mapping[uid] = "Pfam: " + ", ".join(dom_names)
+            except Exception as e:
+                print(f"    Warning: Pfam scan failed: {e}", file=sys.stderr)
+
+    # Save neighborhood protein sequences
+    if all_prots:
+        seq_out = os.path.join(seqs_dir, "neighborhood_proteins.faa")
+        write_fasta(seq_out, all_prots)
+
+    # ── HMM Annotation of neighborhood proteins ──────────────────────
+    hmm_annotations = {}
+    if all_prots and os.path.exists(combined_hmm):
+        seq_out = os.path.join(seqs_dir, "neighborhood_proteins.faa")
+        print(f"    Annotating neighborhood proteins (e-value={annotation_evalue})...")
+        hmm_annotations = _annotate_neighborhood_proteins(
+            seq_out, combined_hmm, annotation_evalue, cpu=cpu_per_job
+        )
+        if hmm_annotations:
+            print(f"    Annotated {len(hmm_annotations)} proteins with HMM hits.")
+
+    # ── Gene Cluster Annotations Table ────────────────────────────────
+    cluster_rows = []
+    for genome, protein, feats, contig_seq in neighborhoods:
+        for f in feats:
+            uid = f.get("uid", "")
+            anno = hmm_annotations.get(uid, {})
+            focal_idx = next((i for i, feat in enumerate(feats) if feat.get("is_focal")), 0)
+            current_idx = feats.index(f)
+            position_relative = current_idx - focal_idx
+            cluster_rows.append({
+                "hmm": hmm,
+                "genome": genome,
+                "focal_protein": protein,
+                "cluster_size": len(feats),
+                "protein_id": f.get("protein_id", "NA"),
+                "position_relative": position_relative,
+                "strand": f.get("strand", "NA"),
+                "gene_label": f.get("label", "NA"),
+                "hmm_annotation": anno.get("hmm_annotation", ""),
+                "annotation_evalue": anno.get("annotation_evalue", ""),
+                "annotation_bitscore": anno.get("annotation_bitscore", ""),
+                "is_focal": f.get("is_focal", False),
+            })
+
+    if cluster_rows:
+        cluster_df = pd.DataFrame(cluster_rows)
+        cluster_fp = os.path.join(anno_dir, f"{hmm}_gene_clusters.tsv")
+        cluster_df.to_csv(cluster_fp, sep="\t", index=False)
+        print(f"    Wrote gene cluster table: {cluster_fp} ({len(cluster_rows)} entries)")
+
+    # ── Build GenBank files for clinker / pyGenomeViz ─────────────────
+    from Bio.SeqRecord import SeqRecord
+    from Bio.Seq import Seq
+    from Bio.SeqFeature import SeqFeature, FeatureLocation
+
+    gbk_files = []
+    for genome, protein, feats, contig_seq in neighborhoods:
+        if not feats:
+            continue
+        min_start = min(f["start"] for f in feats)
+        max_end = max(f["end"] for f in feats)
+        size = max_end - min_start + 1
+
+        if contig_seq is not None:
+            nucl_seq = contig_seq[min_start:max_end]
+            if isinstance(nucl_seq, str):
+                nucl_seq = Seq(nucl_seq)
+        else:
+            nucl_seq = Seq("N" * size)
+
+        focal_feat = next((f for f in feats if f.get("is_focal")), None)
+        focal_strand = 1
+        if focal_feat is not None:
+            focal_strand = 1 if str(focal_feat["strand"]) in ["1", "+"] else -1
+
+        if focal_strand == -1:
+            nucl_seq = nucl_seq.reverse_complement()
+
+        safe_prot = protein.replace("|", "_").split("~")[-1]
+        track_name = f"{genome}_{safe_prot}"
+        if len(track_name) > 16:
+            track_name = track_name[:16]
+
+        rec = SeqRecord(nucl_seq, id=f"{genome}_{safe_prot}", name=track_name,
+                        description=f"Neighborhood for {hmm}", annotations={"molecule_type": "DNA"})
+
+        for f in feats:
+            strand = 1 if str(f["strand"]) in ["1", "+"] else -1
+            feat_start = f["start"] - min_start
+            feat_end = f["end"] - min_start
+
+            if focal_strand == -1:
+                new_start = size - feat_end
+                new_end = size - feat_start
+                strand = -strand
+                feat_start, feat_end = new_start, new_end
+
+            loc = FeatureLocation(feat_start, feat_end, strand=strand)
+
+            qualifiers = {"locus_tag": [f.get("label", "")]}
+            if f.get("translation"):
+                qualifiers["translation"] = [f["translation"]]
+
+            uid = f.get("uid", "")
+            product_str = f.get("label", "")
+            if uid in pfam_mapping:
+                if product_str and product_str != "NA":
+                    product_str += f" ({pfam_mapping[uid]})"
+                else:
+                    product_str = pfam_mapping[uid]
+
+            if product_str and product_str != "NA":
+                qualifiers["product"] = [product_str]
+                qualifiers["gene"] = [product_str]
+                qualifiers["name"] = [product_str]
+
+            sf = SeqFeature(loc, type="CDS", id=uid, qualifiers=qualifiers)
+            rec.features.append(sf)
+
+        gbk_path = os.path.join(anno_dir, f"{genome}_{safe_prot}.gbk")
+        with open(gbk_path, "w") as outf:
+            SeqIO.write(rec, outf, "genbank")
+        gbk_files.append(gbk_path)
+
+    # ── pyGenomeViz MMseqs alignment (primary) ───────────────────────────
+    pgv_out_dir = os.path.join(hmm_out_dir, "pgv_out")
+    safe_mkdir(pgv_out_dir)
+    if _pgv_available and gbk_files:
+        print("    Running pyGenomeViz MMseqs alignment (primary)...")
+        try:
+            from pygenomeviz import GenomeViz
+            from pygenomeviz.align import AlignCoord, MMseqs
+            from pygenomeviz.parser import Genbank as PGVGenbank
+            from pygenomeviz.utils import is_pseudo_feature
+
+            mmseqs_evalue = float(syn_cfg.get("mmseqs_evalue", 1e-3))
+            gbk_list = [PGVGenbank(gp) for gp in gbk_files]
+
+            mmseqs_tmp = os.path.join(pgv_out_dir, "mmseqs_tmp")
+            safe_mkdir(mmseqs_tmp)
+            align_coords = MMseqs(
+                gbk_list,
+                outdir=mmseqs_tmp,
+                evalue=mmseqs_evalue,
+                threads=cpu_per_job,
+            ).run()
+
+            coords_tsv = os.path.join(pgv_out_dir, f"align_coords.{hmm}.tsv")
+            AlignCoord.write(align_coords, coords_tsv)
+            print(f"    Saved MMseqs alignment coordinates: {coords_tsv}")
+
+            fig_width = float(syn_cfg.get("pgv_fig_width", 15))
+            fig_track_height = float(syn_cfg.get("pgv_fig_track_height", 1.0))
+            gv = GenomeViz(
+                fig_width=fig_width,
+                fig_track_height=fig_track_height,
+                track_align_type="center",
+                feature_track_ratio=0.25,
+            )
+            for idx, gbk in enumerate(gbk_list):
+                track = gv.add_feature_track(gbk.name, gbk.get_seqid2size(), space=0.02)
+                seqid2features = gbk.get_seqid2features(feature_type=None)
+                for seqid, features in seqid2features.items():
+                    for feature in features:
+                        if feature.type == "CDS":
+                            fc = "orange" if not is_pseudo_feature(feature) else "lightgrey"
+                            track.add_features(
+                                feature,
+                                target_seg=seqid,
+                                plotstyle="bigbox",
+                                fc=fc,
+                                ec="black",
+                                lw=0.5,
+                            )
+
+            filtered = AlignCoord.filter(align_coords)
+            if filtered:
+                identities = [ac.identity for ac in filtered if ac.identity is not None]
+                min_ident = int(min(identities)) if identities else 0
+                for ac in filtered:
+                    gv.add_link(
+                        ac.ref_link, ac.query_link,
+                        color="grey", inverted_color="red",
+                        v=ac.identity, vmin=min_ident,
+                    )
+
+            pgv_png = os.path.join(pgv_out_dir, f"synteny.{hmm}.png")
+            gv.savefig(pgv_png, dpi=300)
+            print(f"    Saved pyGenomeViz PNG: {pgv_png}")
+
+            pgv_html = os.path.join(pgv_out_dir, f"synteny.{hmm}.html")
+            gv.savefig_html(pgv_html)
+            print(f"    Saved pyGenomeViz HTML: {pgv_html}")
+
+        except Exception as e:
+            import traceback
+            print(f"    [synteny] pyGenomeViz MMseqs alignment failed for {hmm}: {e}", file=sys.stderr)
+            traceback.print_exc()
+
+    # ── Clinker interactive HTML (optional) ──────────────────────────────
+    if _clinker_available and gbk_files:
+        print("    Generating Clinker interactive viewer (optional)...")
+        clinker_coords_out = os.path.join(hmm_out_dir, f"alignment_coords.{hmm}.tsv")
+        try:
+            cmd = [
+                "clinker", *gbk_files,
+                "-p", html_out,
+                "-o", clinker_coords_out,
+                "--no_plot",
+            ]
+            subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+            print(f"    Saved Clinker interactive HTML: {html_out}")
+            print(f"    Saved Clinker alignment coords: {clinker_coords_out}")
+        except Exception as e:
+            import traceback
+            print(f"    [synteny] Clinker failed for {hmm}: {e}", file=sys.stderr)
+            traceback.print_exc()
+
+    # ── ggtree-based combined tree + synteny panel (R) ────────────────
+    if syn_cfg.get("generate_tree_panel", True) and rscript_bin and synteny_r_script:
+        tree_fp_for_panel = os.path.join(tree_dir, f"{hmm}.treefile")
+        cluster_tsv_for_panel = os.path.join(anno_dir, f"{hmm}_gene_clusters.tsv")
+        if os.path.exists(tree_fp_for_panel) and os.path.exists(cluster_tsv_for_panel):
+            print("    Generating ggtree synteny+tree panel...")
+            tree_panel_dir = os.path.join(hmm_out_dir, "tree_panel")
+            safe_mkdir(tree_panel_dir)
+
+            panel_formats = syn_cfg.get("tree_panel_format", ["png"])
+            panel_formats_str = ",".join(panel_formats) if isinstance(panel_formats, list) else str(panel_formats)
+
+            clades_tsv_for_panel = None
+            if clade_assign_dir:
+                _ctsv = os.path.join(clade_assign_dir, f"{hmm}.clades.tsv")
+                if os.path.exists(_ctsv):
+                    clades_tsv_for_panel = _ctsv
+
+            viz_cfg = syn_cfg.get("_viz_cfg", {})
+            _call_synteny_tree_r(
+                rscript_bin=rscript_bin,
+                r_script=synteny_r_script,
+                hmm_name=hmm,
+                tree_fp=tree_fp_for_panel,
+                synteny_tsv=cluster_tsv_for_panel,
+                tree_panel_dir=tree_panel_dir,
+                clades_tsv=clades_tsv_for_panel,
+                tax_tsv=tax_tsv_for_r,
+                formats=panel_formats_str,
+                width=float(syn_cfg.get("tree_panel_width", 20)),
+                height=0,
+                bootstrap_min=float(viz_cfg.get("bootstrap_min", 80)),
+                show_tip_labels=str(viz_cfg.get("show_tip_labels", "auto")),
+                color_palette=str(viz_cfg.get("color_palette", "Set3")),
+                tax_level=str(viz_cfg.get("tax_level", "genus")),
+            )
+
+    return cluster_rows
+
+
 def run_synteny(cfg, synteny_dir, tree_dir, scan_df, search_df, hmm_keep, force=False, clade_assign_dir=None, summary_dir=None, resume=False):
     print("\n[synteny] Extracting neighborhoods and plotting synteny...")
     
@@ -380,399 +760,44 @@ def run_synteny(cfg, synteny_dir, tree_dir, scan_df, search_df, hmm_keep, force=
     if resume:
         print("[synteny] Resume mode: previously completed HMMs will be skipped.")
 
-    all_cluster_rows = []  # aggregate across all HMMs
+    # Build a copy of syn_cfg augmented with data that workers need but that
+    # is not normally stored in the config dict (pfam_dir, viz_cfg).
+    worker_syn_cfg = dict(syn_cfg)
+    worker_syn_cfg["_pfam_dir"] = pfam_dir
+    worker_syn_cfg["_viz_cfg"] = cfg.get("phylo", {}).get("tree_viz", {})
 
+    cpus_per_job = max(1, int(syn_cfg.get("cpus_per_job", 6)))
+    workers = max(1, cpu // cpus_per_job)
+    print(f"[synteny] {cpu} total CPUs → {workers} parallel HMM job(s) × {cpus_per_job} CPU(s) each")
+
+    tasks = []
     for hmm, group in hits.groupby("hmm"):
-        hmm_out_dir = os.path.join(synteny_dir, hmm)
-        anno_dir = os.path.join(hmm_out_dir, "annotations")
-        seqs_dir = os.path.join(hmm_out_dir, "seqs")
-        
-        safe_mkdir(hmm_out_dir)
-        safe_mkdir(anno_dir)
-        safe_mkdir(seqs_dir)
-        
-        html_out = os.path.join(hmm_out_dir, f"synteny.{hmm}.html")
-        if os.path.exists(html_out) and not force:
-            if resume:
-                print(f"  [synteny] Skipping {hmm} (already completed)")
-            continue
+        # Convert group to plain records so the DataFrame is picklable without
+        # carrying pandas categorical metadata that may trip multiprocessing.
+        tasks.append((
+            hmm,
+            group.to_dict("records"),
+            worker_syn_cfg,
+            synteny_dir,
+            tree_dir,
+            combined_hmm,
+            annotation_evalue,
+            cpus_per_job,
+            force,
+            resume,
+            clade_assign_dir,
+            tax_tsv_for_r,
+            rscript_bin,
+            synteny_r_script,
+            _pgv_available,
+            _clinker_available,
+        ))
 
-        print(f"  [synteny] Calculating synteny for {hmm} ({len(group)} hits)...")
-        
-        if syn_cfg.get("dedup_by_genome", True):
-            group = group.sort_values("bitscore", ascending=False).groupby("genome").head(1)
-            max_hits = int(syn_cfg.get("max_hits_per_hmm", 50))
-            if len(group) > max_hits:
-                group = group.head(max_hits)
-
-        neighborhoods = [] # list of (genome, track_feats)
-        all_prots = {}     # uid -> sequence
-
-        window = int(syn_cfg.get("window_genes", 10))
-        fields_id = syn_cfg.get("protein_id_field", ["ID", "protein_id", "locus_tag"])
-        fields_label = syn_cfg.get("gene_label_field", ["gene", "product", "Name", "locus_tag"])
-
-        for _, r in group.iterrows():
-            genome = r["genome"]
-            protein = r["protein"]
-            
-            found_feats = []
-            contig_seq = None
-            if gbk_dir:
-                base = normalize_genome_id(genome)
-                cand = glob.glob(os.path.join(gbk_dir, f"{base}*.gb*"))
-                if cand:
-                    found_feats, contig_seq = load_genbank_neighborhood(cand[0], protein, window, fields_id, fields_label)
-            
-            if not found_feats and gff_dir:
-                base = normalize_genome_id(genome)
-                cand = glob.glob(os.path.join(gff_dir, f"{base}*.gff*"))
-                if cand:
-                    found_feats, contig_seq = load_gff_neighborhood(cand[0], protein, window, fields_id, fields_label)
-            
-            if not found_feats:
-                continue
-
-            track_feats = []
-            for i, f in enumerate(found_feats):
-                uid = f"{genome}|{f['contig']}|{f['protein_id']}|{i}"
-                f["uid"] = uid
-                if f.get("translation"):
-                    all_prots[uid] = f["translation"]
-                track_feats.append(f)
-            
-            neighborhoods.append((genome, protein, track_feats, contig_seq))
-
-        if not neighborhoods:
-            print(f"    No neighborhoods extracted for {hmm}.")
-            continue
-
-        # ── Tree-ordered neighborhood sorting ─────────────────────────────
-        # When tree_ordered=true (and include_tree=true), sort neighborhoods
-        # by the IQ-TREE leaf order so that closely related organisms are
-        # adjacent in the synteny plot.
-        if syn_cfg.get("tree_ordered", True) and syn_cfg.get("include_tree", True):
-            tree_fp_for_order = os.path.join(tree_dir, f"{hmm}.treefile")
-            tip_order = _get_tree_tip_order(tree_fp_for_order)
-            if tip_order:
-                # Build a rank dict: tip_label → index in tree order
-                tip_rank = {tip: i for i, tip in enumerate(tip_order)}
-
-                def _neighborhood_rank(nbr):
-                    genome_n, protein_n, _, _ = nbr
-                    # Tips in tree are formatted as "genome|protein"
-                    full_key = f"{genome_n}|{protein_n}"
-                    if full_key in tip_rank:
-                        return tip_rank[full_key]
-                    # Fallback: match by genome prefix
-                    for tip, rank in tip_rank.items():
-                        if tip.startswith(f"{genome_n}|"):
-                            return rank
-                    return len(tip_rank)  # unmatched → end
-
-                neighborhoods = sorted(neighborhoods, key=_neighborhood_rank)
-
-
-        pfam_mapping = {}
-        if pfam_dir and all_prots:
-            print("    Running Pfam annotation on neighborhood proteins...")
-            import tempfile, json
-            with tempfile.TemporaryDirectory() as td:
-                faa_path = os.path.join(td, "proteins.faa")
-                write_fasta(faa_path, all_prots)
-                
-                pfam_out = os.path.join(td, "pfam.json")
-                # pfam_scan.py was copied into src/phylofoundry/utils/pfam_scan.py
-                script_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "utils", "pfam_scan.py")
-                cmd = ["python", script_path, faa_path, pfam_dir, "-outfmt", "json", "-out", pfam_out]
-                try:
-                    subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
-                    with open(pfam_out) as f:
-                        pfam_res = json.load(f)
-                    for uid, domains in pfam_res.items():
-                        dom_names = [d["hmm_name"] for d in domains]
-                        if dom_names:
-                            pfam_mapping[uid] = "Pfam: " + ", ".join(dom_names)
-                except Exception as e:
-                    print(f"    Warning: Pfam scan failed: {e}", file=sys.stderr)
-
-        # Save local structural proteins
-        if all_prots:
-            seq_out = os.path.join(seqs_dir, "neighborhood_proteins.faa")
-            write_fasta(seq_out, all_prots)
-
-        # ── HMM Annotation of neighborhood proteins ──────────────────────
-        hmm_annotations = {}
-        if all_prots and os.path.exists(combined_hmm):
-            seq_out = os.path.join(seqs_dir, "neighborhood_proteins.faa")
-            print(f"    Annotating neighborhood proteins (e-value={annotation_evalue})...")
-            hmm_annotations = _annotate_neighborhood_proteins(
-                seq_out, combined_hmm, annotation_evalue, cpu=cpu
-            )
-            if hmm_annotations:
-                print(f"    Annotated {len(hmm_annotations)} proteins with HMM hits.")
-
-        # ── Gene Cluster Annotations Table ────────────────────────────────
-        cluster_rows = []
-        for genome, protein, feats, contig_seq in neighborhoods:
-            for f in feats:
-                uid = f.get("uid", "")
-                anno = hmm_annotations.get(uid, {})
-                # Compute relative position to focal gene
-                focal_idx = next((i for i, feat in enumerate(feats) if feat.get("is_focal")), 0)
-                current_idx = feats.index(f)
-                position_relative = current_idx - focal_idx
-                cluster_rows.append({
-                    "hmm": hmm,
-                    "genome": genome,
-                    "focal_protein": protein,
-                    "cluster_size": len(feats),
-                    "protein_id": f.get("protein_id", "NA"),
-                    "position_relative": position_relative,
-                    "strand": f.get("strand", "NA"),
-                    "gene_label": f.get("label", "NA"),
-                    "hmm_annotation": anno.get("hmm_annotation", ""),
-                    "annotation_evalue": anno.get("annotation_evalue", ""),
-                    "annotation_bitscore": anno.get("annotation_bitscore", ""),
-                    "is_focal": f.get("is_focal", False),
-                })
-
-        if cluster_rows:
-            cluster_df = pd.DataFrame(cluster_rows)
-            cluster_fp = os.path.join(anno_dir, f"{hmm}_gene_clusters.tsv")
-            cluster_df.to_csv(cluster_fp, sep="\t", index=False)
-            print(f"    Wrote gene cluster table: {cluster_fp} ({len(cluster_rows)} entries)")
-            all_cluster_rows.extend(cluster_rows)
-
-        # Build GenBank files for clinker
-        from Bio.SeqRecord import SeqRecord
-        from Bio.Seq import Seq
-        from Bio.SeqFeature import SeqFeature, FeatureLocation
-        
-        gbk_files = []
-        for genome, protein, feats, contig_seq in neighborhoods:
-            if not feats: continue
-            min_start = min(f["start"] for f in feats)
-            max_end = max(f["end"] for f in feats)
-            size = max_end - min_start + 1
-            
-            if contig_seq is not None:
-                nucl_seq = contig_seq[min_start:max_end]
-                if isinstance(nucl_seq, str):
-                    nucl_seq = Seq(nucl_seq)
-            else:
-                nucl_seq = Seq("N" * size)
-
-            # Detect focal gene strand and orient everything consistently
-            focal_feat = next((f for f in feats if f.get("is_focal")), None)
-            focal_strand = 1
-            if focal_feat is not None:
-                focal_strand = 1 if str(focal_feat["strand"]) in ["1", "+"] else -1
-
-            if focal_strand == -1:
-                # Reverse-complement the sequence so the focal gene points forward
-                nucl_seq = nucl_seq.reverse_complement()
-
-            # Make track name unique to support multiple contigs/proteins per genome
-            safe_prot = protein.replace("|", "_").split("~")[-1]
-            track_name = f"{genome}_{safe_prot}"
-            if len(track_name) > 16:
-                track_name = track_name[:16]
-
-            # Using molecule_type="DNA" allows writing out to genbank
-            rec = SeqRecord(nucl_seq, id=f"{genome}_{safe_prot}", name=track_name, description=f"Neighborhood for {hmm}", annotations={"molecule_type": "DNA"})
-            
-            for f in feats:
-                strand = 1 if str(f["strand"]) in ["1", "+"] else -1
-                feat_start = f["start"] - min_start
-                feat_end = f["end"] - min_start
-
-                if focal_strand == -1:
-                    # Flip coordinates relative to the reversed sequence
-                    new_start = size - feat_end
-                    new_end = size - feat_start
-                    strand = -strand
-                    feat_start, feat_end = new_start, new_end
-
-                loc = FeatureLocation(feat_start, feat_end, strand=strand)
-                
-                qualifiers = {
-                    "locus_tag": [f.get("label", "")],
-                }
-                if f.get("translation"):
-                    qualifiers["translation"] = [f["translation"]]
-
-                # Add Pfam annotation if available
-                uid = f.get("uid", "")
-                product_str = f.get("label", "")
-                if uid in pfam_mapping:
-                    if product_str and product_str != "NA":
-                        product_str += f" ({pfam_mapping[uid]})"
-                    else:
-                        product_str = pfam_mapping[uid]
-                
-                if product_str and product_str != "NA":
-                    qualifiers["product"] = [product_str]
-                    qualifiers["gene"] = [product_str]  # Add as gene so clinker puts it on the figure
-                    qualifiers["name"] = [product_str]
-
-                sf = SeqFeature(loc, type="CDS", id=uid, qualifiers=qualifiers)
-                rec.features.append(sf)
-            
-            gbk_path = os.path.join(anno_dir, f"{genome}_{safe_prot}.gbk")
-            with open(gbk_path, "w") as outf:
-                SeqIO.write(rec, outf, "genbank")
-            gbk_files.append(gbk_path)
-            
-        # ── pyGenomeViz MMseqs alignment (primary) ───────────────────────────
-        # Runs MMseqs RBH alignment, saves alignment coordinates TSV for
-        # downstream user plotting, and generates PNG + interactive HTML.
-        pgv_out_dir = os.path.join(hmm_out_dir, "pgv_out")
-        safe_mkdir(pgv_out_dir)
-        if _pgv_available and gbk_files:
-            print("    Running pyGenomeViz MMseqs alignment (primary)...")
-            try:
-                from pygenomeviz import GenomeViz
-                from pygenomeviz.align import AlignCoord, MMseqs
-                from pygenomeviz.parser import Genbank as PGVGenbank
-                from pygenomeviz.utils import is_pseudo_feature
-
-                mmseqs_evalue = float(syn_cfg.get("mmseqs_evalue", 1e-3))
-                gbk_list = [PGVGenbank(gp) for gp in gbk_files]
-
-                # Run MMseqs RBH alignment
-                mmseqs_tmp = os.path.join(pgv_out_dir, "mmseqs_tmp")
-                safe_mkdir(mmseqs_tmp)
-                align_coords = MMseqs(
-                    gbk_list,
-                    outdir=mmseqs_tmp,
-                    evalue=mmseqs_evalue,
-                    threads=cpu,
-                ).run()
-
-                # Save alignment coordinates TSV – users can load this for
-                # custom plotting with AlignCoord.read(path)
-                coords_tsv = os.path.join(pgv_out_dir, f"align_coords.{hmm}.tsv")
-                AlignCoord.write(align_coords, coords_tsv)
-                print(f"    Saved MMseqs alignment coordinates: {coords_tsv}")
-
-                # Build GenomeViz visualisation from alignment results
-                fig_width = float(syn_cfg.get("pgv_fig_width", 15))
-                fig_track_height = float(syn_cfg.get("pgv_fig_track_height", 1.0))
-                gv = GenomeViz(
-                    fig_width=fig_width,
-                    fig_track_height=fig_track_height,
-                    track_align_type="center",
-                    feature_track_ratio=0.25,
-                )
-                for idx, gbk in enumerate(gbk_list):
-                    track = gv.add_feature_track(
-                        gbk.name,
-                        gbk.get_seqid2size(),
-                        space=0.02,
-                    )
-                    seqid2features = gbk.get_seqid2features(feature_type=None)
-                    for seqid, features in seqid2features.items():
-                        for feature in features:
-                            if feature.type == "CDS":
-                                fc = "orange" if not is_pseudo_feature(feature) else "lightgrey"
-                                track.add_features(
-                                    feature,
-                                    target_seg=seqid,
-                                    plotstyle="bigbox",
-                                    fc=fc,
-                                    ec="black",
-                                    lw=0.5,
-                                )
-
-                # Apply alignment links
-                filtered = AlignCoord.filter(align_coords)
-                if filtered:
-                    identities = [ac.identity for ac in filtered if ac.identity is not None]
-                    min_ident = int(min(identities)) if identities else 0
-                    for ac in filtered:
-                        gv.add_link(
-                            ac.ref_link,
-                            ac.query_link,
-                            color="grey",
-                            inverted_color="red",
-                            v=ac.identity,
-                            vmin=min_ident,
-                        )
-
-                # Save PNG
-                pgv_png = os.path.join(pgv_out_dir, f"synteny.{hmm}.png")
-                gv.savefig(pgv_png, dpi=300)
-                print(f"    Saved pyGenomeViz PNG: {pgv_png}")
-
-                # Save interactive HTML
-                pgv_html = os.path.join(pgv_out_dir, f"synteny.{hmm}.html")
-                gv.savefig_html(pgv_html)
-                print(f"    Saved pyGenomeViz HTML: {pgv_html}")
-
-            except Exception as e:
-                import traceback
-                print(f"    [synteny] pyGenomeViz MMseqs alignment failed for {hmm}: {e}", file=sys.stderr)
-                traceback.print_exc()
-
-        # ── Clinker interactive HTML (optional) ──────────────────────────────
-        # Clinker provides an additional interactive alignment viewer with drag-
-        # and-drop reordering.  Run only when the clinker binary is present.
-        if _clinker_available and gbk_files:
-            print("    Generating Clinker interactive viewer (optional)...")
-            clinker_coords_out = os.path.join(hmm_out_dir, f"alignment_coords.{hmm}.tsv")
-            try:
-                cmd = [
-                    "clinker", *gbk_files,
-                    "-p", html_out,
-                    "-o", clinker_coords_out,
-                    "--no_plot",
-                ]
-                subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
-                print(f"    Saved Clinker interactive HTML: {html_out}")
-                print(f"    Saved Clinker alignment coords: {clinker_coords_out}")
-            except Exception as e:
-                import traceback
-                print(f"    [synteny] Clinker failed for {hmm}: {e}", file=sys.stderr)
-                traceback.print_exc()
-
-        # ── ggtree-based combined tree + synteny panel (R) ────────────────
-        # Requires: a .treefile for the HMM, the gene-cluster TSV, and Rscript.
-        if syn_cfg.get("generate_tree_panel", True) and rscript_bin and synteny_r_script:
-            tree_fp_for_panel = os.path.join(tree_dir, f"{hmm}.treefile")
-            cluster_tsv_for_panel = os.path.join(anno_dir, f"{hmm}_gene_clusters.tsv")
-            if os.path.exists(tree_fp_for_panel) and os.path.exists(cluster_tsv_for_panel):
-                print("    Generating ggtree synteny+tree panel...")
-                tree_panel_dir = os.path.join(hmm_out_dir, "tree_panel")
-                safe_mkdir(tree_panel_dir)
-
-                panel_formats = syn_cfg.get("tree_panel_format", ["png"])
-                panel_formats_str = ",".join(panel_formats) if isinstance(panel_formats, list) else str(panel_formats)
-
-                clades_tsv_for_panel = None
-                if clade_assign_dir:
-                    _ctsv = os.path.join(clade_assign_dir, f"{hmm}.clades.tsv")
-                    if os.path.exists(_ctsv):
-                        clades_tsv_for_panel = _ctsv
-
-                viz_cfg = cfg.get("phylo", {}).get("tree_viz", {})
-                _call_synteny_tree_r(
-                    rscript_bin=rscript_bin,
-                    r_script=synteny_r_script,
-                    hmm_name=hmm,
-                    tree_fp=tree_fp_for_panel,
-                    synteny_tsv=cluster_tsv_for_panel,
-                    tree_panel_dir=tree_panel_dir,
-                    clades_tsv=clades_tsv_for_panel,
-                    tax_tsv=tax_tsv_for_r,
-                    formats=panel_formats_str,
-                    width=float(syn_cfg.get("tree_panel_width", 20)),
-                    height=0,
-                    bootstrap_min=float(viz_cfg.get("bootstrap_min", 80)),
-                    show_tip_labels=str(viz_cfg.get("show_tip_labels", "auto")),
-                    color_palette=str(viz_cfg.get("color_palette", "Set3")),
-                    tax_level=str(viz_cfg.get("tax_level", "genus")),
-                )
+    all_cluster_rows = []
+    with ProcessPoolExecutor(max_workers=workers) as exe:
+        for result in exe.map(_worker_synteny, tasks):
+            if result:
+                all_cluster_rows.extend(result)
 
     # Write aggregate gene cluster annotations table
     if all_cluster_rows:
