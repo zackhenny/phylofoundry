@@ -89,6 +89,7 @@ DEFAULT_CONFIG = {
         "keep_all_hits": False,
         "combined_tree": False, # If true, combine all hits into a single tree
         "iqtree_bin": "iqtree3", # Default to iqtree3; falls back to iqtree2/iqtree
+        "cpus_per_tree": 6,      # CPUs allocated to each IQ-TREE job; parallel trees = cpu // cpus_per_tree
         "tree_viz": {
             "enabled": True,
             "formats": ["png", "pdf"],
@@ -211,6 +212,7 @@ DEFAULT_CONFIG = {
         "tree_panel_format": ["png"],
         "tree_panel_width": 20,
         "tree_panel_tree_fraction": 0.3,
+        "cpus_per_job": 6,           # CPUs allocated to each per-HMM synteny job; parallel jobs = cpu // cpus_per_job
     },
     "codon": {
         "enabled": False,

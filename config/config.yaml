@@ -170,6 +170,9 @@ phylo:
   iqtree_bin: "iqtree3"      # (string) IQ-TREE binary name or full path.
                              #   Auto-detected: falls back to iqtree2 or iqtree if iqtree3
                              #   is not found on PATH.
+  cpus_per_tree: 6           # (int) CPU cores allocated to each individual IQ-TREE run.
+                             #   Number of parallel trees = floor(resources.cpu / cpus_per_tree).
+                             #   Example: 32 CPUs / 6 = 5 concurrent trees (each using 6 threads).
 
   # ── ggtree-based tree visualization ────────────────────────────────────
   # Produces annotated phylogenetic tree plots (PNG/PDF/SVG) from each
@@ -477,6 +480,9 @@ synteny:
   tree_panel_tree_fraction: 0.3
                              # (float) Approximate fraction of total width given to the
                              #   tree panel in the combined figure (0–1).
+  cpus_per_job: 6            # (int) CPU cores allocated to each per-HMM synteny job.
+                             #   Number of parallel HMM jobs = floor(resources.cpu / cpus_per_job).
+                             #   Example: 32 CPUs / 6 = 5 concurrent HMM synteny jobs.
 
 # ─────────────────────────────────────────────────────────────────────────────
 # MODULE: codon
